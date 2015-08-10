@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2011-2014 Andreas Steffen
+ * Copyright (C) 2011-2012 Andreas Steffen
  * HSR Hochschule fuer Technik Rapperswil
  *
  * This program is free software; you can redistribute it and/or modify it
@@ -24,7 +24,6 @@
 typedef struct pa_tnc_msg_t pa_tnc_msg_t;
 
 #define PA_TNC_VERSION		0x01
-#define PA_TNC_HEADER_SIZE	8
 
 #include "pa_tnc_attr.h"
 
@@ -68,11 +67,9 @@ struct pa_tnc_msg_t {
 	/**
 	 * Process all IETF standard error PA-TNC attributes
 	 *
-	 * @param non_fatal_types	list of non fatal unsupported attribute types
-	 * @return					TRUE if at least one fatal error processed
+	 * @return					TRUE if at least one error attribute processed
 	 */
-	bool (*process_ietf_std_errors)(pa_tnc_msg_t *this,
-								    linked_list_t *non_fatal_types);
+	bool (*process_ietf_std_errors)(pa_tnc_msg_t *this);
 
 	/**
 	 * Enumerates over all PA-TNC attributes

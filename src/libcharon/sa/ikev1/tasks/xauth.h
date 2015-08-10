@@ -36,11 +36,6 @@ struct xauth_t {
 	 * Implements the task_t interface
 	 */
 	task_t task;
-
-	/**
-	 * Queue a Mode Config in Push mode after completing XAuth.
-	 */
-	void (*queue_mode_config_push)(xauth_t *this);
 };
 
 /**

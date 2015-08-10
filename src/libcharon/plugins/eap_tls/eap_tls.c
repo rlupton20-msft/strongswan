@@ -109,12 +109,6 @@ METHOD(eap_method_t, is_mutual, bool,
 	return TRUE;
 }
 
-METHOD(eap_method_t, get_auth, auth_cfg_t*,
-	private_eap_tls_t *this)
-{
-	return this->tls_eap->get_auth(this->tls_eap);
-}
-
 METHOD(eap_method_t, destroy, void,
 	private_eap_tls_t *this)
 {
@@ -144,7 +138,6 @@ static eap_tls_t *eap_tls_create(identification_t *server,
 				.get_msk = _get_msk,
 				.get_identifier = _get_identifier,
 				.set_identifier = _set_identifier,
-				.get_auth = _get_auth,
 				.destroy = _destroy,
 			},
 		},
@@ -152,12 +145,12 @@ static eap_tls_t *eap_tls_create(identification_t *server,
 
 	frag_size = lib->settings->get_int(lib->settings,
 					"%s.plugins.eap-tls.fragment_size", MAX_FRAGMENT_LEN,
-					lib->ns);
+					charon->name);
 	max_msg_count = lib->settings->get_int(lib->settings,
 					"%s.plugins.eap-tls.max_message_count", MAX_MESSAGE_COUNT,
-					lib->ns);
+					charon->name);
 	include_length = lib->settings->get_bool(lib->settings,
-					"%s.plugins.eap-tls.include_length", TRUE, lib->ns);
+					"%s.plugins.eap-tls.include_length", TRUE, charon->name);
 	tls = tls_create(is_server, server, peer, TLS_PURPOSE_EAP_TLS, NULL, NULL);
 	this->tls_eap = tls_eap_create(EAP_TLS, tls, frag_size, max_msg_count,
 												 include_length);

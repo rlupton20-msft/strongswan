@@ -35,7 +35,7 @@ struct private_gcrypt_dh_t {
 	/**
 	 * Diffie Hellman group number
 	 */
-	diffie_hellman_group_t group;
+	u_int16_t group;
 
 	/*
 	 * Generator value
@@ -73,16 +73,11 @@ struct private_gcrypt_dh_t {
 	size_t p_len;
 };
 
-METHOD(diffie_hellman_t, set_other_public_value, bool,
+METHOD(diffie_hellman_t, set_other_public_value, void,
 	private_gcrypt_dh_t *this, chunk_t value)
 {
 	gcry_mpi_t p_min_1;
 	gcry_error_t err;
-
-	if (!diffie_hellman_verify_value(this->group, value))
-	{
-		return FALSE;
-	}
 
 	if (this->yb)
 	{
@@ -93,7 +88,7 @@ METHOD(diffie_hellman_t, set_other_public_value, bool,
 	if (err)
 	{
 		DBG1(DBG_LIB, "importing mpi yb failed: %s", gpg_strerror(err));
-		return FALSE;
+		return;
 	}
 
 	p_min_1 = gcry_mpi_new(this->p_len * 8);
@@ -117,7 +112,6 @@ METHOD(diffie_hellman_t, set_other_public_value, bool,
 			 " y < 2 || y > p - 1 ");
 	}
 	gcry_mpi_release(p_min_1);
-	return this->zz != NULL;
 }
 
 /**
@@ -138,40 +132,21 @@ static chunk_t export_mpi(gcry_mpi_t value, size_t len)
 	return chunk;
 }
 
-METHOD(diffie_hellman_t, get_my_public_value, bool,
+METHOD(diffie_hellman_t, get_my_public_value, void,
 	private_gcrypt_dh_t *this, chunk_t *value)
 {
 	*value = export_mpi(this->ya, this->p_len);
-	return TRUE;
 }
 
-METHOD(diffie_hellman_t, set_private_value, bool,
-	private_gcrypt_dh_t *this, chunk_t value)
-{
-	gcry_error_t err;
-	gcry_mpi_t xa;
-
-	err = gcry_mpi_scan(&xa, GCRYMPI_FMT_USG, value.ptr, value.len, NULL);
-	if (!err)
-	{
-		gcry_mpi_release(this->xa);
-		this->xa = xa;
-		gcry_mpi_powm(this->ya, this->g, this->xa, this->p);
-		gcry_mpi_release(this->zz);
-		this->zz = NULL;
-	}
-	return !err;
-}
-
-METHOD(diffie_hellman_t, get_shared_secret, bool,
+METHOD(diffie_hellman_t, get_shared_secret, status_t,
 	private_gcrypt_dh_t *this, chunk_t *secret)
 {
 	if (!this->zz)
 	{
-		return FALSE;
+		return FAILED;
 	}
 	*secret = export_mpi(this->zz, this->p_len);
-	return TRUE;
+	return SUCCESS;
 }
 
 METHOD(diffie_hellman_t, get_dh_group, diffie_hellman_group_t,
@@ -209,7 +184,6 @@ gcrypt_dh_t *create_generic(diffie_hellman_group_t group, size_t exp_len,
 				.get_shared_secret = _get_shared_secret,
 				.set_other_public_value = _set_other_public_value,
 				.get_my_public_value = _get_my_public_value,
-				.set_private_value = _set_private_value,
 				.get_dh_group = _get_dh_group,
 				.destroy = _destroy,
 			},

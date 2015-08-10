@@ -210,9 +210,8 @@ METHOD(payload_t, verify, status_t,
 		case TRANSACTION:
 		case QUICK_MODE:
 		case NEW_GROUP_MODE:
-			if (this->maj_version == IKEV2_MAJOR_VERSION)
+			if (this->maj_version != IKEV1_MAJOR_VERSION)
 			{
-				/* IKEv1 exchange type in IKEv2? */
 				return FAILED;
 			}
 			break;
@@ -224,20 +223,14 @@ METHOD(payload_t, verify, status_t,
 #ifdef ME
 		case ME_CONNECT:
 #endif /* ME */
-			if (this->maj_version == IKEV1_MAJOR_VERSION)
+			if (this->maj_version != IKEV2_MAJOR_VERSION)
 			{
-				/* IKEv2 exchange type in IKEv1? */
 				return FAILED;
 			}
 			break;
 		default:
-			if (this->maj_version == IKEV1_MAJOR_VERSION ||
-				this->maj_version == IKEV2_MAJOR_VERSION)
-			{
-				/* unsupported exchange type for known version */
-				return FAILED;
-			}
-			break;
+			/* unsupported exchange type */
+			return FAILED;
 	}
 	if (this->initiator_spi == 0)
 	{
@@ -269,7 +262,7 @@ METHOD(payload_t, get_header_length, int,
 METHOD(payload_t, get_type, payload_type_t,
 	private_ike_header_t *this)
 {
-	return PL_HEADER;
+	return HEADER;
 }
 
 METHOD(payload_t, get_next_type, payload_type_t,
@@ -508,3 +501,4 @@ ike_header_t *ike_header_create_version(int major, int minor)
 	}
 	return this;
 }
+

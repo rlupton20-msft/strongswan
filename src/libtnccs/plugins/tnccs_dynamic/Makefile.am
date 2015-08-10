@@ -5,7 +5,7 @@ AM_CPPFLAGS = \
 	-I$(top_srcdir)/src/libtnccs
 
 AM_CFLAGS = \
-	$(PLUGIN_CFLAGS)
+	-rdynamic
 
 if MONOLITHIC
 noinst_LTLIBRARIES = libstrongswan-tnccs-dynamic.la

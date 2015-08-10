@@ -1,5 +1,4 @@
 /*
- * Copyright (C) 2015 Tobias Brunner
  * Copyright (C) 2011 Andreas Steffen
  * HSR Hochschule fuer Technik Rapperswil
  *
@@ -55,11 +54,6 @@ struct shunt_manager_t {
 	 * @return			enumerator over (child_sa_t)
 	 */
 	enumerator_t* (*create_enumerator)(shunt_manager_t *this);
-
-	/**
-	 * Clear any installed shunt.
-	 */
-	void (*flush)(shunt_manager_t *this);
 
 	/**
 	 * Destroy a shunt_manager_t.

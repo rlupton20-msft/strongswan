@@ -5,7 +5,7 @@ AM_CPPFLAGS = \
 	-I$(top_srcdir)/src/libsimaka
 
 AM_CFLAGS = \
-	$(PLUGIN_CFLAGS)
+	-rdynamic
 
 if MONOLITHIC
 noinst_LTLIBRARIES = libstrongswan-eap-simaka-pseudonym.la

@@ -188,7 +188,7 @@ void eap_radius_build_attributes(radius_message_t *request)
 		}
 		if (lib->settings->get_bool(lib->settings,
 									"%s.plugins.eap-radius.station_id_with_port",
-									TRUE, lib->ns))
+									TRUE, charon->name))
 		{
 			station_id_fmt = "%#H";
 		}
@@ -414,30 +414,6 @@ static void add_unity_attribute(eap_radius_provider_t *provider, u_int32_t id,
 }
 
 /**
- * Add a DNS/NBNS configuration attribute
- */
-static void add_nameserver_attribute(eap_radius_provider_t *provider,
-									 u_int32_t id, int type, chunk_t data)
-{
-	/* these are from different vendors, but there is currently no conflict */
-	switch (type)
-	{
-		case  5: /* CVPN3000-Primary-DNS */
-		case  6: /* CVPN3000-Secondary-DNS */
-		case 28: /* MS-Primary-DNS-Server */
-		case 29: /* MS-Secondary-DNS-Server */
-			provider->add_attribute(provider, id, INTERNAL_IP4_DNS, data);
-			break;
-		case  7: /* CVPN3000-Primary-WINS */
-		case  8: /* CVPN3000-Secondary-WINS */
-		case 30: /* MS-Primary-NBNS-Server */
-		case 31: /* MS-Secondary-NBNS-Server */
-			provider->add_attribute(provider, id, INTERNAL_IP4_NBNS, data);
-			break;
-	}
-}
-
-/**
  * Add a UNITY_LOCAL_LAN or UNITY_SPLIT_INCLUDE attribute
  */
 static void add_unity_split_attribute(eap_radius_provider_t *provider,
@@ -539,16 +515,6 @@ static void process_cfg_attributes(radius_message_t *msg)
 			{
 				switch (type)
 				{
-					case  5: /* CVPN3000-Primary-DNS */
-					case  6: /* CVPN3000-Secondary-DNS */
-					case  7: /* CVPN3000-Primary-WINS */
-					case  8: /* CVPN3000-Secondary-WINS */
-						if (data.len == 4)
-						{
-							add_nameserver_attribute(provider,
-									ike_sa->get_unique_id(ike_sa), type, data);
-						}
-						break;
 					case 15: /* CVPN3000-IPSec-Banner1 */
 					case 28: /* CVPN3000-IPSec-Default-Domain */
 					case 29: /* CVPN3000-IPSec-Split-DNS-Names */
@@ -580,22 +546,6 @@ static void process_cfg_attributes(radius_message_t *msg)
 						break;
 				}
 			}
-			if (vendor == PEN_MICROSOFT)
-			{
-				switch (type)
-				{
-					case 28: /* MS-Primary-DNS-Server */
-					case 29: /* MS-Secondary-DNS-Server */
-					case 30: /* MS-Primary-NBNS-Server */
-					case 31: /* MS-Secondary-NBNS-Server */
-						if (data.len == 4)
-						{
-							add_nameserver_attribute(provider,
-									ike_sa->get_unique_id(ike_sa), type, data);
-						}
-						break;
-				}
-			}
 		}
 		enumerator->destroy(enumerator);
 
@@ -623,12 +573,12 @@ static void process_cfg_attributes(radius_message_t *msg)
 void eap_radius_process_attributes(radius_message_t *message)
 {
 	if (lib->settings->get_bool(lib->settings,
-						"%s.plugins.eap-radius.class_group", FALSE, lib->ns))
+					"%s.plugins.eap-radius.class_group", FALSE, charon->name))
 	{
 		process_class(message);
 	}
 	if (lib->settings->get_bool(lib->settings,
-						"%s.plugins.eap-radius.filter_id", FALSE, lib->ns))
+					"%s.plugins.eap-radius.filter_id", FALSE, charon->name))
 	{
 		process_filter_id(message);
 	}
@@ -770,10 +720,10 @@ eap_radius_t *eap_radius_create(identification_t *server, identification_t *peer
 		.type = EAP_RADIUS,
 		.eap_start = lib->settings->get_bool(lib->settings,
 									"%s.plugins.eap-radius.eap_start", FALSE,
-									lib->ns),
+									charon->name),
 		.id_prefix = lib->settings->get_str(lib->settings,
 									"%s.plugins.eap-radius.id_prefix", "",
-									lib->ns),
+									charon->name),
 	);
 	this->client = eap_radius_create_client();
 	if (!this->client)

@@ -117,20 +117,19 @@ static job_requeue_t rekey_child(char *config)
 	enumerator_t *enumerator, *children;
 	ike_sa_t *ike_sa;
 	child_sa_t *child_sa;
-	u_int32_t spi, proto;
-	host_t *dst = NULL;
+	u_int32_t reqid = 0, spi = 0;
+	protocol_id_t proto = PROTO_ESP;
 
 	enumerator = charon->controller->create_ike_sa_enumerator(
 													charon->controller, TRUE);
 	while (enumerator->enumerate(enumerator, &ike_sa))
 	{
 		children = ike_sa->create_child_sa_enumerator(ike_sa);
-		while (children->enumerate(children, &child_sa))
+		while (children->enumerate(children, (void**)&child_sa))
 		{
 			if (streq(config, child_sa->get_name(child_sa)))
 			{
-				dst = ike_sa->get_my_host(ike_sa);
-				dst = dst->clone(dst);
+				reqid = child_sa->get_reqid(child_sa);
 				proto = child_sa->get_protocol(child_sa);
 				spi = child_sa->get_spi(child_sa, TRUE);
 				break;
@@ -139,12 +138,11 @@ static job_requeue_t rekey_child(char *config)
 		children->destroy(children);
 	}
 	enumerator->destroy(enumerator);
-	if (dst)
+	if (reqid)
 	{
 		DBG1(DBG_CFG, "starting rekey of CHILD_SA '%s'", config);
 		lib->processor->queue_job(lib->processor,
-						(job_t*)rekey_child_sa_job_create(proto, spi, dst));
-		dst->destroy(dst);
+						(job_t*)rekey_child_sa_job_create(reqid, proto, spi));
 	}
 	else
 	{
@@ -238,7 +236,7 @@ static job_requeue_t close_child(char *config)
 		{
 			if (streq(config, child_sa->get_name(child_sa)))
 			{
-				id = child_sa->get_unique_id(child_sa);
+				id = child_sa->get_reqid(child_sa);
 				break;
 			}
 		}

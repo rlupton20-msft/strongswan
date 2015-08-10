@@ -2,7 +2,7 @@ AM_CPPFLAGS = \
 	-I$(top_srcdir)/src/libstrongswan
 
 AM_CFLAGS = \
-	$(PLUGIN_CFLAGS)
+	-rdynamic
 
 if MONOLITHIC
 noinst_LTLIBRARIES = libstrongswan-constraints.la
@@ -14,4 +14,5 @@ libstrongswan_constraints_la_SOURCES = \
 	constraints_plugin.h constraints_plugin.c \
 	constraints_validator.h constraints_validator.c
 
-libstrongswan_constraints_la_LDFLAGS = -module -avoid-version
+libstrongswan_constraints_la_LDFLAGS = -no-undefined -module -avoid-version
+libstrongswan_constraints_la_LIBADD =  $(top_builddir)/src/libstrongswan/libstrongswan.la

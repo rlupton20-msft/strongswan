@@ -27,26 +27,15 @@ typedef struct private_update_sa_job_t private_update_sa_job_t;
  * Private data of an update_sa_job_t Object
  */
 struct private_update_sa_job_t {
-
 	/**
 	 * public update_sa_job_t interface
 	 */
 	update_sa_job_t public;
 
 	/**
-	 * protocol of the CHILD_SA (ESP/AH)
+	 * reqid of the CHILD_SA
 	 */
-	protocol_id_t protocol;
-
-	/**
-	 * SPI of the CHILD_SA
-	 */
-	u_int32_t spi;
-
-	/**
-	 * Old SA destination address
-	 */
-	host_t *dst;
+	u_int32_t reqid;
 
 	/**
 	 * New SA address and port
@@ -57,7 +46,6 @@ struct private_update_sa_job_t {
 METHOD(job_t, destroy, void,
 	private_update_sa_job_t *this)
 {
-	this->dst->destroy(this->dst);
 	this->new->destroy(this->new);
 	free(this);
 }
@@ -67,16 +55,20 @@ METHOD(job_t, execute, job_requeue_t,
 {
 	ike_sa_t *ike_sa;
 
-	ike_sa = charon->child_sa_manager->checkout(charon->child_sa_manager,
-									this->protocol, this->spi, this->dst, NULL);
+	ike_sa = charon->ike_sa_manager->checkout_by_id(charon->ike_sa_manager,
+													this->reqid, TRUE);
 	if (ike_sa == NULL)
 	{
-		DBG1(DBG_JOB, "CHILD_SA %N/0x%08x/%H not found for update",
-			 protocol_id_names, this->protocol, htonl(this->spi), this->dst);
+		DBG1(DBG_JOB, "CHILD_SA with reqid %d not found for update", this->reqid);
 	}
 	else
 	{
-		ike_sa->update_hosts(ike_sa, NULL, this->new, FALSE);
+		/* we update only if other host is NATed, but not our */
+		if (ike_sa->has_condition(ike_sa, COND_NAT_THERE) &&
+			!ike_sa->has_condition(ike_sa, COND_NAT_HERE))
+		{
+			ike_sa->update_hosts(ike_sa, NULL, this->new, FALSE);
+		}
 		charon->ike_sa_manager->checkin(charon->ike_sa_manager, ike_sa);
 	}
 	return JOB_REQUEUE_NONE;
@@ -91,8 +83,7 @@ METHOD(job_t, get_priority, job_priority_t,
 /*
  * Described in header
  */
-update_sa_job_t *update_sa_job_create(protocol_id_t protocol,
-									  u_int32_t spi, host_t *dst, host_t *new)
+update_sa_job_t *update_sa_job_create(u_int32_t reqid, host_t *new)
 {
 	private_update_sa_job_t *this;
 
@@ -104,11 +95,10 @@ update_sa_job_t *update_sa_job_create(protocol_id_t protocol,
 				.destroy = _destroy,
 			},
 		},
-		.protocol = protocol,
-		.spi = spi,
-		.dst = dst->clone(dst),
-		.new = new->clone(new),
+		.reqid = reqid,
+		.new = new,
 	);
 
 	return &this->public;
 }
+

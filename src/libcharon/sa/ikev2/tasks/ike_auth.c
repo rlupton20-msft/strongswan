@@ -112,11 +112,6 @@ struct private_ike_auth_t {
 	 * received an INITIAL_CONTACT?
 	 */
 	bool initial_contact;
-
-	/**
-	 * Is EAP acceptable, did we strictly authenticate peer?
-	 */
-	bool eap_acceptable;
 };
 
 /**
@@ -125,7 +120,7 @@ struct private_ike_auth_t {
 static bool multiple_auth_enabled()
 {
 	return lib->settings->get_bool(lib->settings,
-								   "%s.multiple_authentication", TRUE, lib->ns);
+							"%s.multiple_authentication", TRUE, charon->name);
 }
 
 /**
@@ -137,7 +132,7 @@ static status_t collect_my_init_data(private_ike_auth_t *this,
 	nonce_payload_t *nonce;
 
 	/* get the nonce that was generated in ike_init */
-	nonce = (nonce_payload_t*)message->get_payload(message, PLV2_NONCE);
+	nonce = (nonce_payload_t*)message->get_payload(message, NONCE);
 	if (nonce == NULL)
 	{
 		return FAILED;
@@ -163,7 +158,7 @@ static status_t collect_other_init_data(private_ike_auth_t *this,
 	nonce_payload_t *nonce;
 
 	/* get the nonce that was generated in ike_init */
-	nonce = (nonce_payload_t*)message->get_payload(message, PLV2_NONCE);
+	nonce = (nonce_payload_t*)message->get_payload(message, NONCE);
 	if (nonce == NULL)
 	{
 		return FAILED;
@@ -438,7 +433,7 @@ METHOD(task_t, build_i, status_t,
 			{
 				this->ike_sa->set_other_id(this->ike_sa, idr->clone(idr));
 				id_payload = id_payload_create_from_identification(
-															PLV2_ID_RESPONDER, idr);
+															ID_RESPONDER, idr);
 				message->add_payload(message, (payload_t*)id_payload);
 			}
 		}
@@ -456,7 +451,7 @@ METHOD(task_t, build_i, status_t,
 			cfg->add(cfg, AUTH_RULE_IDENTITY, idi);
 		}
 		this->ike_sa->set_my_id(this->ike_sa, idi->clone(idi));
-		id_payload = id_payload_create_from_identification(PLV2_ID_INITIATOR, idi);
+		id_payload = id_payload_create_from_identification(ID_INITIATOR, idi);
 		get_reserved_id_bytes(this, id_payload);
 		message->add_payload(message, (payload_t*)id_payload);
 
@@ -503,7 +498,7 @@ METHOD(task_t, build_i, status_t,
 	/* check for additional authentication rounds */
 	if (do_another_auth(this))
 	{
-		if (message->get_payload(message, PLV2_AUTH))
+		if (message->get_payload(message, AUTHENTICATION))
 		{
 			message->add_notify(message, FALSE, ANOTHER_AUTH_FOLLOWS, chunk_empty);
 		}
@@ -530,7 +525,7 @@ METHOD(task_t, process_r, status_t,
 	if (this->my_auth == NULL && this->do_another_auth)
 	{
 		/* handle (optional) IDr payload, apply proposed identity */
-		id_payload = (id_payload_t*)message->get_payload(message, PLV2_ID_RESPONDER);
+		id_payload = (id_payload_t*)message->get_payload(message, ID_RESPONDER);
 		if (id_payload)
 		{
 			id = id_payload->get_identification(id_payload);
@@ -563,7 +558,7 @@ METHOD(task_t, process_r, status_t,
 	if (this->other_auth == NULL)
 	{
 		/* handle IDi payload */
-		id_payload = (id_payload_t*)message->get_payload(message, PLV2_ID_INITIATOR);
+		id_payload = (id_payload_t*)message->get_payload(message, ID_INITIATOR);
 		if (!id_payload)
 		{
 			DBG1(DBG_IKE, "IDi payload missing");
@@ -583,7 +578,7 @@ METHOD(task_t, process_r, status_t,
 				return NEED_MORE;
 			}
 		}
-		if (message->get_payload(message, PLV2_AUTH) == NULL)
+		if (message->get_payload(message, AUTHENTICATION) == NULL)
 		{	/* before authenticating with EAP, we need a EAP config */
 			cand = get_auth_cfg(this, FALSE);
 			while (!cand || (
@@ -636,7 +631,7 @@ METHOD(task_t, process_r, status_t,
 			this->other_auth = NULL;
 			break;
 		case NEED_MORE:
-			if (message->get_payload(message, PLV2_AUTH))
+			if (message->get_payload(message, AUTHENTICATION))
 			{	/* AUTH verification successful, but another build() needed */
 				break;
 			}
@@ -738,7 +733,7 @@ METHOD(task_t, build_r, status_t,
 			}
 		}
 
-		id_payload = id_payload_create_from_identification(PLV2_ID_RESPONDER, id);
+		id_payload = id_payload_create_from_identification(ID_RESPONDER, id);
 		get_reserved_id_bytes(this, id_payload);
 		message->add_payload(message, (payload_t*)id_payload);
 
@@ -785,7 +780,7 @@ METHOD(task_t, build_r, status_t,
 			case NEED_MORE:
 				break;
 			default:
-				if (message->get_payload(message, PLV2_EAP))
+				if (message->get_payload(message, EXTENSIBLE_AUTHENTICATION))
 				{	/* skip AUTHENTICATION_FAILED if we have EAP_FAILURE */
 					goto peer_auth_failed_no_notify;
 				}
@@ -884,37 +879,6 @@ static void send_auth_failed_informational(private_ike_auth_t *this,
 	message->destroy(message);
 }
 
-/**
- * Check if strict constraint fullfillment required to continue current auth
- */
-static bool require_strict(private_ike_auth_t *this, bool mutual_eap)
-{
-	auth_cfg_t *cfg;
-
-	if (this->eap_acceptable)
-	{
-		return FALSE;
-	}
-
-	cfg = this->ike_sa->get_auth_cfg(this->ike_sa, TRUE);
-	switch ((uintptr_t)cfg->get(cfg, AUTH_RULE_AUTH_CLASS))
-	{
-		case AUTH_CLASS_EAP:
-			if (mutual_eap && this->my_auth)
-			{
-				this->eap_acceptable = TRUE;
-				return !this->my_auth->is_mutual(this->my_auth);
-			}
-			return TRUE;
-		case AUTH_CLASS_PSK:
-			return TRUE;
-		case AUTH_CLASS_PUBKEY:
-		case AUTH_CLASS_ANY:
-		default:
-			return FALSE;
-	}
-}
-
 METHOD(task_t, process_i, status_t,
 	private_ike_auth_t *this, message_t *message)
 {
@@ -936,7 +900,7 @@ METHOD(task_t, process_i, status_t,
 	enumerator = message->create_payload_enumerator(message);
 	while (enumerator->enumerate(enumerator, &payload))
 	{
-		if (payload->get_type(payload) == PLV2_NOTIFY)
+		if (payload->get_type(payload) == NOTIFY)
 		{
 			notify_payload_t *notify = (notify_payload_t*)payload;
 			notify_type_t type = notify->get_notify_type(notify);
@@ -992,7 +956,7 @@ METHOD(task_t, process_i, status_t,
 
 			/* handle IDr payload */
 			id_payload = (id_payload_t*)message->get_payload(message,
-															 PLV2_ID_RESPONDER);
+															 ID_RESPONDER);
 			if (!id_payload)
 			{
 				DBG1(DBG_IKE, "IDr payload missing");
@@ -1004,7 +968,7 @@ METHOD(task_t, process_i, status_t,
 			cfg = this->ike_sa->get_auth_cfg(this->ike_sa, FALSE);
 			cfg->add(cfg, AUTH_RULE_IDENTITY, id->clone(id));
 
-			if (message->get_payload(message, PLV2_AUTH))
+			if (message->get_payload(message, AUTHENTICATION))
 			{
 				/* verify authentication data */
 				this->other_auth = authenticator_create_verifier(this->ike_sa,
@@ -1047,14 +1011,6 @@ METHOD(task_t, process_i, status_t,
 		if (!mutual_eap)
 		{
 			apply_auth_cfg(this, FALSE);
-		}
-	}
-
-	if (require_strict(this, mutual_eap))
-	{
-		if (!update_cfg_candidates(this, TRUE))
-		{
-			goto peer_auth_failed;
 		}
 	}
 

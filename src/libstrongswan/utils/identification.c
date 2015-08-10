@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2009-2015 Tobias Brunner
+ * Copyright (C) 2009-2012 Tobias Brunner
  * Copyright (C) 2005-2009 Martin Willi
  * Copyright (C) 2005 Jan Hutter
  * Hochschule fuer Technik Rapperswil
@@ -15,13 +15,15 @@
  * for more details.
  */
 
+#define _GNU_SOURCE
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
 #include <string.h>
 #include <stdio.h>
-#include <errno.h>
 
 #include "identification.h"
 
-#include <utils/utils.h>
 #include <asn1/oid.h>
 #include <asn1/asn1.h>
 #include <crypto/hashers/hasher.h>
@@ -330,13 +332,8 @@ static void dntoa(chunk_t dn, char *buf, size_t len)
 		buf += written;
 		len -= written;
 
-		written = 0;
 		chunk_printable(data, &printable, '?');
-		if (printable.ptr)
-		{
-			written = snprintf(buf, len, "%.*s", (int)printable.len,
-							   printable.ptr);
-		}
+		written = snprintf(buf, len, "%.*s", (int)printable.len, printable.ptr);
 		chunk_free(&printable);
 		if (written < 0 || written >= len)
 		{
@@ -395,24 +392,14 @@ static status_t atodn(char *src, chunk_t *dn)
 	asn1_t rdn_type;
 	state_t state = SEARCH_OID;
 	status_t status = SUCCESS;
-	char sep = '\0';
 
 	do
 	{
 		switch (state)
 		{
 			case SEARCH_OID:
-				if (!sep && *src == '/')
-				{	/* use / as separator if the string starts with a slash */
-					sep = '/';
-					break;
-				}
-				if (*src != ' ' && *src != '\0')
+				if (*src != ' ' && *src != '/' && *src !=  ',' && *src != '\0')
 				{
-					if (!sep)
-					{	/* use , as separator by default */
-						sep = ',';
-					}
 					oid.ptr = src;
 					oid.len = 1;
 					state = READ_OID;
@@ -452,7 +439,7 @@ static status_t atodn(char *src, chunk_t *dn)
 				{
 					break;
 				}
-				else if (*src != sep && *src != '\0')
+				else if (*src != ',' && *src != '/' && *src != '\0')
 				{
 					name.ptr = src;
 					name.len = 1;
@@ -465,7 +452,7 @@ static status_t atodn(char *src, chunk_t *dn)
 				state = READ_NAME;
 				/* fall-through */
 			case READ_NAME:
-				if (*src != sep && *src != '\0')
+				if (*src != ',' && *src != '/' && *src != '\0')
 				{
 					name.len++;
 					if (*src == ' ')
@@ -478,7 +465,7 @@ static status_t atodn(char *src, chunk_t *dn)
 					name.len -= whitespace;
 					rdn_type = (x501rdns[i].type == ASN1_PRINTABLESTRING
 								&& !asn1_is_printablestring(name))
-								? ASN1_UTF8STRING : x501rdns[i].type;
+								? ASN1_T61STRING : x501rdns[i].type;
 
 					if (rdn_count < RDN_MAX)
 					{
@@ -577,19 +564,6 @@ METHOD(identification_t, contains_wildcards_memchr, bool,
 	private_identification_t *this)
 {
 	return memchr(this->encoded.ptr, '*', this->encoded.len) != NULL;
-}
-
-METHOD(identification_t, hash_binary, u_int,
-	private_identification_t *this, u_int inc)
-{
-	u_int hash;
-
-	hash = chunk_hash_inc(chunk_from_thing(this->type), inc);
-	if (this->type != ID_ANY)
-	{
-		hash = chunk_hash_inc(this->encoded, hash);
-	}
-	return hash;
 }
 
 METHOD(identification_t, equals_binary, bool,
@@ -698,24 +672,6 @@ METHOD(identification_t, equals_dn, bool,
 	private_identification_t *this, identification_t *other)
 {
 	return compare_dn(this->encoded, other->get_encoding(other), NULL);
-}
-
-METHOD(identification_t, hash_dn, u_int,
-	private_identification_t *this, u_int inc)
-{
-	enumerator_t *rdns;
-	chunk_t oid, data;
-	u_char type;
-	u_int hash;
-
-	hash = chunk_hash_inc(chunk_from_thing(this->type), inc);
-	rdns = create_rdn_enumerator(this->encoded);
-	while (rdns->enumerate(rdns, &oid, &type, &data))
-	{
-		hash = chunk_hash_inc(data, chunk_hash_inc(oid, hash));
-	}
-	rdns->destroy(rdns);
-	return hash;
 }
 
 METHOD(identification_t, equals_strcasecmp,  bool,
@@ -934,7 +890,6 @@ static private_identification_t *identification_create(id_type_t type)
 	switch (type)
 	{
 		case ID_ANY:
-			this->public.hash = _hash_binary;
 			this->public.matches = _matches_any;
 			this->public.equals = _equals_binary;
 			this->public.contains_wildcards = return_true;
@@ -942,99 +897,20 @@ static private_identification_t *identification_create(id_type_t type)
 		case ID_FQDN:
 		case ID_RFC822_ADDR:
 		case ID_USER_ID:
-			this->public.hash = _hash_binary;
 			this->public.matches = _matches_string;
 			this->public.equals = _equals_strcasecmp;
 			this->public.contains_wildcards = _contains_wildcards_memchr;
 			break;
 		case ID_DER_ASN1_DN:
-			this->public.hash = _hash_dn;
 			this->public.equals = _equals_dn;
 			this->public.matches = _matches_dn;
 			this->public.contains_wildcards = _contains_wildcards_dn;
 			break;
 		default:
-			this->public.hash = _hash_binary;
 			this->public.equals = _equals_binary;
 			this->public.matches = _matches_binary;
 			this->public.contains_wildcards = return_false;
 			break;
-	}
-	return this;
-}
-
-/**
- * Create an identity for a specific type, determined by prefix
- */
-static private_identification_t* create_from_string_with_prefix_type(char *str)
-{
-	struct {
-		const char *str;
-		id_type_t type;
-	} prefixes[] = {
-		{ "ipv4:",			ID_IPV4_ADDR			},
-		{ "ipv6:",			ID_IPV6_ADDR			},
-		{ "rfc822:",		ID_RFC822_ADDR			},
-		{ "email:",			ID_RFC822_ADDR			},
-		{ "userfqdn:",		ID_USER_FQDN			},
-		{ "fqdn:",			ID_FQDN					},
-		{ "dns:",			ID_FQDN					},
-		{ "asn1dn:",		ID_DER_ASN1_DN			},
-		{ "asn1gn:",		ID_DER_ASN1_GN			},
-		{ "keyid:",			ID_KEY_ID				},
-	};
-	private_identification_t *this;
-	int i;
-
-	for (i = 0; i < countof(prefixes); i++)
-	{
-		if (strcasepfx(str, prefixes[i].str))
-		{
-			this = identification_create(prefixes[i].type);
-			str += strlen(prefixes[i].str);
-			if (*str == '#')
-			{
-				this->encoded = chunk_from_hex(chunk_from_str(str + 1), NULL);
-			}
-			else
-			{
-				this->encoded = chunk_clone(chunk_from_str(str));
-			}
-			return this;
-		}
-	}
-	return NULL;
-}
-
-/**
- * Create an identity for a specific type, determined by a numerical prefix
- *
- * The prefix is of the form "{x}:", where x denotes the numerical identity
- * type.
- */
-static private_identification_t* create_from_string_with_num_type(char *str)
-{
-	private_identification_t *this;
-	u_long type;
-
-	if (*str++ != '{')
-	{
-		return NULL;
-	}
-	errno = 0;
-	type = strtoul(str, &str, 0);
-	if (errno || *str++ != '}' || *str++ != ':')
-	{
-		return NULL;
-	}
-	this = identification_create(type);
-	if (*str == '#')
-	{
-		this->encoded = chunk_from_hex(chunk_from_str(str + 1), NULL);
-	}
-	else
-	{
-		this->encoded = chunk_clone(chunk_from_str(str));
 	}
 	return this;
 }
@@ -1050,16 +926,6 @@ identification_t *identification_create_from_string(char *string)
 	if (string == NULL)
 	{
 		string = "%any";
-	}
-	this = create_from_string_with_prefix_type(string);
-	if (this)
-	{
-		return &this->public;
-	}
-	this = create_from_string_with_num_type(string);
-	if (this)
-	{
-		return &this->public;
 	}
 	if (strchr(string, '=') != NULL)
 	{

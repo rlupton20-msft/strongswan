@@ -53,7 +53,7 @@ METHOD(plugin_t, reload, bool,
 	private_ipseckey_plugin_t *this)
 {
 	bool enabled = lib->settings->get_bool(lib->settings,
-								"%s.plugins.ipseckey.enable", FALSE, lib->ns);
+							"%s.plugins.ipseckey.enable", FALSE, charon->name);
 
 	if (enabled != this->enabled)
 	{

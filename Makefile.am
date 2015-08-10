@@ -1,4 +1,4 @@
-SUBDIRS = src man conf init testing
+SUBDIRS = src man init testing
 
 if USE_SCRIPTS
   SUBDIRS += scripts
@@ -20,9 +20,6 @@ config_includedir = $(ipseclibdir)/include
 nodist_config_include_HEADERS = config.h
 endif
 
-# we leave config files behind intentionally so prevent distcheck from complaining
-distuninstallcheck_listfiles = find . -type f \! -name '*.conf' -print
-
 Android.common.mk :	Android.common.mk.in configure.ac
 		$(AM_V_GEN) \
 		sed \
@@ -34,17 +31,15 @@ Doxyfile :	Doxyfile.in
 		sed \
 		-e "s:\@PACKAGE_VERSION\@:$(PACKAGE_VERSION):" \
 		-e "s:\@PACKAGE_NAME\@:$(PACKAGE_NAME):" \
-		-e "s:\@SRC_DIR\@:$(srcdir):g" \
+		-e "s:\@SRC_DIR\@:$(srcdir):" \
 		$(srcdir)/$@.in > $@
 
 apidoc :	Doxyfile
-		@test -d apidoc || doxygen
-		@! find Doxyfile $(top_srcdir)/src/ \( -name '*.h' -o -name '*.md' \) -newer apidoc | \
-			grep -q '' || doxygen && touch apidoc
+		doxygen
 
 cov-reset-common:
 		@rm -rf $(top_builddir)/coverage
-		@find $(top_builddir)/src $(top_builddir)/scripts -name "*.gcda" -delete
+		@find $(top_builddir)/{src,scripts} -name "*.gcda" -delete
 
 if COVERAGE
 cov-reset: cov-reset-common
@@ -52,12 +47,10 @@ cov-reset: cov-reset-common
 
 cov-report:
 		@mkdir $(top_builddir)/coverage
-		lcov -c -o $(top_builddir)/coverage/coverage.info -d $(top_builddir) \
-			 --rc lcov_branch_coverage=1
+		lcov -c -o $(top_builddir)/coverage/coverage.info -d $(top_builddir)
 		lcov -r $(top_builddir)/coverage/coverage.info '*/tests/*' \
-			 -o $(top_builddir)/coverage/coverage.cleaned.info \
-			 --rc lcov_branch_coverage=1
-		genhtml --num-spaces 4 --legend --branch-coverage --ignore-errors source \
+			 -o $(top_builddir)/coverage/coverage.cleaned.info
+		genhtml --num-spaces 4 --legend \
 				-t "$(PACKAGE_STRING)" \
 				-o $(top_builddir)/coverage/html \
 				-p `readlink -m $(abs_top_srcdir)`/src \
@@ -74,7 +67,7 @@ coverage:
 endif
 
 clean-local: cov-reset-common
-		@find $(top_builddir)/src $(top_builddir)/scripts -name "*.gcno" -delete
+		@find $(top_builddir)/{src,scripts} -name "*.gcno" -delete
 		@rm -rf apidoc
 
-.PHONY: cov-reset-common cov-reset cov-report coverage apidoc
+.PHONY: cov-reset-common cov-reset cov-report coverage

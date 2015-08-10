@@ -36,6 +36,7 @@ include $(LOCAL_PATH)/Android.common.mk
 
 # includes
 strongswan_PATH := $(LOCAL_PATH)
+libvstr_PATH := external/strongswan-support/vstr/include
 libcurl_PATH := external/strongswan-support/libcurl/include
 libgmp_PATH := external/strongswan-support/gmp
 openssl_PATH := external/openssl/include
@@ -60,7 +61,6 @@ strongswan_CFLAGS := \
 	-DHAVE_ALLOCA_H \
 	-DHAVE_ALLOCA \
 	-DHAVE_CLOCK_GETTIME \
-	-DHAVE_DLADDR \
 	-DHAVE_PTHREAD_COND_TIMEDWAIT_MONOTONIC \
 	-DHAVE_PRCTL \
 	-DHAVE_LINUX_UDP_H \
@@ -77,7 +77,7 @@ strongswan_CFLAGS := \
 	-DMONOLITHIC \
 	-DUSE_IKEV1 \
 	-DUSE_IKEV2 \
-	-DUSE_BUILTIN_PRINTF \
+	-DUSE_VSTR \
 	-DDEBUG \
 	-DROUTING_TABLE=0 \
 	-DROUTING_TABLE_PRIO=220 \

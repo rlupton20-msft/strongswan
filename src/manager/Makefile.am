@@ -22,7 +22,7 @@ AM_CPPFLAGS = \
 
 AM_CFLAGS = \
 	${xml_CFLAGS} \
-	$(PLUGIN_CFLAGS)
+	-rdynamic
 
 # Don't forget to add templates to EXTRA_DIST !!! How to automate?
 manager_templatesdir = ${managerdir}/templates

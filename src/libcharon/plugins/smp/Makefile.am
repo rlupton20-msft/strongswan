@@ -6,7 +6,7 @@ AM_CPPFLAGS = \
 
 AM_CFLAGS = \
 	${xml_CFLAGS} \
-	$(PLUGIN_CFLAGS)
+	-rdynamic
 
 if MONOLITHIC
 noinst_LTLIBRARIES = libstrongswan-smp.la

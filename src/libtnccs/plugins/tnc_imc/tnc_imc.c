@@ -15,9 +15,7 @@
 
 #include "tnc_imc.h"
 
-#ifndef WIN32
 #include <dlfcn.h>
-#endif
 
 #include <tncif_pa_subtypes.h>
 
@@ -97,7 +95,7 @@ METHOD(imc_t, add_id, void,
 	void *pointer;
 
 	/* store the scalar value in the pointer */
-	pointer = (void*)(uintptr_t)id;
+	pointer = (void*)id;
 	this->additional_ids->insert_last(this->additional_ids, pointer);
 }
 
@@ -126,7 +124,7 @@ METHOD(imc_t, has_id, bool,
 	while (enumerator->enumerate(enumerator, &pointer))
 	{
 		/* interpret pointer as scalar value */
-		additional_id = (uintptr_t)pointer;
+		additional_id = (TNC_UInt32)pointer;
 
 		if (id == additional_id)
 		{
@@ -304,7 +302,7 @@ METHOD(imc_t, destroy, void,
 	private_tnc_imc_t *this)
 {
 	if (this->handle && lib->settings->get_bool(lib->settings,
-		"%s.plugins.tnc-imc.dlclose", TRUE, lib->ns))
+		"libtnccs.plugins.tnc-imc.dlclose", TRUE))
 	{
 		dlclose(this->handle);
 	}

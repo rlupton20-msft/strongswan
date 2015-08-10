@@ -247,7 +247,7 @@ static bool cookie_verify(private_receiver_t *this, message_t *message,
 	{
 		return FALSE;
 	}
-	if (chunk_equals_const(reference, cookie))
+	if (chunk_equals(reference, cookie))
 	{
 		chunk_free(&reference);
 		return TRUE;
@@ -271,7 +271,7 @@ static bool check_cookie(private_receiver_t *this, message_t *message)
 	if (data.len <
 		 IKE_HEADER_LENGTH + NOTIFY_PAYLOAD_HEADER_LENGTH +
 		 sizeof(u_int32_t) + this->hasher->get_hash_size(this->hasher) ||
-		*(data.ptr + 16) != PLV2_NOTIFY ||
+		*(data.ptr + 16) != NOTIFY ||
 		*(u_int16_t*)(data.ptr + IKE_HEADER_LENGTH + 6) != htons(COOKIE))
 	{
 		/* no cookie found */
@@ -524,7 +524,8 @@ static job_requeue_t receive_packets(private_receiver_t *this)
 #ifdef USE_IKEV2
 			send_notify(message, IKEV2_MAJOR_VERSION, INFORMATIONAL,
 						INVALID_MAJOR_VERSION, chunk_empty);
-#elif defined(USE_IKEV1)
+#endif /* USE_IKEV2 */
+#ifdef USE_IKEV1
 			send_notify(message, IKEV1_MAJOR_VERSION, INFORMATIONAL_V1,
 						INVALID_MAJOR_VERSION, chunk_empty);
 #endif /* USE_IKEV1 */
@@ -632,27 +633,27 @@ receiver_t *receiver_create()
 	);
 
 	if (lib->settings->get_bool(lib->settings,
-								"%s.dos_protection", TRUE, lib->ns))
+				"%s.dos_protection", TRUE, charon->name))
 	{
 		this->cookie_threshold = lib->settings->get_int(lib->settings,
-					"%s.cookie_threshold", COOKIE_THRESHOLD_DEFAULT, lib->ns);
+				"%s.cookie_threshold", COOKIE_THRESHOLD_DEFAULT, charon->name);
 		this->block_threshold = lib->settings->get_int(lib->settings,
-					"%s.block_threshold", BLOCK_THRESHOLD_DEFAULT, lib->ns);
+				"%s.block_threshold", BLOCK_THRESHOLD_DEFAULT, charon->name);
 	}
 	this->init_limit_job_load = lib->settings->get_int(lib->settings,
-					"%s.init_limit_job_load", 0, lib->ns);
+				"%s.init_limit_job_load", 0, charon->name);
 	this->init_limit_half_open = lib->settings->get_int(lib->settings,
-					"%s.init_limit_half_open", 0, lib->ns);
+				"%s.init_limit_half_open", 0, charon->name);
 	this->receive_delay = lib->settings->get_int(lib->settings,
-					"%s.receive_delay", 0, lib->ns);
+				"%s.receive_delay", 0, charon->name);
 	this->receive_delay_type = lib->settings->get_int(lib->settings,
-					"%s.receive_delay_type", 0, lib->ns),
+				"%s.receive_delay_type", 0, charon->name),
 	this->receive_delay_request = lib->settings->get_bool(lib->settings,
-					"%s.receive_delay_request", TRUE, lib->ns),
+				"%s.receive_delay_request", TRUE, charon->name),
 	this->receive_delay_response = lib->settings->get_bool(lib->settings,
-					"%s.receive_delay_response", TRUE, lib->ns),
+				"%s.receive_delay_response", TRUE, charon->name),
 	this->initiator_only = lib->settings->get_bool(lib->settings,
-					"%s.initiator_only", FALSE, lib->ns),
+				"%s.initiator_only", FALSE, charon->name),
 
 	this->hasher = lib->crypto->create_hasher(lib->crypto, HASH_SHA1);
 	if (!this->hasher)
@@ -683,3 +684,4 @@ receiver_t *receiver_create()
 
 	return &this->public;
 }
+

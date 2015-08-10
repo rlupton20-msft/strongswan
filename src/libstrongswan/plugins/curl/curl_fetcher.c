@@ -50,11 +50,6 @@ struct private_curl_fetcher_t {
 	fetcher_callback_t cb;
 
 	/**
-	 * Variable that receives the response code
-	 */
-	u_int *result;
-
-	/**
 	 * Timeout for a transfer
 	 */
 	long timeout;
@@ -85,10 +80,8 @@ static size_t curl_cb(void *ptr, size_t size, size_t nmemb, cb_data_t *data)
 METHOD(fetcher_t, fetch, status_t,
 	private_curl_fetcher_t *this, char *uri, void *userdata)
 {
-	char error[CURL_ERROR_SIZE], *enc_uri;
-	CURLcode curl_status;
+	char error[CURL_ERROR_SIZE];
 	status_t status;
-	long result = 0;
 	cb_data_t data = {
 		.cb = this->cb,
 		.user = userdata,
@@ -99,17 +92,12 @@ METHOD(fetcher_t, fetch, status_t,
 		*(chunk_t*)userdata = chunk_empty;
 	}
 
-	/* the URI has to be URL-encoded, we only replace spaces as replacing other
-	 * characters (e.g. '/' or ':') would render the URI invalid */
-	enc_uri = strreplace(uri, " ", "%20");
-
-	if (curl_easy_setopt(this->curl, CURLOPT_URL, enc_uri) != CURLE_OK)
+	if (curl_easy_setopt(this->curl, CURLOPT_URL, uri) != CURLE_OK)
 	{	/* URL type not supported by curl */
-		status = NOT_SUPPORTED;
-		goto out;
+		return NOT_SUPPORTED;
 	}
 	curl_easy_setopt(this->curl, CURLOPT_ERRORBUFFER, error);
-	curl_easy_setopt(this->curl, CURLOPT_FAILONERROR, FALSE);
+	curl_easy_setopt(this->curl, CURLOPT_FAILONERROR, TRUE);
 	curl_easy_setopt(this->curl, CURLOPT_NOSIGNAL, TRUE);
 	if (this->timeout)
 	{
@@ -124,32 +112,18 @@ METHOD(fetcher_t, fetch, status_t,
 	}
 
 	DBG2(DBG_LIB, "  sending http request to '%s'...", uri);
-	curl_status = curl_easy_perform(this->curl);
-	switch (curl_status)
+	switch (curl_easy_perform(this->curl))
 	{
 		case CURLE_UNSUPPORTED_PROTOCOL:
 			status = NOT_SUPPORTED;
 			break;
 		case CURLE_OK:
-			curl_easy_getinfo(this->curl, CURLINFO_RESPONSE_CODE,
-							  &result);
-			if (this->result)
-			{
-				*this->result = result;
-			}
-			status = (result >= 200 && result < 300) ? SUCCESS : FAILED;
+			status = SUCCESS;
 			break;
 		default:
-			DBG1(DBG_LIB, "libcurl http request failed [%d]: %s", curl_status,
-				 error);
+			DBG1(DBG_LIB, "libcurl http request failed: %s", error);
 			status = FAILED;
 			break;
-	}
-
-out:
-	if (enc_uri != uri)
-	{
-		free(enc_uri);
 	}
 	return status;
 }
@@ -201,11 +175,6 @@ METHOD(fetcher_t, set_option, bool,
 		case FETCH_CALLBACK:
 		{
 			this->cb = va_arg(args, fetcher_callback_t);
-			break;
-		}
-		case FETCH_RESPONSE_CODE:
-		{
-			this->result = va_arg(args, u_int*);
 			break;
 		}
 		case FETCH_SOURCEIP:

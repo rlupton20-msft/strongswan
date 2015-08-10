@@ -23,8 +23,6 @@
 #ifndef PROCESSOR_H_
 #define PROCESSOR_H_
 
-#include <utils/utils.h>
-
 typedef struct processor_t processor_t;
 
 #include <stdlib.h>

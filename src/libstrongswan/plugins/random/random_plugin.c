@@ -51,9 +51,6 @@ static int dev_random = -1;
 /** /dev/urandom file descriptor */
 static int dev_urandom = -1;
 
-/** Is strong randomness equivalent to true randomness? */
-static bool strong_equals_true = FALSE;
-
 /**
  * See header.
  */
@@ -71,14 +68,6 @@ int random_plugin_get_dev_urandom()
 }
 
 /**
- * See header.
- */
-bool random_plugin_get_strong_equals_true()
-{
-	return strong_equals_true;
-}
-
-/**
  * Open a random device file
  */
 static bool open_dev(char *file, int *fd)
@@ -88,11 +77,6 @@ static bool open_dev(char *file, int *fd)
 	{
 		DBG1(DBG_LIB, "opening \"%s\" failed: %s", file, strerror(errno));
 		return FALSE;
-	}
-	if (fcntl(*fd, F_SETFD, FD_CLOEXEC) == -1)
-	{
-		DBG1(DBG_LIB, "setting FD_CLOEXEC for \"%s\" failed: %s",
-			 file, strerror(errno));
 	}
 	return TRUE;
 }
@@ -147,12 +131,10 @@ plugin_t *random_plugin_create()
 		},
 	);
 
-	strong_equals_true = lib->settings->get_bool(lib->settings,
-						"%s.plugins.random.strong_equals_true", FALSE, lib->ns);
 	urandom_file = lib->settings->get_str(lib->settings,
-						"%s.plugins.random.urandom", DEV_URANDOM, lib->ns);
+						"libstrongswan.plugins.random.urandom", DEV_URANDOM);
 	random_file = lib->settings->get_str(lib->settings,
-						"%s.plugins.random.random", DEV_RANDOM, lib->ns);
+						"libstrongswan.plugins.random.random", DEV_RANDOM);
 	if (!open_dev(urandom_file, &dev_urandom) ||
 		!open_dev(random_file, &dev_random))
 	{

@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2011-2015 Tobias Brunner
+ * Copyright (C) 2011-2013 Tobias Brunner
  * Copyright (C) 2009 Martin Willi
  * Hochschule fuer Technik Rapperswil
  *
@@ -18,12 +18,10 @@
 
 #include <hydra.h>
 #include <daemon.h>
-#include <threading/mutex.h>
 #include <threading/rwlock.h>
-#include <threading/rwlock_condvar.h>
+#include <threading/thread_value.h>
 #include <collections/linked_list.h>
 
-#define INSTALL_DISABLED ((u_int)~0)
 
 typedef struct private_trap_manager_t private_trap_manager_t;
 typedef struct trap_listener_t trap_listener_t;
@@ -65,83 +63,38 @@ struct private_trap_manager_t {
 	rwlock_t *lock;
 
 	/**
+	 * track if the current thread is installing a trap policy
+	 */
+	thread_value_t *installing;
+
+	/**
 	 * listener to track acquiring IKE_SAs
 	 */
 	trap_listener_t listener;
-
-	/**
-	 * list of acquires we currently handle
-	 */
-	linked_list_t *acquires;
-
-	/**
-	 * mutex for list of acquires
-	 */
-	mutex_t *mutex;
-
-	/**
-	 * number of threads currently installing trap policies, or INSTALL_DISABLED
-	 */
-	u_int installing;
-
-	/**
-	 * condvar to signal trap policy installation
-	 */
-	rwlock_condvar_t *condvar;
-
-	/**
-	 * Whether to ignore traffic selectors from acquires
-	 */
-	bool ignore_acquire_ts;
 };
 
 /**
  * A installed trap entry
  */
 typedef struct {
-	/** name of the trapped CHILD_SA */
-	char *name;
 	/** ref to peer_cfg to initiate */
 	peer_cfg_t *peer_cfg;
-	/** ref to instantiated CHILD_SA (i.e the trap policy) */
+	/** ref to instanciated CHILD_SA */
 	child_sa_t *child_sa;
-} entry_t;
-
-/**
- * A handled acquire
- */
-typedef struct {
+	/** TRUE if an acquire is pending */
+	bool pending;
 	/** pending IKE_SA connecting upon acquire */
 	ike_sa_t *ike_sa;
-	/** reqid of pending trap policy */
-	u_int32_t reqid;
-} acquire_t;
+} entry_t;
 
 /**
  * actually uninstall and destroy an installed entry
  */
-static void destroy_entry(entry_t *this)
+static void destroy_entry(entry_t *entry)
 {
-	this->child_sa->destroy(this->child_sa);
-	this->peer_cfg->destroy(this->peer_cfg);
-	free(this->name);
-	free(this);
-}
-
-/**
- * destroy a cached acquire entry
- */
-static void destroy_acquire(acquire_t *this)
-{
-	free(this);
-}
-
-/**
- * match an acquire entry by reqid
- */
-static bool acquire_by_reqid(acquire_t *this, u_int32_t *reqid)
-{
-	return this->reqid == *reqid;
+	entry->child_sa->destroy(entry->child_sa);
+	entry->peer_cfg->destroy(entry->peer_cfg);
+	free(entry);
 }
 
 METHOD(trap_manager_t, install, u_int32_t,
@@ -184,50 +137,29 @@ METHOD(trap_manager_t, install, u_int32_t,
 	}
 
 	this->lock->write_lock(this->lock);
-	if (this->installing == INSTALL_DISABLED)
-	{	/* flush() has been called */
-		this->lock->unlock(this->lock);
-		return 0;
-	}
+	this->installing->set(this->installing, this);
 	enumerator = this->traps->create_enumerator(this->traps);
 	while (enumerator->enumerate(enumerator, &entry))
 	{
-		if (streq(entry->name, child->get_name(child)))
+		if (streq(entry->child_sa->get_name(entry->child_sa),
+				  child->get_name(child)))
 		{
+			this->traps->remove_at(this->traps, enumerator);
 			found = entry;
-			if (entry->child_sa)
-			{	/* replace it with an updated version, if already installed */
-				this->traps->remove_at(this->traps, enumerator);
-			}
 			break;
 		}
 	}
 	enumerator->destroy(enumerator);
 
 	if (found)
-	{
-		if (!found->child_sa)
-		{
-			DBG1(DBG_CFG, "CHILD_SA '%s' is already being routed", found->name);
-			this->lock->unlock(this->lock);
-			return 0;
-		}
-		/* config might have changed so update everything */
-		DBG1(DBG_CFG, "updating already routed CHILD_SA '%s'", found->name);
+	{	/* config might have changed so update everything */
+		DBG1(DBG_CFG, "updating already routed CHILD_SA '%s'",
+			 child->get_name(child));
 		reqid = found->child_sa->get_reqid(found->child_sa);
 	}
 
-	INIT(entry,
-		.name = strdup(child->get_name(child)),
-		.peer_cfg = peer->get_ref(peer),
-	);
-	this->traps->insert_first(this->traps, entry);
-	this->installing++;
-	/* don't hold lock while creating CHILD_SA and installing policies */
-	this->lock->unlock(this->lock);
-
 	/* create and route CHILD_SA */
-	child_sa = child_sa_create(me, other, child, reqid, FALSE, 0, 0);
+	child_sa = child_sa_create(me, other, child, reqid, FALSE);
 
 	list = linked_list_create_with_items(me, NULL);
 	my_ts = child->get_traffic_selectors(child, TRUE, NULL, list);
@@ -253,29 +185,29 @@ METHOD(trap_manager_t, install, u_int32_t,
 	if (status != SUCCESS)
 	{
 		DBG1(DBG_CFG, "installing trap failed");
-		this->lock->write_lock(this->lock);
-		this->traps->remove(this->traps, entry, NULL);
-		this->lock->unlock(this->lock);
-		entry->child_sa = child_sa;
-		destroy_entry(entry);
 		reqid = 0;
+		/* hold off destroying the CHILD_SA until we released the lock */
 	}
 	else
 	{
+		INIT(entry,
+			.child_sa = child_sa,
+			.peer_cfg = peer->get_ref(peer),
+		);
+		this->traps->insert_last(this->traps, entry);
 		reqid = child_sa->get_reqid(child_sa);
-		this->lock->write_lock(this->lock);
-		entry->child_sa = child_sa;
-		this->lock->unlock(this->lock);
+	}
+	this->installing->set(this->installing, NULL);
+	this->lock->unlock(this->lock);
+
+	if (status != SUCCESS)
+	{
+		child_sa->destroy(child_sa);
 	}
 	if (found)
 	{
 		destroy_entry(found);
 	}
-	this->lock->write_lock(this->lock);
-	/* do this at the end, so entries created temporarily are also destroyed */
-	this->installing--;
-	this->condvar->signal(this->condvar);
-	this->lock->unlock(this->lock);
 	return reqid;
 }
 
@@ -289,8 +221,7 @@ METHOD(trap_manager_t, uninstall, bool,
 	enumerator = this->traps->create_enumerator(this->traps);
 	while (enumerator->enumerate(enumerator, &entry))
 	{
-		if (entry->child_sa &&
-			entry->child_sa->get_reqid(entry->child_sa) == reqid)
+		if (entry->child_sa->get_reqid(entry->child_sa) == reqid)
 		{
 			this->traps->remove_at(this->traps, enumerator);
 			found = entry;
@@ -305,6 +236,7 @@ METHOD(trap_manager_t, uninstall, bool,
 		DBG1(DBG_CFG, "trap %d not found to uninstall", reqid);
 		return FALSE;
 	}
+
 	destroy_entry(found);
 	return TRUE;
 }
@@ -315,10 +247,6 @@ METHOD(trap_manager_t, uninstall, bool,
 static bool trap_filter(rwlock_t *lock, entry_t **entry, peer_cfg_t **peer_cfg,
 						void *none, child_sa_t **child_sa)
 {
-	if (!(*entry)->child_sa)
-	{	/* skip entries that are currently being installed */
-		return FALSE;
-	}
 	if (peer_cfg)
 	{
 		*peer_cfg = (*entry)->peer_cfg;
@@ -343,24 +271,28 @@ METHOD(trap_manager_t, find_reqid, u_int32_t,
 	private_trap_manager_t *this, child_cfg_t *child)
 {
 	enumerator_t *enumerator;
+	child_cfg_t *current;
 	entry_t *entry;
 	u_int32_t reqid = 0;
 
+	if (this->installing->get(this->installing))
+	{	/* current thread holds the lock */
+		return reqid;
+	}
 	this->lock->read_lock(this->lock);
 	enumerator = this->traps->create_enumerator(this->traps);
 	while (enumerator->enumerate(enumerator, &entry))
 	{
-		if (streq(entry->name, child->get_name(child)))
+		current = entry->child_sa->get_config(entry->child_sa);
+		if (streq(current->get_name(current), child->get_name(child)))
 		{
-			if (entry->child_sa)
-			{
-				reqid = entry->child_sa->get_reqid(entry->child_sa);
-			}
+			reqid = entry->child_sa->get_reqid(entry->child_sa);
 			break;
 		}
 	}
 	enumerator->destroy(enumerator);
 	this->lock->unlock(this->lock);
+
 	return reqid;
 }
 
@@ -370,7 +302,6 @@ METHOD(trap_manager_t, acquire, void,
 {
 	enumerator_t *enumerator;
 	entry_t *entry, *found = NULL;
-	acquire_t *acquire;
 	peer_cfg_t *peer;
 	child_cfg_t *child;
 	ike_sa_t *ike_sa;
@@ -379,8 +310,7 @@ METHOD(trap_manager_t, acquire, void,
 	enumerator = this->traps->create_enumerator(this->traps);
 	while (enumerator->enumerate(enumerator, &entry))
 	{
-		if (entry->child_sa &&
-			entry->child_sa->get_reqid(entry->child_sa) == reqid)
+		if (entry->child_sa->get_reqid(entry->child_sa) == reqid)
 		{
 			found = entry;
 			break;
@@ -394,29 +324,16 @@ METHOD(trap_manager_t, acquire, void,
 		this->lock->unlock(this->lock);
 		return;
 	}
-	reqid = found->child_sa->get_reqid(found->child_sa);
-
-	this->mutex->lock(this->mutex);
-	if (this->acquires->find_first(this->acquires, (void*)acquire_by_reqid,
-								  (void**)&acquire, &reqid) == SUCCESS)
+	if (!cas_bool(&found->pending, FALSE, TRUE))
 	{
 		DBG1(DBG_CFG, "ignoring acquire, connection attempt pending");
-		this->mutex->unlock(this->mutex);
 		this->lock->unlock(this->lock);
 		return;
 	}
-	else
-	{
-		INIT(acquire,
-			.reqid = reqid,
-		);
-		this->acquires->insert_last(this->acquires, acquire);
-	}
-	this->mutex->unlock(this->mutex);
-
 	peer = found->peer_cfg->get_ref(found->peer_cfg);
 	child = found->child_sa->get_config(found->child_sa);
 	child = child->get_ref(child);
+	reqid = found->child_sa->get_reqid(found->child_sa);
 	/* don't hold the lock while checking out the IKE_SA */
 	this->lock->unlock(this->lock);
 
@@ -428,33 +345,27 @@ METHOD(trap_manager_t, acquire, void,
 		{
 			ike_sa->set_peer_cfg(ike_sa, peer);
 		}
-		if (this->ignore_acquire_ts || ike_sa->get_version(ike_sa) == IKEV1)
+		if (ike_sa->get_version(ike_sa) == IKEV1)
 		{	/* in IKEv1, don't prepend the acquiring packet TS, as we only
 			 * have a single TS that we can establish in a Quick Mode. */
 			src = dst = NULL;
 		}
-
-		this->mutex->lock(this->mutex);
-		acquire->ike_sa = ike_sa;
-		this->mutex->unlock(this->mutex);
-
 		if (ike_sa->initiate(ike_sa, child, reqid, src, dst) != DESTROY_ME)
 		{
+			/* make sure the entry is still there */
+			this->lock->read_lock(this->lock);
+			if (this->traps->find_first(this->traps, NULL,
+										(void**)&found) == SUCCESS)
+			{
+				found->ike_sa = ike_sa;
+			}
+			this->lock->unlock(this->lock);
 			charon->ike_sa_manager->checkin(charon->ike_sa_manager, ike_sa);
 		}
 		else
 		{
-			charon->ike_sa_manager->checkin_and_destroy(charon->ike_sa_manager,
-														ike_sa);
+			ike_sa->destroy(ike_sa);
 		}
-	}
-	else
-	{
-		this->mutex->lock(this->mutex);
-		this->acquires->remove(this->acquires, acquire, NULL);
-		this->mutex->unlock(this->mutex);
-		destroy_acquire(acquire);
-		child->destroy(child);
 	}
 	peer->destroy(peer);
 }
@@ -466,25 +377,26 @@ static void complete(private_trap_manager_t *this, ike_sa_t *ike_sa,
 					 child_sa_t *child_sa)
 {
 	enumerator_t *enumerator;
-	acquire_t *acquire;
+	entry_t *entry;
 
-	this->mutex->lock(this->mutex);
-	enumerator = this->acquires->create_enumerator(this->acquires);
-	while (enumerator->enumerate(enumerator, &acquire))
+	this->lock->read_lock(this->lock);
+	enumerator = this->traps->create_enumerator(this->traps);
+	while (enumerator->enumerate(enumerator, &entry))
 	{
-		if (!acquire->ike_sa || acquire->ike_sa != ike_sa)
+		if (entry->ike_sa != ike_sa)
 		{
 			continue;
 		}
-		if (child_sa && child_sa->get_reqid(child_sa) != acquire->reqid)
+		if (child_sa && child_sa->get_reqid(child_sa) !=
+									entry->child_sa->get_reqid(entry->child_sa))
 		{
 			continue;
 		}
-		this->acquires->remove_at(this->acquires, enumerator);
-		destroy_acquire(acquire);
+		entry->ike_sa = NULL;
+		entry->pending = FALSE;
 	}
 	enumerator->destroy(enumerator);
-	this->mutex->unlock(this->mutex);
+	this->lock->unlock(this->lock);
 }
 
 METHOD(listener_t, ike_state_change, bool,
@@ -518,15 +430,14 @@ METHOD(listener_t, child_state_change, bool,
 METHOD(trap_manager_t, flush, void,
 	private_trap_manager_t *this)
 {
+	linked_list_t *traps;
+	/* since destroying the CHILD_SA results in events which require a read
+	 * lock we cannot destroy the list while holding the write lock */
 	this->lock->write_lock(this->lock);
-	while (this->installing)
-	{
-		this->condvar->wait(this->condvar, this->lock);
-	}
-	this->traps->destroy_function(this->traps, (void*)destroy_entry);
+	traps = this->traps;
 	this->traps = linked_list_create();
-	this->installing = INSTALL_DISABLED;
 	this->lock->unlock(this->lock);
+	traps->destroy_function(traps, (void*)destroy_entry);
 }
 
 METHOD(trap_manager_t, destroy, void,
@@ -534,9 +445,7 @@ METHOD(trap_manager_t, destroy, void,
 {
 	charon->bus->remove_listener(charon->bus, &this->listener.listener);
 	this->traps->destroy_function(this->traps, (void*)destroy_entry);
-	this->acquires->destroy_function(this->acquires, (void*)destroy_acquire);
-	this->condvar->destroy(this->condvar);
-	this->mutex->destroy(this->mutex);
+	this->installing->destroy(this->installing);
 	this->lock->destroy(this->lock);
 	free(this);
 }
@@ -566,12 +475,8 @@ trap_manager_t *trap_manager_create(void)
 			},
 		},
 		.traps = linked_list_create(),
-		.acquires = linked_list_create(),
-		.mutex = mutex_create(MUTEX_TYPE_DEFAULT),
 		.lock = rwlock_create(RWLOCK_TYPE_DEFAULT),
-		.condvar = rwlock_condvar_create(),
-		.ignore_acquire_ts = lib->settings->get_bool(lib->settings,
-										"%s.ignore_acquire_ts", FALSE, lib->ns),
+		.installing = thread_value_create(NULL),
 	);
 	charon->bus->add_listener(charon->bus, &this->listener.listener);
 

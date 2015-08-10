@@ -30,10 +30,8 @@
  *
  * @param algo			algorithm to implement
  * @param key_size		key size in bytes
- * @param salt_size		size of implicit salt length
  * @return				aead_t object, NULL if not supported
  */
-aead_t *openssl_gcm_create(encryption_algorithm_t algo, size_t key_size,
-							size_t salt_size);
+aead_t *openssl_gcm_create(encryption_algorithm_t algo, size_t key_size);
 
 #endif /** OPENSSL_GCM_H_ @}*/

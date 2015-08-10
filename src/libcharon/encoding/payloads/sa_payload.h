@@ -104,7 +104,7 @@ struct sa_payload_t {
 /**
  * Creates an empty sa_payload_t object
  *
- * @param type				PLV2_SECURITY_ASSOCIATION or PLV1_SECURITY_ASSOCIATION
+ * @param type				SECURITY_ASSOCIATION or SECURITY_ASSOCIATION_V1
  * @return					created sa_payload_t object
  */
 sa_payload_t *sa_payload_create(payload_type_t type);

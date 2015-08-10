@@ -127,7 +127,7 @@ struct transform_attribute_t {
 /**
  * Creates an empty transform_attribute_t object.
  *
- * @param type			PLV2_TRANSFORM_ATTRIBUTE or PLV1_TRANSFORM_ATTRIBUTE
+ * @param type			TRANSFORM_ATTRIBUTE or TRANSFORM_ATTRIBUTE_V1
  * @return				transform_attribute_t object
  */
 transform_attribute_t *transform_attribute_create(payload_type_t type);
@@ -135,7 +135,7 @@ transform_attribute_t *transform_attribute_create(payload_type_t type);
 /**
  * Creates a two byte value or a larger attribute for a given attribute kind.
  *
- * @param type			PLV2_TRANSFORM_ATTRIBUTE or PLV1_TRANSFORM_ATTRIBUTE
+ * @param type			TRANSFORM_ATTRIBUTE or TRANSFORM_ATTRIBUTE_V1
  * @param kind			attribute kind
  * @param value			fixed two byte value
  * @return				transform_attribute_t object

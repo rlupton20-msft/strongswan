@@ -470,12 +470,12 @@ ha_segments_t *ha_segments_create(ha_socket_t *socket, ha_kernel_t *kernel,
 		.condvar = condvar_create(CONDVAR_TYPE_DEFAULT),
 		.heartbeat_delay = lib->settings->get_int(lib->settings,
 				"%s.plugins.ha.heartbeat_delay", DEFAULT_HEARTBEAT_DELAY,
-				lib->ns),
+				charon->name),
 		.heartbeat_timeout = lib->settings->get_int(lib->settings,
 				"%s.plugins.ha.heartbeat_timeout", DEFAULT_HEARTBEAT_TIMEOUT,
-				lib->ns),
+				charon->name),
 		.autobalance = lib->settings->get_int(lib->settings,
-				"%s.plugins.ha.autobalance", 0, lib->ns),
+				"%s.plugins.ha.autobalance", 0, charon->name),
 	);
 
 	if (monitor)

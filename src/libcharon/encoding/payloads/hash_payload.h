@@ -59,7 +59,7 @@ struct hash_payload_t {
 /**
  * Creates an empty hash_payload_t object.
  *
- * @param type		either PLV1_HASH or PLV1_NAT_D
+ * @param type		either HASH_V1 or NAT_D_V1
  * @return			hash_payload_t object
  */
 hash_payload_t *hash_payload_create(payload_type_t type);

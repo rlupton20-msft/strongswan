@@ -20,6 +20,7 @@
 #include <sys/types.h>
 #include <dirent.h>
 #include <sys/stat.h>
+#include <dlfcn.h>
 
 #include <daemon.h>
 #include <library.h>
@@ -303,18 +304,6 @@ METHOD(listener_t, child_state_change, bool,
 						/* proper delete */
 						this->status = SUCCESS;
 						break;
-					case CHILD_RETRYING:
-						/* retrying with a different DH group; survive another
-						 * initiation round */
-						this->status = NEED_MORE;
-						return TRUE;
-					case CHILD_CREATED:
-						if (this->status == NEED_MORE)
-						{
-							this->status = FAILED;
-							return TRUE;
-						}
-						break;
 					default:
 						break;
 				}
@@ -449,7 +438,7 @@ METHOD(job_t, terminate_ike_execute, job_requeue_t,
 	ike_sa_t *ike_sa;
 
 	ike_sa = charon->ike_sa_manager->checkout_by_id(charon->ike_sa_manager,
-													unique_id);
+													unique_id, FALSE);
 	if (!ike_sa)
 	{
 		DBG1(DBG_IKE, "unable to terminate IKE_SA: ID %d not found", unique_id);
@@ -534,15 +523,17 @@ METHOD(job_t, terminate_child_execute, job_requeue_t,
 	interface_job_t *job)
 {
 	interface_listener_t *listener = &job->listener;
-	u_int32_t id = listener->id;
+	u_int32_t reqid = listener->id;
+	enumerator_t *enumerator;
 	child_sa_t *child_sa;
 	ike_sa_t *ike_sa;
 
-	ike_sa = charon->child_sa_manager->checkout_by_id(charon->child_sa_manager,
-													  id, &child_sa);
+	ike_sa = charon->ike_sa_manager->checkout_by_id(charon->ike_sa_manager,
+													reqid, TRUE);
 	if (!ike_sa)
 	{
-		DBG1(DBG_IKE, "unable to terminate, CHILD_SA with ID %d not found", id);
+		DBG1(DBG_IKE, "unable to terminate, CHILD_SA with ID %d not found",
+			 reqid);
 		listener->status = NOT_FOUND;
 		/* release listener */
 		listener_done(listener);
@@ -552,10 +543,22 @@ METHOD(job_t, terminate_child_execute, job_requeue_t,
 	listener->ike_sa = ike_sa;
 	listener->lock->unlock(listener->lock);
 
-	if (child_sa->get_state(child_sa) == CHILD_ROUTED)
+	enumerator = ike_sa->create_child_sa_enumerator(ike_sa);
+	while (enumerator->enumerate(enumerator, (void**)&child_sa))
+	{
+		if (child_sa->get_state(child_sa) != CHILD_ROUTED &&
+			child_sa->get_reqid(child_sa) == reqid)
+		{
+			break;
+		}
+		child_sa = NULL;
+	}
+	enumerator->destroy(enumerator);
+
+	if (!child_sa)
 	{
 		DBG1(DBG_IKE, "unable to terminate, established "
-			 "CHILD_SA with ID %d not found", id);
+			 "CHILD_SA with ID %d not found", reqid);
 		charon->ike_sa_manager->checkin(charon->ike_sa_manager, ike_sa);
 		listener->status = NOT_FOUND;
 		/* release listener */
@@ -582,7 +585,7 @@ METHOD(job_t, terminate_child_execute, job_requeue_t,
 }
 
 METHOD(controller_t, terminate_child, status_t,
-	controller_t *this, u_int32_t unique_id,
+	controller_t *this, u_int32_t reqid,
 	controller_cb_t callback, void *param, u_int timeout)
 {
 	interface_job_t *job;
@@ -603,7 +606,7 @@ METHOD(controller_t, terminate_child, status_t,
 				.param = param,
 			},
 			.status = FAILED,
-			.id = unique_id,
+			.id = reqid,
 			.lock = spinlock_create(),
 		},
 		.public = {

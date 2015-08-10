@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2009-2015 Tobias Brunner
+ * Copyright (C) 2009 Tobias Brunner
  * Copyright (C) 2005-2009 Martin Willi
  * Copyright (C) 2005 Jan Hutter
  * Hochschule fuer Technik Rapperswil
@@ -219,14 +219,6 @@ struct identification_t {
 	id_type_t (*get_type) (identification_t *this);
 
 	/**
-	 * Create a hash value for this identification_t object.
-	 *
-	 * @param inc		optional value for incremental hashing
-	 * @return			hash value
-	 */
-	u_int (*hash) (identification_t *this, u_int inc);
-
-	/**
 	 * Check if two identification_t objects are equal.
 	 *
 	 * @param other		other identification_t object
@@ -309,15 +301,6 @@ struct identification_t {
  * ND, UID, DC, CN, S, SN, serialNumber, C, L, ST, O, OU, T, D,
  * N, G, I, dnQualifier, ID, EN, EmployeeNumber, E, Email, emailAddress, UN,
  * unstructuredName, TCGID.
- *
- * To skip automatic type detection the following prefixes may be used to
- * enforce a specific type: ipv4:, ipv6:, rfc822:, email:, userfqdn:, fqdn:,
- * dns:, asn1dn:, asn1gn: and keyid:. If a # follows the :, the remaining data
- * is interpreted as hex encoded binary data for that ID, otherwise the raw
- * string following the prefix is used as identity data, without conversion.
- * To specify a non-standard ID type, the numerical type may be prefixed
- * between curly backets, building a prefix. For instance the "{1}:" prefix
- * defines an ID_IPV4_ADDR type.
  *
  * This constructor never returns NULL. If it does not find a suitable
  * conversion function, it will copy the string to an ID_KEY_ID.

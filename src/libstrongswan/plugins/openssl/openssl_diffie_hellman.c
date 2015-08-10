@@ -38,7 +38,7 @@ struct private_openssl_diffie_hellman_t {
 	/**
 	 * Diffie Hellman group number.
 	 */
-	diffie_hellman_group_t group;
+	u_int16_t group;
 
 	/**
 	 * Diffie Hellman object
@@ -61,41 +61,35 @@ struct private_openssl_diffie_hellman_t {
 	bool computed;
 };
 
-METHOD(diffie_hellman_t, get_my_public_value, bool,
+METHOD(diffie_hellman_t, get_my_public_value, void,
 	private_openssl_diffie_hellman_t *this, chunk_t *value)
 {
 	*value = chunk_alloc(DH_size(this->dh));
 	memset(value->ptr, 0, value->len);
 	BN_bn2bin(this->dh->pub_key,
 			  value->ptr + value->len - BN_num_bytes(this->dh->pub_key));
-	return TRUE;
 }
 
-METHOD(diffie_hellman_t, get_shared_secret, bool,
+METHOD(diffie_hellman_t, get_shared_secret, status_t,
 	private_openssl_diffie_hellman_t *this, chunk_t *secret)
 {
 	if (!this->computed)
 	{
-		return FALSE;
+		return FAILED;
 	}
 	/* shared secret should requires a len according the DH group */
 	*secret = chunk_alloc(DH_size(this->dh));
 	memset(secret->ptr, 0, secret->len);
 	memcpy(secret->ptr + secret->len - this->shared_secret.len,
 		   this->shared_secret.ptr, this->shared_secret.len);
-	return TRUE;
+	return SUCCESS;
 }
 
 
-METHOD(diffie_hellman_t, set_other_public_value, bool,
+METHOD(diffie_hellman_t, set_other_public_value, void,
 	private_openssl_diffie_hellman_t *this, chunk_t value)
 {
 	int len;
-
-	if (!diffie_hellman_verify_value(this->group, value))
-	{
-		return FALSE;
-	}
 
 	BN_bin2bn(value.ptr, value.len, this->pub_key);
 	chunk_clear(&this->shared_secret);
@@ -105,23 +99,10 @@ METHOD(diffie_hellman_t, set_other_public_value, bool,
 	if (len < 0)
 	{
 		DBG1(DBG_LIB, "DH shared secret computation failed");
-		return FALSE;
+		return;
 	}
 	this->shared_secret.len = len;
 	this->computed = TRUE;
-	return TRUE;
-}
-
-METHOD(diffie_hellman_t, set_private_value, bool,
-	private_openssl_diffie_hellman_t *this, chunk_t value)
-{
-	if (BN_bin2bn(value.ptr, value.len, this->dh->priv_key))
-	{
-		chunk_clear(&this->shared_secret);
-		this->computed = FALSE;
-		return DH_generate_key(this->dh);
-	}
-	return FALSE;
 }
 
 METHOD(diffie_hellman_t, get_dh_group, diffie_hellman_group_t,
@@ -172,7 +153,6 @@ openssl_diffie_hellman_t *openssl_diffie_hellman_create(
 				.get_shared_secret = _get_shared_secret,
 				.set_other_public_value = _set_other_public_value,
 				.get_my_public_value = _get_my_public_value,
-				.set_private_value = _set_private_value,
 				.get_dh_group = _get_dh_group,
 				.destroy = _destroy,
 			},

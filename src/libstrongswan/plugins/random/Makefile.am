@@ -4,7 +4,7 @@ AM_CPPFLAGS = \
 	-DDEV_URANDOM=\"${urandom_device}\"
 
 AM_CFLAGS = \
-	$(PLUGIN_CFLAGS)
+	-rdynamic
 
 if MONOLITHIC
 noinst_LTLIBRARIES = libstrongswan-random.la
@@ -16,4 +16,5 @@ libstrongswan_random_la_SOURCES = \
 	random_plugin.h random_plugin.c \
 	random_rng.c random_rng.h
 
-libstrongswan_random_la_LDFLAGS = -module -avoid-version
+libstrongswan_random_la_LDFLAGS = -no-undefined -module -avoid-version
+libstrongswan_random_la_LIBADD = $(top_builddir)/src/libstrongswan/libstrongswan.la

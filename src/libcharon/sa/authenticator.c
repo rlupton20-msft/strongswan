@@ -31,14 +31,12 @@ ENUM_BEGIN(auth_method_names, AUTH_RSA, AUTH_DSS,
 	"RSA signature",
 	"pre-shared key",
 	"DSS signature");
-ENUM_NEXT(auth_method_names, AUTH_ECDSA_256, AUTH_DS, AUTH_DSS,
+ENUM_NEXT(auth_method_names, AUTH_ECDSA_256, AUTH_GSPM, AUTH_DSS,
 	"ECDSA-256 signature",
 	"ECDSA-384 signature",
 	"ECDSA-521 signature",
-	"secure password method",
-	"NULL authentication",
-	"digital signature");
-ENUM_NEXT(auth_method_names, AUTH_XAUTH_INIT_PSK, AUTH_HYBRID_RESP_RSA, AUTH_DS,
+	"secure password method");
+ENUM_NEXT(auth_method_names, AUTH_XAUTH_INIT_PSK, AUTH_HYBRID_RESP_RSA, AUTH_GSPM,
 	"XAuthInitPSK",
 	"XAuthRespPSK",
 	"XAuthInitRSA",
@@ -88,7 +86,7 @@ authenticator_t *authenticator_create_verifier(
 {
 	auth_payload_t *auth_payload;
 
-	auth_payload = (auth_payload_t*)message->get_payload(message, PLV2_AUTH);
+	auth_payload = (auth_payload_t*)message->get_payload(message, AUTHENTICATION);
 	if (auth_payload == NULL)
 	{
 		return (authenticator_t*)eap_authenticator_create_verifier(ike_sa,
@@ -101,7 +99,6 @@ authenticator_t *authenticator_create_verifier(
 		case AUTH_ECDSA_256:
 		case AUTH_ECDSA_384:
 		case AUTH_ECDSA_521:
-		case AUTH_DS:
 			return (authenticator_t*)pubkey_authenticator_create_verifier(ike_sa,
 										sent_nonce, received_init, reserved);
 		case AUTH_PSK:

@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2010-2013 Andreas Steffen
+ * Copyright (C) 2010-213 Andreas Steffen
  * HSR Hochschule fuer Technik Rapperswil
  *
  * This program is free software; you can redistribute it and/or modify it
@@ -54,7 +54,6 @@ extern enum_name_t *pb_tnc_msg_type_names;
  * PB-TNC Message Type defined in the TCG namespace
  */
 enum pb_tnc_tcg_msg_type_t {
-	PB_TCG_MSG_RESERVED =				0,
 	PB_TCG_MSG_PDP_REFERRAL =			1,
 	PB_TCG_MSG_ROOF =					1
 };
@@ -63,20 +62,6 @@ enum pb_tnc_tcg_msg_type_t {
  * enum name for pb_tnc_tcg_msg_type_t.
  */
 extern enum_name_t *pb_tnc_tcg_msg_type_names;
-
-/**
- * PB-TNC Message Type defined in the ITA namespace
- */
-enum pb_tnc_ita_msg_type_t {
-	PB_ITA_MSG_NOSKIP_TEST =			0,
-	PB_ITA_MSG_MUTUAL_CAPABILITY =		1,
-	PB_ITA_MSG_ROOF =					1
-};
-
-/**
- * enum name for pb_tnc_tcg_msg_type_t.
- */
-extern enum_name_t *pb_tnc_ita_msg_type_names;
 
 /**
  * Information entry describing a PB-TNC Message Type
@@ -99,11 +84,6 @@ extern pb_tnc_msg_info_t pb_tnc_msg_infos[];
  * Information on PB-TNC TCG Message Types
  */
 extern pb_tnc_msg_info_t pb_tnc_tcg_msg_infos[];
-
-/**
- * Information on PB-TNC ITA Message Types
- */
-extern pb_tnc_msg_info_t pb_tnc_ita_msg_infos[];
 
 /**
  * Generic interface for all PB-TNC message types.

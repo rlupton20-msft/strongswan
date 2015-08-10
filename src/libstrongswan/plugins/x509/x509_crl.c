@@ -325,7 +325,7 @@ static bool parse(private_x509_crl_t *this)
 						break;
 					default:
 						if (critical && lib->settings->get_bool(lib->settings,
-							"%s.x509.enforce_critical", TRUE, lib->ns))
+							"libstrongswan.x509.enforce_critical", TRUE))
 						{
 							DBG1(DBG_ASN, "critical '%s' extension not supported",
 								 (extn_oid == OID_UNKNOWN) ? "unknown" :
@@ -347,7 +347,7 @@ static bool parse(private_x509_crl_t *this)
 				break;
 			}
 			case CRL_OBJ_SIGNATURE:
-				this->signature = chunk_skip(object, 1);
+				this->signature = object;
 				break;
 			default:
 				break;
@@ -451,7 +451,6 @@ METHOD(certificate_t, issued_by, bool,
 	signature_scheme_t scheme;
 	bool valid;
 	x509_t *x509 = (x509_t*)issuer;
-	chunk_t keyid = chunk_empty;
 
 	/* check if issuer is an X.509 CA certificate */
 	if (issuer->get_type(issuer) != CERT_X509)
@@ -463,16 +462,21 @@ METHOD(certificate_t, issued_by, bool,
 		return FALSE;
 	}
 
+	/* get the public key of the issuer */
+	key = issuer->get_public_key(issuer);
+
 	/* compare keyIdentifiers if available, otherwise use DNs */
-	if (this->authKeyIdentifier.ptr)
+	if (this->authKeyIdentifier.ptr && key)
 	{
-		keyid = x509->get_subjectKeyIdentifier(x509);
-		if (keyid.len && !chunk_equals(keyid, this->authKeyIdentifier))
+		chunk_t fingerprint;
+
+		if (!key->get_fingerprint(key, KEYID_PUBKEY_SHA1, &fingerprint) ||
+			!chunk_equals(fingerprint, this->authKeyIdentifier))
 		{
 			return FALSE;
 		}
 	}
-	if (!keyid.len)
+	else
 	{
 		if (!this->issuer->equals(this->issuer, issuer->get_subject(issuer)))
 		{
@@ -480,13 +484,10 @@ METHOD(certificate_t, issued_by, bool,
 		}
 	}
 
+	/* determine signature scheme */
 	scheme = signature_scheme_from_oid(this->algorithm);
-	if (scheme == SIGN_UNKNOWN)
-	{
-		return FALSE;
-	}
-	key = issuer->get_public_key(issuer);
-	if (!key)
+
+	if (scheme == SIGN_UNKNOWN || key == NULL)
 	{
 		return FALSE;
 	}

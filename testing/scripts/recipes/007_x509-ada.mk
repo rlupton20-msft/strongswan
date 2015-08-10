@@ -2,22 +2,20 @@
 
 PKG = x509-ada
 SRC = http://git.codelabs.ch/git/$(PKG).git
-REV = v0.1.1
+REV = v0.1
 
 PREFIX = /usr/local/ada
 
 all: install
 
-$(PKG):
+.$(PKG)-cloned:
 	git clone $(SRC) $(PKG)
-
-.$(PKG)-cloned-$(REV): $(PKG)
-	cd $(PKG) && git fetch && git checkout $(REV)
+	cd $(PKG) && git checkout $(REV)
 	@touch $@
 
-.$(PKG)-built-$(REV): .$(PKG)-cloned-$(REV)
+.$(PKG)-built: .$(PKG)-cloned
 	cd $(PKG) && make tests && make
 	@touch $@
 
-install: .$(PKG)-built-$(REV)
+install: .$(PKG)-built
 	cd $(PKG) && make PREFIX=$(PREFIX) install

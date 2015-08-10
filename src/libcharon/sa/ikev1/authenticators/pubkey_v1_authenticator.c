@@ -94,11 +94,7 @@ METHOD(authenticator_t, build, status_t,
 		return NOT_FOUND;
 	}
 
-	if (!this->dh->get_my_public_value(this->dh, &dh))
-	{
-		private->destroy(private);
-		return FAILED;
-	}
+	this->dh->get_my_public_value(this->dh, &dh);
 	keymat = (keymat_v1_t*)this->ike_sa->get_keymat(this->ike_sa);
 	if (!keymat->get_hash(keymat, this->initiator, dh, this->dh_value,
 					this->ike_sa->get_id(this->ike_sa), this->sa_payload,
@@ -112,7 +108,7 @@ METHOD(authenticator_t, build, status_t,
 
 	if (private->sign(private, scheme, hash, &sig))
 	{
-		sig_payload = hash_payload_create(PLV1_SIGNATURE);
+		sig_payload = hash_payload_create(SIGNATURE_V1);
 		sig_payload->set_hash(sig_payload, sig);
 		free(sig.ptr);
 		message->add_payload(message, &sig_payload->payload_interface);
@@ -148,7 +144,7 @@ METHOD(authenticator_t, process, status_t,
 		scheme = SIGN_ECDSA_WITH_NULL;
 	}
 
-	sig_payload = (hash_payload_t*)message->get_payload(message, PLV1_SIGNATURE);
+	sig_payload = (hash_payload_t*)message->get_payload(message, SIGNATURE_V1);
 	if (!sig_payload)
 	{
 		DBG1(DBG_IKE, "SIG payload missing in message");
@@ -156,10 +152,7 @@ METHOD(authenticator_t, process, status_t,
 	}
 
 	id = this->ike_sa->get_other_id(this->ike_sa);
-	if (!this->dh->get_my_public_value(this->dh, &dh))
-	{
-		return FAILED;
-	}
+	this->dh->get_my_public_value(this->dh, &dh);
 	keymat = (keymat_v1_t*)this->ike_sa->get_keymat(this->ike_sa);
 	if (!keymat->get_hash(keymat, !this->initiator, this->dh_value, dh,
 					this->ike_sa->get_id(this->ike_sa), this->sa_payload,

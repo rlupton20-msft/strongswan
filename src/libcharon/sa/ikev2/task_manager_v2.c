@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2007-2014 Tobias Brunner
+ * Copyright (C) 2007-2011 Tobias Brunner
  * Copyright (C) 2007-2010 Martin Willi
  * Hochschule fuer Technik Rapperswil
  *
@@ -29,7 +29,6 @@
 #include <sa/ikev2/tasks/ike_cert_post.h>
 #include <sa/ikev2/tasks/ike_rekey.h>
 #include <sa/ikev2/tasks/ike_reauth.h>
-#include <sa/ikev2/tasks/ike_reauth_complete.h>
 #include <sa/ikev2/tasks/ike_delete.h>
 #include <sa/ikev2/tasks/ike_config.h>
 #include <sa/ikev2/tasks/ike_dpd.h>
@@ -91,14 +90,9 @@ struct private_task_manager_t {
 		u_int32_t mid;
 
 		/**
-		 * packet(s) for retransmission
+		 * packet for retransmission
 		 */
-		array_t *packets;
-
-		/**
-		 * Helper to defragment the request
-		 */
-		message_t *defrag;
+		packet_t *packet;
 
 	} responding;
 
@@ -117,24 +111,14 @@ struct private_task_manager_t {
 		u_int retransmitted;
 
 		/**
-		 * packet(s) for retransmission
+		 * packet for retransmission
 		 */
-		array_t *packets;
+		packet_t *packet;
 
 		/**
 		 * type of the initated exchange
 		 */
 		exchange_type_t type;
-
-		/**
-		 * TRUE if exchange was deferred because no path was available
-		 */
-		bool deferred;
-
-		/**
-		 * Helper to defragment the response
-		 */
-		message_t *defrag;
 
 	} initiating;
 
@@ -172,25 +156,7 @@ struct private_task_manager_t {
 	 * Base to calculate retransmission timeout
 	 */
 	double retransmit_base;
-
-	/**
-	 * Use make-before-break instead of break-before-make reauth?
-	 */
-	bool make_before_break;
 };
-
-/**
- * Reset retransmission packet list
- */
-static void clear_packets(array_t *array)
-{
-	packet_t *packet;
-
-	while (array_remove(array, ARRAY_TAIL, &packet))
-	{
-		packet->destroy(packet);
-	}
-}
 
 METHOD(task_manager_t, flush_queue, void,
 	private_task_manager_t *this, task_queue_t queue)
@@ -218,8 +184,10 @@ METHOD(task_manager_t, flush_queue, void,
 	}
 }
 
-METHOD(task_manager_t, flush, void,
-	private_task_manager_t *this)
+/**
+ * flush all tasks in the task manager
+ */
+static void flush(private_task_manager_t *this)
 {
 	flush_queue(this, TASK_QUEUE_QUEUED);
 	flush_queue(this, TASK_QUEUE_PASSIVE);
@@ -251,60 +219,10 @@ static bool activate_task(private_task_manager_t *this, task_type_t type)
 	return found;
 }
 
-/**
- * Send packets in the given array (they get cloned). Optionally, the
- * source and destination addresses are changed before sending it.
- */
-static void send_packets(private_task_manager_t *this, array_t *packets,
-						 host_t *src, host_t *dst)
-{
-	packet_t *packet, *clone;
-	int i;
-
-	for (i = 0; i < array_count(packets); i++)
-	{
-		array_get(packets, i, &packet);
-		clone = packet->clone(packet);
-		if (src)
-		{
-			clone->set_source(clone, src->clone(src));
-		}
-		if (dst)
-		{
-			clone->set_destination(clone, dst->clone(dst));
-		}
-		charon->sender->send(charon->sender, clone);
-	}
-}
-
-/**
- * Generates the given message and stores packet(s) in the given array
- */
-static bool generate_message(private_task_manager_t *this, message_t *message,
-							 array_t **packets)
-{
-	enumerator_t *fragments;
-	packet_t *fragment;
-
-	if (this->ike_sa->generate_message_fragmented(this->ike_sa, message,
-												  &fragments) != SUCCESS)
-	{
-		return FALSE;
-	}
-	while (fragments->enumerate(fragments, &fragment))
-	{
-		array_insert_create(packets, ARRAY_TAIL, fragment);
-	}
-	fragments->destroy(fragments);
-	array_compress(*packets);
-	return TRUE;
-}
-
 METHOD(task_manager_t, retransmit, status_t,
 	private_task_manager_t *this, u_int32_t message_id)
 {
-	if (message_id == this->initiating.mid &&
-		array_count(this->initiating.packets))
+	if (this->initiating.packet && message_id == this->initiating.mid)
 	{
 		u_int32_t timeout;
 		job_t *job;
@@ -313,24 +231,23 @@ METHOD(task_manager_t, retransmit, status_t,
 		task_t *task;
 		ike_mobike_t *mobike = NULL;
 
-		array_get(this->initiating.packets, 0, &packet);
-
 		/* check if we are retransmitting a MOBIKE routability check */
-		if (this->initiating.type == INFORMATIONAL)
+		enumerator = array_create_enumerator(this->active_tasks);
+		while (enumerator->enumerate(enumerator, (void*)&task))
 		{
-			enumerator = array_create_enumerator(this->active_tasks);
-			while (enumerator->enumerate(enumerator, (void*)&task))
+			if (task->get_type(task) == TASK_IKE_MOBIKE)
 			{
-				if (task->get_type(task) == TASK_IKE_MOBIKE)
+				mobike = (ike_mobike_t*)task;
+				if (!mobike->is_probing(mobike))
 				{
-					mobike = (ike_mobike_t*)task;
-					break;
+					mobike = NULL;
 				}
+				break;
 			}
-			enumerator->destroy(enumerator);
 		}
+		enumerator->destroy(enumerator);
 
-		if (!mobike || !mobike->is_probing(mobike))
+		if (mobike == NULL)
 		{
 			if (this->initiating.retransmitted <= this->retransmit_tries)
 			{
@@ -342,7 +259,7 @@ METHOD(task_manager_t, retransmit, status_t,
 				DBG1(DBG_IKE, "giving up after %d retransmits",
 					 this->initiating.retransmitted - 1);
 				charon->bus->alert(charon->bus, ALERT_RETRANSMIT_SEND_TIMEOUT,
-								   packet);
+								   this->initiating.packet);
 				return DESTROY_ME;
 			}
 
@@ -350,29 +267,11 @@ METHOD(task_manager_t, retransmit, status_t,
 			{
 				DBG1(DBG_IKE, "retransmit %d of request with message ID %d",
 					 this->initiating.retransmitted, message_id);
-				charon->bus->alert(charon->bus, ALERT_RETRANSMIT_SEND, packet);
+				charon->bus->alert(charon->bus, ALERT_RETRANSMIT_SEND,
+								   this->initiating.packet);
 			}
-			if (!mobike)
-			{
-				send_packets(this, this->initiating.packets,
-							 this->ike_sa->get_my_host(this->ike_sa),
-							 this->ike_sa->get_other_host(this->ike_sa));
-			}
-			else
-			{
-				if (!mobike->transmit(mobike, packet))
-				{
-					DBG1(DBG_IKE, "no route found to reach peer, MOBIKE update "
-						 "deferred");
-					this->ike_sa->set_condition(this->ike_sa, COND_STALE, TRUE);
-					this->initiating.deferred = TRUE;
-					return SUCCESS;
-				}
-				else if (mobike->is_probing(mobike))
-				{
-					timeout = ROUTEABILITY_CHECK_INTERVAL;
-				}
-			}
+			packet = this->initiating.packet->clone(this->initiating.packet);
+			charon->sender->send(charon->sender, packet);
 		}
 		else
 		{	/* for routeability checks, we use a more aggressive behavior */
@@ -392,16 +291,7 @@ METHOD(task_manager_t, retransmit, status_t,
 				DBG1(DBG_IKE, "path probing attempt %d",
 					 this->initiating.retransmitted);
 			}
-			/* TODO-FRAG: presumably these small packets are not fragmented,
-			 * we should maybe ensure this is the case when generating them */
-			if (!mobike->transmit(mobike, packet))
-			{
-				DBG1(DBG_IKE, "no route found to reach peer, path probing "
-					 "deferred");
-				this->ike_sa->set_condition(this->ike_sa, COND_STALE, TRUE);
-				this->initiating.deferred = TRUE;
-				return SUCCESS;
-			}
+			mobike->transmit(mobike, this->initiating.packet);
 		}
 
 		this->initiating.retransmitted++;
@@ -419,6 +309,7 @@ METHOD(task_manager_t, initiate, status_t,
 	task_t *task;
 	message_t *message;
 	host_t *me, *other;
+	status_t status;
 	exchange_type_t exchange = 0;
 
 	if (this->initiating.type != EXCHANGE_TYPE_UNDEFINED)
@@ -426,12 +317,6 @@ METHOD(task_manager_t, initiate, status_t,
 		DBG2(DBG_IKE, "delaying task initiation, %N exchange in progress",
 				exchange_type_names, this->initiating.type);
 		/* do not initiate if we already have a message in the air */
-		if (this->initiating.deferred)
-		{	/* re-initiate deferred exchange */
-			this->initiating.deferred = FALSE;
-			this->initiating.retransmitted = 0;
-			return retransmit(this, this->initiating.mid);
-		}
 		return SUCCESS;
 	}
 
@@ -464,14 +349,9 @@ METHOD(task_manager_t, initiate, status_t,
 				}
 				break;
 			case IKE_ESTABLISHED:
-				if (activate_task(this, TASK_IKE_MOBIKE))
+				if (activate_task(this, TASK_CHILD_CREATE))
 				{
-					exchange = INFORMATIONAL;
-					break;
-				}
-				if (activate_task(this, TASK_IKE_DELETE))
-				{
-					exchange = INFORMATIONAL;
+					exchange = CREATE_CHILD_SA;
 					break;
 				}
 				if (activate_task(this, TASK_CHILD_DELETE))
@@ -479,24 +359,29 @@ METHOD(task_manager_t, initiate, status_t,
 					exchange = INFORMATIONAL;
 					break;
 				}
-				if (activate_task(this, TASK_IKE_REAUTH))
-				{
-					exchange = INFORMATIONAL;
-					break;
-				}
-				if (activate_task(this, TASK_CHILD_CREATE))
-				{
-					exchange = CREATE_CHILD_SA;
-					break;
-				}
 				if (activate_task(this, TASK_CHILD_REKEY))
 				{
 					exchange = CREATE_CHILD_SA;
 					break;
 				}
+				if (activate_task(this, TASK_IKE_DELETE))
+				{
+					exchange = INFORMATIONAL;
+					break;
+				}
 				if (activate_task(this, TASK_IKE_REKEY))
 				{
 					exchange = CREATE_CHILD_SA;
+					break;
+				}
+				if (activate_task(this, TASK_IKE_REAUTH))
+				{
+					exchange = INFORMATIONAL;
+					break;
+				}
+				if (activate_task(this, TASK_IKE_MOBIKE))
+				{
+					exchange = INFORMATIONAL;
 					break;
 				}
 				if (activate_task(this, TASK_IKE_DPD))
@@ -516,11 +401,6 @@ METHOD(task_manager_t, initiate, status_t,
 					break;
 				}
 #endif /* ME */
-				if (activate_task(this, TASK_IKE_REAUTH_COMPLETE))
-				{
-					exchange = INFORMATIONAL;
-					break;
-				}
 			case IKE_REKEYING:
 				if (activate_task(this, TASK_IKE_DELETE))
 				{
@@ -580,7 +460,6 @@ METHOD(task_manager_t, initiate, status_t,
 	message->set_exchange_type(message, exchange);
 	this->initiating.type = exchange;
 	this->initiating.retransmitted = 0;
-	this->initiating.deferred = FALSE;
 
 	enumerator = array_create_enumerator(this->active_tasks);
 	while (enumerator->enumerate(enumerator, &task))
@@ -615,13 +494,10 @@ METHOD(task_manager_t, initiate, status_t,
 
 	/* update exchange type if a task changed it */
 	this->initiating.type = message->get_exchange_type(message);
-	if (this->initiating.type == EXCHANGE_TYPE_UNDEFINED)
-	{
-		message->destroy(message);
-		return SUCCESS;
-	}
 
-	if (!generate_message(this, message, &this->initiating.packets))
+	status = this->ike_sa->generate_message(this->ike_sa, message,
+											&this->initiating.packet);
+	if (status != SUCCESS)
 	{
 		/* message generation failed. There is nothing more to do than to
 		 * close the SA */
@@ -693,7 +569,8 @@ static status_t process_response(private_task_manager_t *this,
 
 	this->initiating.mid++;
 	this->initiating.type = EXCHANGE_TYPE_UNDEFINED;
-	clear_packets(this->initiating.packets);
+	this->initiating.packet->destroy(this->initiating.packet);
+	this->initiating.packet = NULL;
 
 	array_compress(this->active_tasks);
 
@@ -761,8 +638,8 @@ static status_t build_response(private_task_manager_t *this, message_t *request)
 	host_t *me, *other;
 	bool delete = FALSE, hook = FALSE;
 	ike_sa_id_t *id = NULL;
-	u_int64_t responder_spi = 0;
-	bool result;
+	u_int64_t responder_spi;
+	status_t status;
 
 	me = request->get_destination(request);
 	other = request->get_source(request);
@@ -824,20 +701,23 @@ static status_t build_response(private_task_manager_t *this, message_t *request)
 	}
 
 	/* message complete, send it */
-	clear_packets(this->responding.packets);
-	result = generate_message(this, message, &this->responding.packets);
+	DESTROY_IF(this->responding.packet);
+	this->responding.packet = NULL;
+	status = this->ike_sa->generate_message(this->ike_sa, message,
+											&this->responding.packet);
 	message->destroy(message);
 	if (id)
 	{
 		id->set_responder_spi(id, responder_spi);
 	}
-	if (!result)
+	if (status != SUCCESS)
 	{
 		charon->bus->ike_updown(charon->bus, this->ike_sa, FALSE);
 		return DESTROY_ME;
 	}
 
-	send_packets(this, this->responding.packets, NULL, NULL);
+	charon->sender->send(charon->sender,
+						 this->responding.packet->clone(this->responding.packet));
 	if (delete)
 	{
 		if (hook)
@@ -900,21 +780,12 @@ static status_t process_request(private_task_manager_t *this,
 			case CREATE_CHILD_SA:
 			{	/* FIXME: we should prevent this on mediation connections */
 				bool notify_found = FALSE, ts_found = FALSE;
-
-				if (this->ike_sa->get_state(this->ike_sa) == IKE_CREATED ||
-					this->ike_sa->get_state(this->ike_sa) == IKE_CONNECTING)
-				{
-					DBG1(DBG_IKE, "received CREATE_CHILD_SA request for "
-						 "unestablished IKE_SA, rejected");
-					return FAILED;
-				}
-
 				enumerator = message->create_payload_enumerator(message);
 				while (enumerator->enumerate(enumerator, &payload))
 				{
 					switch (payload->get_type(payload))
 					{
-						case PLV2_NOTIFY:
+						case NOTIFY:
 						{	/* if we find a rekey notify, its CHILD_SA rekeying */
 							notify = (notify_payload_t*)payload;
 							if (notify->get_notify_type(notify) == REKEY_SA &&
@@ -925,8 +796,8 @@ static status_t process_request(private_task_manager_t *this,
 							}
 							break;
 						}
-						case PLV2_TS_INITIATOR:
-						case PLV2_TS_RESPONDER:
+						case TRAFFIC_SELECTOR_INITIATOR:
+						case TRAFFIC_SELECTOR_RESPONDER:
 						{	/* if we don't find a TS, its IKE rekeying */
 							ts_found = TRUE;
 							break;
@@ -964,7 +835,7 @@ static status_t process_request(private_task_manager_t *this,
 				{
 					switch (payload->get_type(payload))
 					{
-						case PLV2_NOTIFY:
+						case NOTIFY:
 						{
 							notify = (notify_payload_t*)payload;
 							switch (notify->get_notify_type(notify))
@@ -997,7 +868,7 @@ static status_t process_request(private_task_manager_t *this,
 							}
 							break;
 						}
-						case PLV2_DELETE:
+						case DELETE:
 						{
 							delete = (delete_payload_t*)payload;
 							if (delete->get_protocol_id(delete) == PROTO_IKE)
@@ -1086,48 +957,6 @@ METHOD(task_manager_t, incr_mid, void,
 }
 
 /**
- * Handle the given IKE fragment, if it is one.
- *
- * Returns SUCCESS if the message is not a fragment, and NEED_MORE if it was
- * handled properly.  Error states are  returned if the fragment was invalid or
- * the reassembled message could not have been processed properly.
- */
-static status_t handle_fragment(private_task_manager_t *this,
-								message_t **defrag, message_t *msg)
-{
-	message_t *reassembled;
-	status_t status;
-
-	if (!msg->get_payload(msg, PLV2_FRAGMENT))
-	{
-		return SUCCESS;
-	}
-	if (!*defrag)
-	{
-		*defrag = message_create_defrag(msg);
-		if (!*defrag)
-		{
-			return FAILED;
-		}
-	}
-	status = (*defrag)->add_fragment(*defrag, msg);
-	if (status == SUCCESS)
-	{
-		/* reinject the reassembled message */
-		reassembled = *defrag;
-		*defrag = NULL;
-		status = this->ike_sa->process_message(this->ike_sa, reassembled);
-		if (status == SUCCESS)
-		{
-			/* avoid processing the last fragment */
-			status = NEED_MORE;
-		}
-		reassembled->destroy(reassembled);
-	}
-	return status;
-}
-
-/**
  * Send a notify back to the sender
  */
 static void send_notify_response(private_task_manager_t *this,
@@ -1184,17 +1013,15 @@ static status_t parse_message(private_task_manager_t *this, message_t *msg)
 		enumerator = msg->create_payload_enumerator(msg);
 		while (enumerator->enumerate(enumerator, &payload))
 		{
-			if (payload->get_type(payload) == PL_UNKNOWN)
+			unknown = (unknown_payload_t*)payload;
+			type = payload->get_type(payload);
+			if (!payload_is_known(type) &&
+				unknown->is_critical(unknown))
 			{
-				unknown = (unknown_payload_t*)payload;
-				if (unknown->is_critical(unknown))
-				{
-					type = unknown->get_type(unknown);
-					DBG1(DBG_ENC, "payload type %N is not supported, "
-						 "but its critical!", payload_type_names, type);
-					status = NOT_SUPPORTED;
-					break;
-				}
+				DBG1(DBG_ENC, "payload type %N is not supported, "
+					 "but its critical!", payload_type_names, type);
+				status = NOT_SUPPORTED;
+				break;
 			}
 		}
 		enumerator->destroy(enumerator);
@@ -1306,25 +1133,21 @@ METHOD(task_manager_t, process_message, status_t,
 	{
 		if (mid == this->responding.mid)
 		{
-			/* reject initial messages if not received in specific states */
-			if ((msg->get_exchange_type(msg) == IKE_SA_INIT &&
-				 this->ike_sa->get_state(this->ike_sa) != IKE_CREATED) ||
-				(msg->get_exchange_type(msg) == IKE_AUTH &&
-				 this->ike_sa->get_state(this->ike_sa) != IKE_CONNECTING))
+			/* reject initial messages once established */
+			if (msg->get_exchange_type(msg) == IKE_SA_INIT ||
+				msg->get_exchange_type(msg) == IKE_AUTH)
 			{
-				DBG1(DBG_IKE, "ignoring %N in IKE_SA state %N",
-					 exchange_type_names, msg->get_exchange_type(msg),
-					 ike_sa_state_names, this->ike_sa->get_state(this->ike_sa));
-				return FAILED;
+				if (this->ike_sa->get_state(this->ike_sa) != IKE_CREATED &&
+					this->ike_sa->get_state(this->ike_sa) != IKE_CONNECTING)
+				{
+					DBG1(DBG_IKE, "ignoring %N in established IKE_SA state",
+						 exchange_type_names, msg->get_exchange_type(msg));
+					return FAILED;
+				}
 			}
 			if (!this->ike_sa->supports_extension(this->ike_sa, EXT_MOBIKE))
 			{	/* with MOBIKE, we do no implicit updates */
 				this->ike_sa->update_hosts(this->ike_sa, me, other, mid == 1);
-			}
-			status = handle_fragment(this, &this->responding.defrag, msg);
-			if (status != SUCCESS)
-			{
-				return status;
 			}
 			charon->bus->message(charon->bus, msg, TRUE, TRUE);
 			if (msg->get_exchange_type(msg) == EXCHANGE_TYPE_UNDEFINED)
@@ -1338,24 +1161,29 @@ METHOD(task_manager_t, process_message, status_t,
 			}
 			this->responding.mid++;
 		}
-		else if ((mid == this->responding.mid - 1) &&
-				 array_count(this->responding.packets))
+		else if ((mid == this->responding.mid - 1) && this->responding.packet)
 		{
-			status = handle_fragment(this, &this->responding.defrag, msg);
-			if (status != SUCCESS)
-			{
-				return status;
-			}
+			packet_t *clone;
+			host_t *host;
+
 			DBG1(DBG_IKE, "received retransmit of request with ID %d, "
 				 "retransmitting response", mid);
 			charon->bus->alert(charon->bus, ALERT_RETRANSMIT_RECEIVE, msg);
-			send_packets(this, this->responding.packets,
-						 msg->get_destination(msg), msg->get_source(msg));
+			clone = this->responding.packet->clone(this->responding.packet);
+			host = msg->get_destination(msg);
+			clone->set_source(clone, host->clone(host));
+			host = msg->get_source(msg);
+			clone->set_destination(clone, host->clone(host));
+			charon->sender->send(charon->sender, clone);
 		}
 		else
 		{
 			DBG1(DBG_IKE, "received message ID %d, expected %d. Ignored",
 				 mid, this->responding.mid);
+			if (msg->get_exchange_type(msg) == IKE_SA_INIT)
+			{	/* clean up IKE_SA state if IKE_SA_INIT has invalid msg ID */
+				return DESTROY_ME;
+			}
 		}
 	}
 	else
@@ -1373,11 +1201,6 @@ METHOD(task_manager_t, process_message, status_t,
 					this->ike_sa->update_hosts(this->ike_sa, me, NULL, mid == 0);
 					this->ike_sa->update_hosts(this->ike_sa, NULL, other, FALSE);
 				}
-			}
-			status = handle_fragment(this, &this->initiating.defrag, msg);
-			if (status != SUCCESS)
-			{
-				return status;
 			}
 			charon->bus->message(charon->bus, msg, TRUE, TRUE);
 			if (msg->get_exchange_type(msg) == EXCHANGE_TYPE_UNDEFINED)
@@ -1408,7 +1231,7 @@ METHOD(task_manager_t, process_message, status_t,
 		lib->scheduler->schedule_job(lib->scheduler, job,
 				lib->settings->get_int(lib->settings,
 						"%s.half_open_timeout", HALF_OPEN_IKE_SA_TIMEOUT,
-						lib->ns));
+						charon->name));
 	}
 	return SUCCESS;
 }
@@ -1518,79 +1341,9 @@ METHOD(task_manager_t, queue_ike_rekey, void,
 	queue_task(this, (task_t*)ike_rekey_create(this->ike_sa, TRUE));
 }
 
-/**
- * Start reauthentication using make-before-break
- */
-static void trigger_mbb_reauth(private_task_manager_t *this)
-{
-	enumerator_t *enumerator;
-	child_sa_t *child_sa;
-	child_cfg_t *cfg;
-	ike_sa_t *new;
-	host_t *host;
-	task_t *task;
-
-	new = charon->ike_sa_manager->checkout_new(charon->ike_sa_manager,
-								this->ike_sa->get_version(this->ike_sa), TRUE);
-	if (!new)
-	{	/* shouldn't happen */
-		return;
-	}
-
-	new->set_peer_cfg(new, this->ike_sa->get_peer_cfg(this->ike_sa));
-	host = this->ike_sa->get_other_host(this->ike_sa);
-	new->set_other_host(new, host->clone(host));
-	host = this->ike_sa->get_my_host(this->ike_sa);
-	new->set_my_host(new, host->clone(host));
-	enumerator = this->ike_sa->create_virtual_ip_enumerator(this->ike_sa, TRUE);
-	while (enumerator->enumerate(enumerator, &host))
-	{
-		new->add_virtual_ip(new, TRUE, host);
-	}
-	enumerator->destroy(enumerator);
-
-	enumerator = this->ike_sa->create_child_sa_enumerator(this->ike_sa);
-	while (enumerator->enumerate(enumerator, &child_sa))
-	{
-		cfg = child_sa->get_config(child_sa);
-		new->queue_task(new, &child_create_create(new, cfg->get_ref(cfg),
-												  FALSE, NULL, NULL)->task);
-	}
-	enumerator->destroy(enumerator);
-
-	enumerator = array_create_enumerator(this->queued_tasks);
-	while (enumerator->enumerate(enumerator, &task))
-	{
-		if (task->get_type(task) == TASK_CHILD_CREATE)
-		{
-			task->migrate(task, new);
-			new->queue_task(new, task);
-			array_remove_at(this->queued_tasks, enumerator);
-		}
-	}
-	enumerator->destroy(enumerator);
-
-	if (new->initiate(new, NULL, 0, NULL, NULL) != DESTROY_ME)
-	{
-		new->queue_task(new, (task_t*)ike_reauth_complete_create(new,
-										this->ike_sa->get_id(this->ike_sa)));
-		charon->ike_sa_manager->checkin(charon->ike_sa_manager, new);
-	}
-	else
-	{
-		charon->ike_sa_manager->checkin_and_destroy(charon->ike_sa_manager, new);
-		DBG1(DBG_IKE, "reauthenticating IKE_SA failed");
-	}
-	charon->bus->set_sa(charon->bus, this->ike_sa);
-}
-
 METHOD(task_manager_t, queue_ike_reauth, void,
 	private_task_manager_t *this)
 {
-	if (this->make_before_break)
-	{
-		return trigger_mbb_reauth(this);
-	}
 	queue_task(this, (task_t*)ike_reauth_create(this->ike_sa));
 }
 
@@ -1608,25 +1361,7 @@ METHOD(task_manager_t, queue_mobike, void,
 	mobike = ike_mobike_create(this->ike_sa, TRUE);
 	if (roam)
 	{
-		enumerator_t *enumerator;
-		task_t *current;
-
 		mobike->roam(mobike, address);
-
-		/* enable path probing for a currently active MOBIKE task.  This might
-		 * not be the case if an address appeared on a new interface while the
-		 * current address is not working but has not yet disappeared. */
-		enumerator = array_create_enumerator(this->active_tasks);
-		while (enumerator->enumerate(enumerator, &current))
-		{
-			if (current->get_type(current) == TASK_IKE_MOBIKE)
-			{
-				ike_mobike_t *active = (ike_mobike_t*)current;
-				active->enable_probing(active);
-				break;
-			}
-		}
-		enumerator->destroy(enumerator);
 	}
 	else
 	{
@@ -1743,12 +1478,10 @@ METHOD(task_manager_t, reset, void,
 	task_t *task;
 
 	/* reset message counters and retransmit packets */
-	clear_packets(this->responding.packets);
-	clear_packets(this->initiating.packets);
-	DESTROY_IF(this->responding.defrag);
-	DESTROY_IF(this->initiating.defrag);
-	this->responding.defrag = NULL;
-	this->initiating.defrag = NULL;
+	DESTROY_IF(this->responding.packet);
+	DESTROY_IF(this->initiating.packet);
+	this->responding.packet = NULL;
+	this->initiating.packet = NULL;
 	if (initiate != UINT_MAX)
 	{
 		this->initiating.mid = initiate;
@@ -1802,12 +1535,8 @@ METHOD(task_manager_t, destroy, void,
 	array_destroy(this->queued_tasks);
 	array_destroy(this->passive_tasks);
 
-	clear_packets(this->responding.packets);
-	array_destroy(this->responding.packets);
-	clear_packets(this->initiating.packets);
-	array_destroy(this->initiating.packets);
-	DESTROY_IF(this->responding.defrag);
-	DESTROY_IF(this->initiating.defrag);
+	DESTROY_IF(this->responding.packet);
+	DESTROY_IF(this->initiating.packet);
 	free(this);
 }
 
@@ -1840,7 +1569,6 @@ task_manager_v2_t *task_manager_v2_create(ike_sa_t *ike_sa)
 				.adopt_child_tasks = _adopt_child_tasks,
 				.busy = _busy,
 				.create_task_enumerator = _create_task_enumerator,
-				.flush = _flush,
 				.flush_queue = _flush_queue,
 				.destroy = _destroy,
 			},
@@ -1851,13 +1579,11 @@ task_manager_v2_t *task_manager_v2_create(ike_sa_t *ike_sa)
 		.active_tasks = array_create(0, 0),
 		.passive_tasks = array_create(0, 0),
 		.retransmit_tries = lib->settings->get_int(lib->settings,
-					"%s.retransmit_tries", RETRANSMIT_TRIES, lib->ns),
+					"%s.retransmit_tries", RETRANSMIT_TRIES, charon->name),
 		.retransmit_timeout = lib->settings->get_double(lib->settings,
-					"%s.retransmit_timeout", RETRANSMIT_TIMEOUT, lib->ns),
+					"%s.retransmit_timeout", RETRANSMIT_TIMEOUT, charon->name),
 		.retransmit_base = lib->settings->get_double(lib->settings,
-					"%s.retransmit_base", RETRANSMIT_BASE, lib->ns),
-		.make_before_break = lib->settings->get_bool(lib->settings,
-					"%s.make_before_break", FALSE, lib->ns),
+					"%s.retransmit_base", RETRANSMIT_BASE, charon->name),
 	);
 
 	return &this->public;

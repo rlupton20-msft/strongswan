@@ -98,7 +98,7 @@ struct private_transform_attribute_t {
 	chunk_t attribute_value;
 
 	/**
-	 * Payload type, PLV2_TRANSFORM_ATTRIBUTE or PLV1_TRANSFORM_ATTRIBUTE
+	 * Payload type, TRANSFORM_ATTRIBUTE or TRANSFORM_ATTRIBUTE_V1
 	 */
 	payload_type_t type;
 };
@@ -157,7 +157,7 @@ METHOD(payload_t, get_type, payload_type_t,
 METHOD(payload_t, get_next_type, payload_type_t,
 	private_transform_attribute_t *this)
 {
-	return PL_NONE;
+	return NO_PAYLOAD;
 }
 
 METHOD(payload_t, set_next_type, void,

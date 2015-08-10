@@ -23,7 +23,7 @@
 
 typedef enum transform_type_t transform_type_t;
 
-#include <utils/utils.h>
+#include <utils/enum.h>
 
 /**
  * Type of a transform, as in IKEv2 RFC 3.3.2.
@@ -45,14 +45,6 @@ enum transform_type_t {
  * enum names for transform_type_t.
  */
 extern enum_name_t *transform_type_names;
-
-/**
- * Get the enum names for a specific transform type.
- *
- * @param type		type of transform to get enum names for
- * @return			enum names
- */
-enum_name_t *transform_get_enum_names(transform_type_t type);
 
 /**
  * Extended sequence numbers, as in IKEv2 RFC 3.3.2.

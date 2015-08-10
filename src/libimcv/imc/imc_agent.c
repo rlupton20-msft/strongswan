@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2011-2014 Andreas Steffen
+ * Copyright (C) 2011-2012 Andreas Steffen
  * HSR Hochschule fuer Technik Rapperswil
  *
  * This program is free software; you can redistribute it and/or modify it
@@ -57,11 +57,6 @@ struct private_imc_agent_t {
 	 * List of additional IMC IDs assigned by TNCC
 	 */
 	linked_list_t *additional_ids;
-
-	/**
-	 * list of non-fatal unsupported PA-TNC attribute types
-	 */
-	linked_list_t *non_fatal_attr_types;
 
 	/**
 	 * list of TNCC connection entries
@@ -495,7 +490,7 @@ METHOD(imc_agent_t, reserve_additional_ids, TNC_Result,
 		count--;
 
 		/* store the scalar value in the pointer */
-		pointer = (void*)(uintptr_t)id;
+		pointer = (void*)id;
 		this->additional_ids->insert_last(this->additional_ids, pointer);
 		DBG2(DBG_IMC, "IMC %u \"%s\" reserved additional ID %u",
 					  this->id, this->name, id);
@@ -515,29 +510,11 @@ METHOD(imc_agent_t, create_id_enumerator, enumerator_t*,
 	return this->additional_ids->create_enumerator(this->additional_ids);
 }
 
-METHOD(imc_agent_t, add_non_fatal_attr_type, void,
-	private_imc_agent_t *this, pen_type_t type)
-{
-	pen_type_t *type_p;
-
-	type_p = malloc_thing(pen_type_t);
-	*type_p = type;
-	this->non_fatal_attr_types->insert_last(this->non_fatal_attr_types, type_p);
-}
-
-METHOD(imc_agent_t, get_non_fatal_attr_types, linked_list_t*,
-	private_imc_agent_t *this)
-{
-	return this->non_fatal_attr_types;
-}
-
 METHOD(imc_agent_t, destroy, void,
 	private_imc_agent_t *this)
 {
 	DBG1(DBG_IMC, "IMC %u \"%s\" terminated", this->id, this->name);
 	this->additional_ids->destroy(this->additional_ids);
-	this->non_fatal_attr_types->destroy_function(this->non_fatal_attr_types,
-												 free);
 	this->connections->destroy_function(this->connections, free);
 	this->connection_lock->destroy(this->connection_lock);
 	free(this);
@@ -573,8 +550,6 @@ imc_agent_t *imc_agent_create(const char *name,
 			.reserve_additional_ids = _reserve_additional_ids,
 			.count_additional_ids = _count_additional_ids,
 			.create_id_enumerator = _create_id_enumerator,
-			.add_non_fatal_attr_type = _add_non_fatal_attr_type,
-			.get_non_fatal_attr_types = _get_non_fatal_attr_types,
 			.destroy = _destroy,
 		},
 		.name = name,
@@ -582,7 +557,6 @@ imc_agent_t *imc_agent_create(const char *name,
 		.type_count = type_count,
 		.id = id,
 		.additional_ids = linked_list_create(),
-		.non_fatal_attr_types = linked_list_create(),
 		.connections = linked_list_create(),
 		.connection_lock = rwlock_create(RWLOCK_TYPE_DEFAULT),
 	);
@@ -592,3 +566,4 @@ imc_agent_t *imc_agent_create(const char *name,
 
 	return &this->public;
 }
+

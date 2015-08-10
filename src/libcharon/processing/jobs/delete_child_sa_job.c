@@ -31,6 +31,11 @@ struct private_delete_child_sa_job_t {
 	delete_child_sa_job_t public;
 
 	/**
+	 * reqid of the CHILD_SA
+	 */
+	u_int32_t reqid;
+
+	/**
 	 * protocol of the CHILD_SA (ESP/AH)
 	 */
 	protocol_id_t protocol;
@@ -41,11 +46,6 @@ struct private_delete_child_sa_job_t {
 	u_int32_t spi;
 
 	/**
-	 * SA destination address
-	 */
-	host_t *dst;
-
-	/**
 	 * Delete for an expired CHILD_SA
 	 */
 	bool expired;
@@ -54,7 +54,6 @@ struct private_delete_child_sa_job_t {
 METHOD(job_t, destroy, void,
 	private_delete_child_sa_job_t *this)
 {
-	this->dst->destroy(this->dst);
 	free(this);
 }
 
@@ -63,12 +62,12 @@ METHOD(job_t, execute, job_requeue_t,
 {
 	ike_sa_t *ike_sa;
 
-	ike_sa = charon->child_sa_manager->checkout(charon->child_sa_manager,
-									this->protocol, this->spi, this->dst, NULL);
+	ike_sa = charon->ike_sa_manager->checkout_by_id(charon->ike_sa_manager,
+													this->reqid, TRUE);
 	if (ike_sa == NULL)
 	{
-		DBG1(DBG_JOB, "CHILD_SA %N/0x%08x/%H not found for delete",
-			 protocol_id_names, this->protocol, htonl(this->spi), this->dst);
+		DBG1(DBG_JOB, "CHILD_SA with reqid %d not found for delete",
+			 this->reqid);
 	}
 	else
 	{
@@ -88,8 +87,8 @@ METHOD(job_t, get_priority, job_priority_t,
 /*
  * Described in header
  */
-delete_child_sa_job_t *delete_child_sa_job_create(protocol_id_t protocol,
-									u_int32_t spi, host_t *dst, bool expired)
+delete_child_sa_job_t *delete_child_sa_job_create(u_int32_t reqid,
+							protocol_id_t protocol, u_int32_t spi, bool expired)
 {
 	private_delete_child_sa_job_t *this;
 
@@ -101,11 +100,12 @@ delete_child_sa_job_t *delete_child_sa_job_create(protocol_id_t protocol,
 				.destroy = _destroy,
 			},
 		},
+		.reqid = reqid,
 		.protocol = protocol,
 		.spi = spi,
-		.dst = dst->clone(dst),
 		.expired = expired,
 	);
 
 	return &this->public;
 }
+

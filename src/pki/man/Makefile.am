@@ -4,7 +4,6 @@ man1_MANS = \
 	pki---self.1 \
 	pki---issue.1 \
 	pki---signcrl.1 \
-	pki---acert.1 \
 	pki---req.1 \
 	pki---pkcs7.1 \
 	pki---keyid.1 \

@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2012-2014 Tobias Brunner
+ * Copyright (C) 2012 Tobias Brunner
  * Copyright (C) 2005-2010 Martin Willi
  * Copyright (C) 2005 Jan Hutter
  * Hochschule fuer Technik Rapperswil
@@ -88,7 +88,7 @@ struct private_proposal_substructure_t {
 	linked_list_t *transforms;
 
 	/**
-	 * Type of this payload, PLV2_PROPOSAL_SUBSTRUCTURE or PLV1_PROPOSAL_SUBSTRUCTURE
+	 * Type of this payload, PROPOSAL_SUBSTRUCTURE or PROPOSAL_SUBSTRUCTURE_V1
 	 */
 	payload_type_t type;
 };
@@ -114,7 +114,7 @@ static encoding_rule_t encodings_v1[] = {
 	/* SPI is a chunk of variable size*/
 	{ SPI,				offsetof(private_proposal_substructure_t, spi)				},
 	/* Transforms are stored in a transform substructure list */
-	{ PAYLOAD_LIST + PLV1_TRANSFORM_SUBSTRUCTURE,
+	{ PAYLOAD_LIST + TRANSFORM_SUBSTRUCTURE_V1,
 						offsetof(private_proposal_substructure_t, transforms)		},
 };
 
@@ -139,7 +139,7 @@ static encoding_rule_t encodings_v2[] = {
 	/* SPI is a chunk of variable size*/
 	{ SPI,				offsetof(private_proposal_substructure_t, spi)				},
 	/* Transforms are stored in a transform substructure list */
-	{ PAYLOAD_LIST + PLV2_TRANSFORM_SUBSTRUCTURE,
+	{ PAYLOAD_LIST + TRANSFORM_SUBSTRUCTURE,
 						offsetof(private_proposal_substructure_t, transforms)		},
 };
 
@@ -224,7 +224,26 @@ typedef enum {
 	/* FreeS/WAN proprietary */
 	IKEV1_ESP_ENCR_SERPENT = 252,
 	IKEV1_ESP_ENCR_TWOFISH = 253,
-} ikev1_esp_transid_t;
+} ikev1_esp_encr_transid_t;
+
+/**
+ * IKEv1 Transform ID ESP authentication algorithm.
+ */
+typedef enum {
+	IKEV1_ESP_AUTH_HMAC_MD5 = 1,
+	IKEV1_ESP_AUTH_HMAC_SHA = 2,
+	IKEV1_ESP_AUTH_DES_MAC = 3,
+	IKEV1_ESP_AUTH_KPDK = 4,
+	IKEV1_ESP_AUTH_HMAC_SHA2_256 = 5,
+	IKEV1_ESP_AUTH_HMAC_SHA2_384 = 6,
+	IKEV1_ESP_AUTH_HMAC_SHA2_512 = 7,
+	IKEV1_ESP_AUTH_HMAC_RIPEMD = 8,
+	IKEV1_ESP_AUTH_AES_XCBC_MAC = 9,
+	IKEV1_ESP_AUTH_SIG_RSA = 10,
+	IKEV1_ESP_AUTH_AES_128_GMAC = 11,
+	IKEV1_ESP_AUTH_AES_192_GMAC = 12,
+	IKEV1_ESP_AUTH_AES_256_GMAC = 13,
+} ikev1_esp_auth_transid_it;
 
 /**
  * IKEv1 Transform ID AH authentication algorithm.
@@ -243,25 +262,6 @@ typedef enum {
 	IKEV1_AH_AES_192_GMAC = 12,
 	IKEV1_AH_AES_256_GMAC = 13,
 } ikev1_ah_transid_t;
-
-/**
- * IKEv1 authentication algorithm.
- */
-typedef enum {
-	IKEV1_AUTH_HMAC_MD5 = 1,
-	IKEV1_AUTH_HMAC_SHA = 2,
-	IKEV1_AUTH_DES_MAC = 3,
-	IKEV1_AUTH_KPDK = 4,
-	IKEV1_AUTH_HMAC_SHA2_256 = 5,
-	IKEV1_AUTH_HMAC_SHA2_384 = 6,
-	IKEV1_AUTH_HMAC_SHA2_512 = 7,
-	IKEV1_AUTH_HMAC_RIPEMD = 8,
-	IKEV1_AUTH_AES_XCBC_MAC = 9,
-	IKEV1_AUTH_SIG_RSA = 10,
-	IKEV1_AUTH_AES_128_GMAC = 11,
-	IKEV1_AUTH_AES_192_GMAC = 12,
-	IKEV1_AUTH_AES_256_GMAC = 13,
-} ikev1_auth_algo_t;
 
 /**
  * IKEv1 ESP Encapsulation mode.
@@ -329,7 +329,7 @@ METHOD(payload_t, verify, status_t,
 	enumerator_t *enumerator;
 	payload_t *current;
 
-	if (this->next_payload != PL_NONE && this->next_payload != 2)
+	if (this->next_payload != NO_PAYLOAD && this->next_payload != 2)
 	{
 		/* must be 0 or 2 */
 		DBG1(DBG_ENC, "inconsistent next payload");
@@ -345,7 +345,7 @@ METHOD(payload_t, verify, status_t,
 	switch (this->protocol_id)
 	{
 		case PROTO_IPCOMP:
-			if (this->spi.len != 2 && this->spi.len != 4)
+			if (this->spi.len != 2)
 			{
 				DBG1(DBG_ENC, "invalid CPI length in IPCOMP proposal");
 				return FAILED;
@@ -361,20 +361,12 @@ METHOD(payload_t, verify, status_t,
 			}
 			break;
 		case PROTO_IKE:
-			if (this->type == PLV1_PROPOSAL_SUBSTRUCTURE)
+			if (this->spi.len != 0 && this->spi.len  != 8)
 			{
-				if (this->spi.len <= 16)
-				{	/* according to RFC 2409, section 3.5 anything between
-					 * 0 and 16 is fine */
-					break;
-				}
+				DBG1(DBG_ENC, "invalid SPI length in IKE proposal");
+				return FAILED;
 			}
-			else if (this->spi.len == 0 || this->spi.len  == 8)
-			{
-				break;
-			}
-			DBG1(DBG_ENC, "invalid SPI length in IKE proposal");
-			return FAILED;
+			break;
 		default:
 			break;
 	}
@@ -397,7 +389,7 @@ METHOD(payload_t, verify, status_t,
 METHOD(payload_t, get_encoding_rules, int,
 	private_proposal_substructure_t *this, encoding_rule_t **rules)
 {
-	if (this->type == PLV2_PROPOSAL_SUBSTRUCTURE)
+	if (this->type == PROPOSAL_SUBSTRUCTURE)
 	{
 		*rules = encodings_v2;
 		return countof(encodings_v2);
@@ -536,7 +528,7 @@ METHOD(proposal_substructure_t, get_cpi, bool,
 		{
 			if (cpi)
 			{
-				*cpi = htons(untoh16(this->spi.ptr + this->spi.len - 2));
+				*cpi = *((u_int16_t*)this->spi.ptr);
 			}
 			enumerator->destroy(enumerator);
 			return TRUE;
@@ -620,7 +612,7 @@ static algo_map_t map_prf[] = {
 /**
  * ESP encryption algorithm mapping
  */
-static algo_map_t map_esp[] = {
+static algo_map_t map_esp_encr[] = {
 	{ IKEV1_ESP_ENCR_DES_IV64,				ENCR_DES_IV64 },
 	{ IKEV1_ESP_ENCR_DES,					ENCR_DES },
 	{ IKEV1_ESP_ENCR_3DES,					ENCR_3DES },
@@ -646,6 +638,23 @@ static algo_map_t map_esp[] = {
 };
 
 /**
+ * ESP authentication algorithm mapping
+ */
+static algo_map_t map_esp_auth[] = {
+	{ IKEV1_ESP_AUTH_HMAC_MD5,			AUTH_HMAC_MD5_96 },
+	{ IKEV1_ESP_AUTH_HMAC_SHA,			AUTH_HMAC_SHA1_96 },
+	{ IKEV1_ESP_AUTH_DES_MAC,			AUTH_DES_MAC },
+	{ IKEV1_ESP_AUTH_KPDK,				AUTH_KPDK_MD5 },
+	{ IKEV1_ESP_AUTH_HMAC_SHA2_256,		AUTH_HMAC_SHA2_256_128 },
+	{ IKEV1_ESP_AUTH_HMAC_SHA2_384,		AUTH_HMAC_SHA2_384_192 },
+	{ IKEV1_ESP_AUTH_HMAC_SHA2_512,		AUTH_HMAC_SHA2_512_256 },
+	{ IKEV1_ESP_AUTH_AES_XCBC_MAC,		AUTH_AES_XCBC_96 },
+	{ IKEV1_ESP_AUTH_AES_128_GMAC,		AUTH_AES_128_GMAC },
+	{ IKEV1_ESP_AUTH_AES_192_GMAC,		AUTH_AES_192_GMAC },
+	{ IKEV1_ESP_AUTH_AES_256_GMAC,		AUTH_AES_256_GMAC },
+};
+
+/**
  * AH authentication algorithm mapping
  */
 static algo_map_t map_ah[] = {
@@ -662,30 +671,34 @@ static algo_map_t map_ah[] = {
 };
 
 /**
- * ESP/AH authentication algorithm mapping
+ * Get IKEv2 algorithm from IKEv1 identifier
  */
-static algo_map_t map_auth[] = {
-	{ IKEV1_AUTH_HMAC_MD5,			AUTH_HMAC_MD5_96 },
-	{ IKEV1_AUTH_HMAC_SHA,			AUTH_HMAC_SHA1_96 },
-	{ IKEV1_AUTH_DES_MAC,			AUTH_DES_MAC },
-	{ IKEV1_AUTH_KPDK,				AUTH_KPDK_MD5 },
-	{ IKEV1_AUTH_HMAC_SHA2_256,		AUTH_HMAC_SHA2_256_128 },
-	{ IKEV1_AUTH_HMAC_SHA2_384,		AUTH_HMAC_SHA2_384_192 },
-	{ IKEV1_AUTH_HMAC_SHA2_512,		AUTH_HMAC_SHA2_512_256 },
-	{ IKEV1_AUTH_AES_XCBC_MAC,		AUTH_AES_XCBC_96 },
-	{ IKEV1_AUTH_AES_128_GMAC,		AUTH_AES_128_GMAC },
-	{ IKEV1_AUTH_AES_192_GMAC,		AUTH_AES_192_GMAC },
-	{ IKEV1_AUTH_AES_256_GMAC,		AUTH_AES_256_GMAC },
-};
-
-/**
- * Map an IKEv1 to an IKEv2 identifier
- */
-static u_int16_t ikev2_from_ikev1(algo_map_t *map, int count, u_int16_t def,
-								  u_int16_t value)
+static u_int16_t get_alg_from_ikev1(transform_type_t type, u_int16_t value)
 {
-	int i;
+	algo_map_t *map;
+	u_int16_t def;
+	int i, count;
 
+	switch (type)
+	{
+		case ENCRYPTION_ALGORITHM:
+			map = map_encr;
+			count = countof(map_encr);
+			def = ENCR_UNDEFINED;
+			break;
+		case INTEGRITY_ALGORITHM:
+			map = map_integ;
+			count = countof(map_integ);
+			def = AUTH_UNDEFINED;
+			break;
+		case PSEUDO_RANDOM_FUNCTION:
+			map = map_prf;
+			count = countof(map_prf);
+			def = PRF_UNDEFINED;
+			break;
+		default:
+			return 0;
+	}
 	for (i = 0; i < count; i++)
 	{
 		if (map[i].ikev1 == value)
@@ -697,12 +710,30 @@ static u_int16_t ikev2_from_ikev1(algo_map_t *map, int count, u_int16_t def,
 }
 
 /**
- * Map an IKEv2 to an IKEv1 identifier
+ * Get IKEv1 algorithm from IKEv2 identifier
  */
-static u_int16_t ikev1_from_ikev2(algo_map_t *map, int count, u_int16_t value)
+static u_int16_t get_ikev1_from_alg(transform_type_t type, u_int16_t value)
 {
-	int i;
+	algo_map_t *map;
+	int i, count;
 
+	switch (type)
+	{
+		case ENCRYPTION_ALGORITHM:
+			map = map_encr;
+			count = countof(map_encr);
+			break;
+		case INTEGRITY_ALGORITHM:
+			map = map_integ;
+			count = countof(map_integ);
+			break;
+		case PSEUDO_RANDOM_FUNCTION:
+			map = map_prf;
+			count = countof(map_prf);
+			break;
+		default:
+			return 0;
+	}
 	for (i = 0; i < count; i++)
 	{
 		if (map[i].ikev2 == value)
@@ -714,96 +745,87 @@ static u_int16_t ikev1_from_ikev2(algo_map_t *map, int count, u_int16_t value)
 }
 
 /**
- * Get IKEv2 algorithm from IKEv1 identifier
+ * Get IKEv2 algorithm from IKEv1 ESP transaction ID
  */
-static u_int16_t get_alg_from_ikev1(transform_type_t type, u_int16_t value)
+static u_int16_t get_alg_from_ikev1_transid(protocol_id_t proto,
+										transform_type_t type, u_int16_t value)
 {
+	algo_map_t *map;
+	u_int16_t def;
+	int i, count;
+
 	switch (type)
 	{
 		case ENCRYPTION_ALGORITHM:
-			return ikev2_from_ikev1(map_encr, countof(map_encr),
-									ENCR_UNDEFINED, value);
+			map = map_esp_encr;
+			count = countof(map_esp_encr);
+			def = ENCR_UNDEFINED;
+			break;
 		case INTEGRITY_ALGORITHM:
-			return ikev2_from_ikev1(map_integ, countof(map_integ),
-									AUTH_UNDEFINED, value);
-		case PSEUDO_RANDOM_FUNCTION:
-			return ikev2_from_ikev1(map_prf, countof(map_prf),
-									PRF_UNDEFINED, value);
+			if (proto == PROTO_ESP)
+			{
+				map = map_esp_auth;
+				count = countof(map_esp_auth);
+			}
+			else
+			{
+				map = map_ah;
+				count = countof(map_ah);
+			}
+			def = AUTH_UNDEFINED;
+			break;
 		default:
 			return 0;
 	}
+	for (i = 0; i < count; i++)
+	{
+		if (map[i].ikev1 == value)
+		{
+			return map[i].ikev2;
+		}
+	}
+	return def;
 }
 
 /**
- * Get IKEv1 algorithm from IKEv2 identifier
+ * Get IKEv1 ESP/AH transaction ID from IKEv2 identifier
  */
-static u_int16_t get_ikev1_from_alg(transform_type_t type, u_int16_t value)
+static u_int16_t get_ikev1_transid_from_alg(protocol_id_t proto,
+										transform_type_t type, u_int16_t value)
 {
+	algo_map_t *map;
+	int i, count;
+
 	switch (type)
 	{
 		case ENCRYPTION_ALGORITHM:
-			return ikev1_from_ikev2(map_encr, countof(map_encr), value);
+			map = map_esp_encr;
+			count = countof(map_esp_encr);
+			break;
 		case INTEGRITY_ALGORITHM:
-			return ikev1_from_ikev2(map_integ, countof(map_integ), value);
-		case PSEUDO_RANDOM_FUNCTION:
-			return ikev1_from_ikev2(map_prf, countof(map_prf), value);
+			if (proto == PROTO_ESP)
+			{
+				map = map_esp_auth;
+				count = countof(map_esp_auth);
+			}
+			else
+			{
+				map = map_ah;
+				count = countof(map_ah);
+			}
+			break;
 		default:
 			return 0;
 	}
-}
-
-/**
- * Get IKEv2 algorithm from IKEv1 ESP/AH transform ID
- */
-static u_int16_t get_alg_from_ikev1_transid(transform_type_t type,
-											u_int16_t value)
-{
-	switch (type)
+	for (i = 0; i < count; i++)
 	{
-		case ENCRYPTION_ALGORITHM:
-			return ikev2_from_ikev1(map_esp, countof(map_esp),
-									ENCR_UNDEFINED, value);
-		case INTEGRITY_ALGORITHM:
-			return ikev2_from_ikev1(map_ah, countof(map_ah),
-									AUTH_UNDEFINED, value);
-		default:
-			return 0;
+		if (map[i].ikev2 == value)
+		{
+			return map[i].ikev1;
+		}
 	}
+	return 0;
 }
-
-/**
- * Get IKEv1 ESP/AH transform ID from IKEv2 identifier
- */
-static u_int16_t get_ikev1_transid_from_alg(transform_type_t type,
-											u_int16_t value)
-{
-	switch (type)
-	{
-		case ENCRYPTION_ALGORITHM:
-			return ikev1_from_ikev2(map_esp, countof(map_esp), value);
-		case INTEGRITY_ALGORITHM:
-			return ikev1_from_ikev2(map_ah, countof(map_ah), value);
-		default:
-			return 0;
-	}
-}
-
-/**
- * Get IKEv1 authentication algorithm from IKEv2 identifier
- */
-static u_int16_t get_alg_from_ikev1_auth(u_int16_t value)
-{
-	return ikev2_from_ikev1(map_auth, countof(map_auth), AUTH_UNDEFINED, value);
-}
-
-/**
- * Get IKEv1 authentication algorithm from IKEv2 identifier
- */
-static u_int16_t get_ikev1_auth_from_alg(u_int16_t value)
-{
-	return ikev1_from_ikev2(map_auth, countof(map_auth), value);
-}
-
 /**
  * Get IKEv1 authentication attribute from auth_method_t
  */
@@ -941,7 +963,8 @@ static void add_to_proposal_v1(proposal_t *proposal,
 				break;
 			case TATTR_PH2_AUTH_ALGORITHM:
 				proposal->add_algorithm(proposal, INTEGRITY_ALGORITHM,
-										get_alg_from_ikev1_auth(value), 0);
+						get_alg_from_ikev1_transid(proto, INTEGRITY_ALGORITHM,
+												   value), 0);
 				break;
 			case TATTR_PH2_GROUP:
 				proposal->add_algorithm(proposal, DIFFIE_HELLMAN_GROUP,
@@ -958,7 +981,7 @@ static void add_to_proposal_v1(proposal_t *proposal,
 							NO_EXT_SEQ_NUMBERS, 0);
 	if (proto == PROTO_ESP)
 	{
-		encr = get_alg_from_ikev1_transid(ENCRYPTION_ALGORITHM,
+		encr = get_alg_from_ikev1_transid(proto, ENCRYPTION_ALGORITHM,
 									transform->get_transform_id(transform));
 		if (encr)
 		{
@@ -997,7 +1020,7 @@ METHOD(proposal_substructure_t, get_proposals, void,
 			proposal->set_spi(proposal, spi);
 			proposals->insert_last(proposals, proposal);
 		}
-		if (this->type == PLV2_PROPOSAL_SUBSTRUCTURE)
+		if (this->type == PROPOSAL_SUBSTRUCTURE)
 		{
 			add_to_proposal_v2(proposal, transform);
 		}
@@ -1235,7 +1258,7 @@ proposal_substructure_t *proposal_substructure_create(payload_type_t type)
 			.get_encap_mode = _get_encap_mode,
 			.destroy = _destroy,
 		},
-		.next_payload = PL_NONE,
+		.next_payload = NO_PAYLOAD,
 		.transforms = linked_list_create(),
 		.type = type,
 	);
@@ -1255,7 +1278,7 @@ static void set_from_proposal_v1_ike(private_proposal_substructure_t *this,
 	u_int16_t alg, key_size;
 	enumerator_t *enumerator;
 
-	transform = transform_substructure_create_type(PLV1_TRANSFORM_SUBSTRUCTURE,
+	transform = transform_substructure_create_type(TRANSFORM_SUBSTRUCTURE_V1,
 												number, IKEV1_TRANSID_KEY_IKE);
 
 	enumerator = proposal->create_enumerator(proposal, ENCRYPTION_ALGORITHM);
@@ -1265,12 +1288,12 @@ static void set_from_proposal_v1_ike(private_proposal_substructure_t *this,
 		if (alg)
 		{
 			transform->add_transform_attribute(transform,
-				transform_attribute_create_value(PLV1_TRANSFORM_ATTRIBUTE,
+				transform_attribute_create_value(TRANSFORM_ATTRIBUTE_V1,
 									TATTR_PH1_ENCRYPTION_ALGORITHM, alg));
 			if (key_size)
 			{
 				transform->add_transform_attribute(transform,
-					transform_attribute_create_value(PLV1_TRANSFORM_ATTRIBUTE,
+					transform_attribute_create_value(TRANSFORM_ATTRIBUTE_V1,
 										TATTR_PH1_KEY_LENGTH, key_size));
 			}
 			break;
@@ -1286,7 +1309,7 @@ static void set_from_proposal_v1_ike(private_proposal_substructure_t *this,
 		if (alg)
 		{
 			transform->add_transform_attribute(transform,
-				transform_attribute_create_value(PLV1_TRANSFORM_ATTRIBUTE,
+				transform_attribute_create_value(TRANSFORM_ATTRIBUTE_V1,
 									TATTR_PH1_HASH_ALGORITHM, alg));
 			break;
 		}
@@ -1297,19 +1320,19 @@ static void set_from_proposal_v1_ike(private_proposal_substructure_t *this,
 	if (enumerator->enumerate(enumerator, &alg, &key_size))
 	{
 		transform->add_transform_attribute(transform,
-			transform_attribute_create_value(PLV1_TRANSFORM_ATTRIBUTE,
+			transform_attribute_create_value(TRANSFORM_ATTRIBUTE_V1,
 								TATTR_PH1_GROUP, alg));
 	}
 	enumerator->destroy(enumerator);
 
 	transform->add_transform_attribute(transform,
-		transform_attribute_create_value(PLV1_TRANSFORM_ATTRIBUTE,
+		transform_attribute_create_value(TRANSFORM_ATTRIBUTE_V1,
 							TATTR_PH1_AUTH_METHOD, get_ikev1_auth(method)));
 	transform->add_transform_attribute(transform,
-		transform_attribute_create_value(PLV1_TRANSFORM_ATTRIBUTE,
+		transform_attribute_create_value(TRANSFORM_ATTRIBUTE_V1,
 							TATTR_PH1_LIFE_TYPE, IKEV1_LIFE_TYPE_SECONDS));
 	transform->add_transform_attribute(transform,
-		transform_attribute_create_value(PLV1_TRANSFORM_ATTRIBUTE,
+		transform_attribute_create_value(TRANSFORM_ATTRIBUTE_V1,
 							TATTR_PH1_LIFE_DURATION, lifetime));
 
 	add_transform_substructure(this, transform);
@@ -1323,21 +1346,23 @@ static void set_from_proposal_v1(private_proposal_substructure_t *this,
 				ipsec_mode_t mode, encap_t udp, int number)
 {
 	transform_substructure_t *transform = NULL;
-	u_int16_t alg, transid, key_size;
+	u_int16_t alg, key_size;
 	enumerator_t *enumerator;
+	protocol_id_t proto;
 
+	proto = proposal->get_protocol(proposal);
 	enumerator = proposal->create_enumerator(proposal, ENCRYPTION_ALGORITHM);
 	if (enumerator->enumerate(enumerator, &alg, &key_size))
 	{
-		transid = get_ikev1_transid_from_alg(ENCRYPTION_ALGORITHM, alg);
-		if (transid)
+		alg = get_ikev1_transid_from_alg(proto, ENCRYPTION_ALGORITHM, alg);
+		if (alg)
 		{
 			transform = transform_substructure_create_type(
-								PLV1_TRANSFORM_SUBSTRUCTURE, number, transid);
+									TRANSFORM_SUBSTRUCTURE_V1, number, alg);
 			if (key_size)
 			{
 				transform->add_transform_attribute(transform,
-					transform_attribute_create_value(PLV1_TRANSFORM_ATTRIBUTE,
+					transform_attribute_create_value(TRANSFORM_ATTRIBUTE_V1,
 											TATTR_PH2_KEY_LENGTH, key_size));
 			}
 		}
@@ -1347,17 +1372,16 @@ static void set_from_proposal_v1(private_proposal_substructure_t *this,
 	enumerator = proposal->create_enumerator(proposal, INTEGRITY_ALGORITHM);
 	if (enumerator->enumerate(enumerator, &alg, &key_size))
 	{
-		transid = get_ikev1_transid_from_alg(INTEGRITY_ALGORITHM, alg);
-		alg = get_ikev1_auth_from_alg(alg);
-		if (transid && alg)
+		alg = get_ikev1_transid_from_alg(proto, INTEGRITY_ALGORITHM, alg);
+		if (alg)
 		{
 			if (!transform)
 			{
 				transform = transform_substructure_create_type(
-								PLV1_TRANSFORM_SUBSTRUCTURE, number, transid);
+									TRANSFORM_SUBSTRUCTURE_V1, number, alg);
 			}
 			transform->add_transform_attribute(transform,
-				transform_attribute_create_value(PLV1_TRANSFORM_ATTRIBUTE,
+				transform_attribute_create_value(TRANSFORM_ATTRIBUTE_V1,
 									TATTR_PH2_AUTH_ALGORITHM, alg));
 		}
 	}
@@ -1372,30 +1396,30 @@ static void set_from_proposal_v1(private_proposal_substructure_t *this,
 	if (enumerator->enumerate(enumerator, &alg, &key_size))
 	{
 		transform->add_transform_attribute(transform,
-			transform_attribute_create_value(PLV1_TRANSFORM_ATTRIBUTE,
+			transform_attribute_create_value(TRANSFORM_ATTRIBUTE_V1,
 									TATTR_PH2_GROUP, alg));
 	}
 	enumerator->destroy(enumerator);
 
 	transform->add_transform_attribute(transform,
-		transform_attribute_create_value(PLV1_TRANSFORM_ATTRIBUTE,
+		transform_attribute_create_value(TRANSFORM_ATTRIBUTE_V1,
 							TATTR_PH2_ENCAP_MODE, get_ikev1_mode(mode, udp)));
 	if (lifetime)
 	{
 		transform->add_transform_attribute(transform,
-			transform_attribute_create_value(PLV1_TRANSFORM_ATTRIBUTE,
+			transform_attribute_create_value(TRANSFORM_ATTRIBUTE_V1,
 							TATTR_PH2_SA_LIFE_TYPE, IKEV1_LIFE_TYPE_SECONDS));
 		transform->add_transform_attribute(transform,
-			transform_attribute_create_value(PLV1_TRANSFORM_ATTRIBUTE,
+			transform_attribute_create_value(TRANSFORM_ATTRIBUTE_V1,
 							TATTR_PH2_SA_LIFE_DURATION, lifetime));
 	}
 	if (lifebytes)
 	{
 		transform->add_transform_attribute(transform,
-			transform_attribute_create_value(PLV1_TRANSFORM_ATTRIBUTE,
+			transform_attribute_create_value(TRANSFORM_ATTRIBUTE_V1,
 							TATTR_PH2_SA_LIFE_TYPE, IKEV1_LIFE_TYPE_KILOBYTES));
 		transform->add_transform_attribute(transform,
-			transform_attribute_create_value(PLV1_TRANSFORM_ATTRIBUTE,
+			transform_attribute_create_value(TRANSFORM_ATTRIBUTE_V1,
 							TATTR_PH2_SA_LIFE_DURATION, lifebytes / 1000));
 	}
 
@@ -1416,12 +1440,12 @@ static void set_from_proposal_v2(private_proposal_substructure_t *this,
 	enumerator = proposal->create_enumerator(proposal, ENCRYPTION_ALGORITHM);
 	while (enumerator->enumerate(enumerator, &alg, &key_size))
 	{
-		transform = transform_substructure_create_type(PLV2_TRANSFORM_SUBSTRUCTURE,
+		transform = transform_substructure_create_type(TRANSFORM_SUBSTRUCTURE,
 												ENCRYPTION_ALGORITHM, alg);
 		if (key_size)
 		{
 			transform->add_transform_attribute(transform,
-				transform_attribute_create_value(PLV2_TRANSFORM_ATTRIBUTE,
+				transform_attribute_create_value(TRANSFORM_ATTRIBUTE,
 											TATTR_IKEV2_KEY_LENGTH, key_size));
 		}
 		add_transform_substructure(this, transform);
@@ -1432,7 +1456,7 @@ static void set_from_proposal_v2(private_proposal_substructure_t *this,
 	enumerator = proposal->create_enumerator(proposal, INTEGRITY_ALGORITHM);
 	while (enumerator->enumerate(enumerator, &alg, &key_size))
 	{
-		transform = transform_substructure_create_type(PLV2_TRANSFORM_SUBSTRUCTURE,
+		transform = transform_substructure_create_type(TRANSFORM_SUBSTRUCTURE,
 												INTEGRITY_ALGORITHM, alg);
 		add_transform_substructure(this, transform);
 	}
@@ -1442,7 +1466,7 @@ static void set_from_proposal_v2(private_proposal_substructure_t *this,
 	enumerator = proposal->create_enumerator(proposal, PSEUDO_RANDOM_FUNCTION);
 	while (enumerator->enumerate(enumerator, &alg, &key_size))
 	{
-		transform = transform_substructure_create_type(PLV2_TRANSFORM_SUBSTRUCTURE,
+		transform = transform_substructure_create_type(TRANSFORM_SUBSTRUCTURE,
 												PSEUDO_RANDOM_FUNCTION, alg);
 		add_transform_substructure(this, transform);
 	}
@@ -1452,7 +1476,7 @@ static void set_from_proposal_v2(private_proposal_substructure_t *this,
 	enumerator = proposal->create_enumerator(proposal, DIFFIE_HELLMAN_GROUP);
 	while (enumerator->enumerate(enumerator, &alg, NULL))
 	{
-		transform = transform_substructure_create_type(PLV2_TRANSFORM_SUBSTRUCTURE,
+		transform = transform_substructure_create_type(TRANSFORM_SUBSTRUCTURE,
 												DIFFIE_HELLMAN_GROUP, alg);
 		add_transform_substructure(this, transform);
 	}
@@ -1462,7 +1486,7 @@ static void set_from_proposal_v2(private_proposal_substructure_t *this,
 	enumerator = proposal->create_enumerator(proposal, EXTENDED_SEQUENCE_NUMBERS);
 	while (enumerator->enumerate(enumerator, &alg, NULL))
 	{
-		transform = transform_substructure_create_type(PLV2_TRANSFORM_SUBSTRUCTURE,
+		transform = transform_substructure_create_type(TRANSFORM_SUBSTRUCTURE,
 												EXTENDED_SEQUENCE_NUMBERS, alg);
 		add_transform_substructure(this, transform);
 	}
@@ -1511,7 +1535,7 @@ proposal_substructure_t *proposal_substructure_create_from_proposal_v2(
 	private_proposal_substructure_t *this;
 
 	this = (private_proposal_substructure_t*)
-							proposal_substructure_create(PLV2_SECURITY_ASSOCIATION);
+							proposal_substructure_create(SECURITY_ASSOCIATION);
 	set_from_proposal_v2(this, proposal);
 	set_data(this, proposal);
 
@@ -1528,7 +1552,7 @@ proposal_substructure_t *proposal_substructure_create_from_proposal_v1(
 	private_proposal_substructure_t *this;
 
 	this = (private_proposal_substructure_t*)
-						proposal_substructure_create(PLV1_PROPOSAL_SUBSTRUCTURE);
+						proposal_substructure_create(PROPOSAL_SUBSTRUCTURE_V1);
 	switch (proposal->get_protocol(proposal))
 	{
 		case PROTO_IKE:
@@ -1604,31 +1628,31 @@ proposal_substructure_t *proposal_substructure_create_for_ipcomp_v1(
 
 
 	this = (private_proposal_substructure_t*)
-						proposal_substructure_create(PLV1_PROPOSAL_SUBSTRUCTURE);
+						proposal_substructure_create(PROPOSAL_SUBSTRUCTURE_V1);
 
 	/* we currently support DEFLATE only */
-	transform = transform_substructure_create_type(PLV1_TRANSFORM_SUBSTRUCTURE,
+	transform = transform_substructure_create_type(TRANSFORM_SUBSTRUCTURE_V1,
 												   1, IKEV1_IPCOMP_DEFLATE);
 
 	transform->add_transform_attribute(transform,
-		transform_attribute_create_value(PLV1_TRANSFORM_ATTRIBUTE,
+		transform_attribute_create_value(TRANSFORM_ATTRIBUTE_V1,
 							TATTR_PH2_ENCAP_MODE, get_ikev1_mode(mode, udp)));
 	if (lifetime)
 	{
 		transform->add_transform_attribute(transform,
-			transform_attribute_create_value(PLV1_TRANSFORM_ATTRIBUTE,
+			transform_attribute_create_value(TRANSFORM_ATTRIBUTE_V1,
 							TATTR_PH2_SA_LIFE_TYPE, IKEV1_LIFE_TYPE_SECONDS));
 		transform->add_transform_attribute(transform,
-			transform_attribute_create_value(PLV1_TRANSFORM_ATTRIBUTE,
+			transform_attribute_create_value(TRANSFORM_ATTRIBUTE_V1,
 							TATTR_PH2_SA_LIFE_DURATION, lifetime));
 	}
 	if (lifebytes)
 	{
 		transform->add_transform_attribute(transform,
-			transform_attribute_create_value(PLV1_TRANSFORM_ATTRIBUTE,
+			transform_attribute_create_value(TRANSFORM_ATTRIBUTE_V1,
 							TATTR_PH2_SA_LIFE_TYPE, IKEV1_LIFE_TYPE_KILOBYTES));
 		transform->add_transform_attribute(transform,
-			transform_attribute_create_value(PLV1_TRANSFORM_ATTRIBUTE,
+			transform_attribute_create_value(TRANSFORM_ATTRIBUTE_V1,
 							TATTR_PH2_SA_LIFE_DURATION, lifebytes / 1000));
 	}
 

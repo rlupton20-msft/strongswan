@@ -179,7 +179,17 @@ METHOD(public_key_t, encrypt, bool,
 METHOD(public_key_t, get_keysize, int,
 	private_openssl_ec_public_key_t *this)
 {
-	return EC_GROUP_get_degree(EC_KEY_get0_group(this->ec));
+	switch (EC_GROUP_get_curve_name(EC_KEY_get0_group(this->ec)))
+	{
+		case NID_X9_62_prime256v1:
+			return 256;
+		case NID_secp384r1:
+			return 384;
+		case NID_secp521r1:
+			return 521;
+		default:
+			return 0;
+	}
 }
 
 /**

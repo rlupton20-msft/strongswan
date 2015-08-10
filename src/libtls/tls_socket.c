@@ -291,24 +291,25 @@ METHOD(tls_socket_t, splice, bool,
 	private_tls_socket_t *this, int rfd, int wfd)
 {
 	char buf[PLAIN_BUF_SIZE], *pos;
+	fd_set set;
 	ssize_t in, out;
 	bool old, plain_eof = FALSE, crypto_eof = FALSE;
-	struct pollfd pfd[] = {
-		{ .fd = this->fd,	.events = POLLIN, },
-		{ .fd = rfd,		.events = POLLIN, },
-	};
 
 	while (!plain_eof && !crypto_eof)
 	{
+		FD_ZERO(&set);
+		FD_SET(rfd, &set);
+		FD_SET(this->fd, &set);
+
 		old = thread_cancelability(TRUE);
-		in = poll(pfd, countof(pfd), -1);
+		in = select(max(rfd, this->fd) + 1, &set, NULL, NULL, NULL);
 		thread_cancelability(old);
 		if (in == -1)
 		{
 			DBG1(DBG_TLS, "TLS select error: %s", strerror(errno));
 			return FALSE;
 		}
-		while (!plain_eof && pfd[0].revents & (POLLIN | POLLHUP | POLLNVAL))
+		while (!plain_eof && FD_ISSET(this->fd, &set))
 		{
 			in = read_(this, buf, sizeof(buf), FALSE);
 			switch (in)
@@ -341,7 +342,7 @@ METHOD(tls_socket_t, splice, bool,
 			}
 			break;
 		}
-		if (!crypto_eof && pfd[1].revents & (POLLIN | POLLHUP | POLLNVAL))
+		if (!crypto_eof && FD_ISSET(rfd, &set))
 		{
 			in = read(rfd, buf, sizeof(buf));
 			switch (in)
@@ -405,11 +406,9 @@ METHOD(tls_socket_t, destroy, void,
  * See header
  */
 tls_socket_t *tls_socket_create(bool is_server, identification_t *server,
-							identification_t *peer, int fd, tls_cache_t *cache,
-							tls_version_t max_version, bool nullok)
+							identification_t *peer, int fd, tls_cache_t *cache)
 {
 	private_tls_socket_t *this;
-	tls_purpose_t purpose;
 
 	INIT(this,
 		.public = {
@@ -431,23 +430,13 @@ tls_socket_t *tls_socket_create(bool is_server, identification_t *server,
 		.fd = fd,
 	);
 
-	if (nullok)
-	{
-		purpose = TLS_PURPOSE_GENERIC_NULLOK;
-	}
-	else
-	{
-		purpose = TLS_PURPOSE_GENERIC;
-	}
-
-	this->tls = tls_create(is_server, server, peer, purpose,
+	this->tls = tls_create(is_server, server, peer, TLS_PURPOSE_GENERIC,
 						   &this->app.application, cache);
 	if (!this->tls)
 	{
 		free(this);
 		return NULL;
 	}
-	this->tls->set_version(this->tls, max_version);
 
 	return &this->public;
 }

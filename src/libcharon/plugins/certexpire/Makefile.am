@@ -5,7 +5,7 @@ AM_CPPFLAGS = \
 	-DIPSEC_PIDDIR=\"${piddir}\"
 
 AM_CFLAGS = \
-	$(PLUGIN_CFLAGS)
+	-rdynamic
 
 if MONOLITHIC
 noinst_LTLIBRARIES = libstrongswan-certexpire.la

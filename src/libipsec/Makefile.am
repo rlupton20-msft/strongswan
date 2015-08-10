@@ -24,4 +24,11 @@ AM_LDFLAGS = \
 
 EXTRA_DIST = Android.mk
 
-SUBDIRS = . tests
+# build optional plugins
+########################
+
+if MONOLITHIC
+SUBDIRS =
+else
+SUBDIRS = .
+endif

@@ -22,7 +22,6 @@ DIR=$(dirname `readlink -f $0`)
 
 [ `id -u` -eq 0 ] || die "You must be root to run $0"
 [ -f "$BASEIMG" ] || die "Base image $BASEIMG not found"
-running_any $STRONGSWANHOSTS && die "Please stop test environment before running $0"
 
 check_commands partprobe qemu-img qemu-nbd
 

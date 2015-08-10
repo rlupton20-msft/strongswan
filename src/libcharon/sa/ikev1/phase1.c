@@ -536,7 +536,6 @@ METHOD(phase1_t, select_config, peer_cfg_t*,
 	enumerator_t *enumerator;
 	peer_cfg_t *current;
 	host_t *me, *other;
-	int unusable = 0;
 
 	if (this->peer_cfg)
 	{	/* try to find an alternative config */
@@ -572,10 +571,6 @@ METHOD(phase1_t, select_config, peer_cfg_t*,
 				this->candidates->insert_last(this->candidates, current);
 			}
 		}
-		else
-		{
-			unusable++;
-		}
 	}
 	enumerator->destroy(enumerator);
 
@@ -584,13 +579,6 @@ METHOD(phase1_t, select_config, peer_cfg_t*,
 		DBG1(DBG_CFG, "selected peer config \"%s\"",
 			 this->peer_cfg->get_name(this->peer_cfg));
 		return this->peer_cfg->get_ref(this->peer_cfg);
-	}
-	if (unusable)
-	{
-		DBG1(DBG_IKE, "found %d matching config%s, but none allows %N "
-			 "authentication using %s Mode", unusable, unusable > 1 ? "s" : "",
-			 auth_method_names, method, aggressive ? "Aggressive" : "Main");
-		return NULL;
 	}
 	DBG1(DBG_IKE, "no peer config found");
 	return NULL;
@@ -660,7 +648,7 @@ METHOD(phase1_t, save_sa_payload, bool,
 	enumerator = message->create_payload_enumerator(message);
 	while (enumerator->enumerate(enumerator, &payload))
 	{
-		if (payload->get_type(payload) == PLV1_SECURITY_ASSOCIATION)
+		if (payload->get_type(payload) == SECURITY_ASSOCIATION_V1)
 		{
 			sa = payload;
 			break;
@@ -694,13 +682,7 @@ METHOD(phase1_t, add_nonce_ke, bool,
 	nonce_gen_t *nonceg;
 	chunk_t nonce;
 
-	ke_payload = ke_payload_create_from_diffie_hellman(PLV1_KEY_EXCHANGE,
-													   this->dh);
-	if (!ke_payload)
-	{
-		DBG1(DBG_IKE, "creating KE payload failed");
-		return FALSE;
-	}
+	ke_payload = ke_payload_create_from_diffie_hellman(KEY_EXCHANGE_V1, this->dh);
 	message->add_payload(message, &ke_payload->payload_interface);
 
 	nonceg = this->keymat->keymat.create_nonce_gen(&this->keymat->keymat);
@@ -717,7 +699,7 @@ METHOD(phase1_t, add_nonce_ke, bool,
 	}
 	nonceg->destroy(nonceg);
 
-	nonce_payload = nonce_payload_create(PLV1_NONCE);
+	nonce_payload = nonce_payload_create(NONCE_V1);
 	nonce_payload->set_nonce(nonce_payload, nonce);
 	message->add_payload(message, &nonce_payload->payload_interface);
 
@@ -738,20 +720,16 @@ METHOD(phase1_t, get_nonce_ke, bool,
 	nonce_payload_t *nonce_payload;
 	ke_payload_t *ke_payload;
 
-	ke_payload = (ke_payload_t*)message->get_payload(message, PLV1_KEY_EXCHANGE);
+	ke_payload = (ke_payload_t*)message->get_payload(message, KEY_EXCHANGE_V1);
 	if (!ke_payload)
 	{
 		DBG1(DBG_IKE, "KE payload missing in message");
 		return FALSE;
 	}
 	this->dh_value = chunk_clone(ke_payload->get_key_exchange_data(ke_payload));
-	if (!this->dh->set_other_public_value(this->dh, this->dh_value))
-	{
-		DBG1(DBG_IKE, "unable to apply received KE value");
-		return FALSE;
-	}
+	this->dh->set_other_public_value(this->dh, this->dh_value);
 
-	nonce_payload = (nonce_payload_t*)message->get_payload(message, PLV1_NONCE);
+	nonce_payload = (nonce_payload_t*)message->get_payload(message, NONCE_V1);
 	if (!nonce_payload)
 	{
 		DBG1(DBG_IKE, "NONCE payload missing in message");

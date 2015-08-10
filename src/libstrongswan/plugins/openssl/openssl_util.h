@@ -22,12 +22,6 @@
 #define OPENSSL_UTIL_H_
 
 #include <library.h>
-
-#ifdef X509_NAME
-/* from <wincrypt.h> */
-# undef X509_NAME
-#endif
-
 #include <openssl/bn.h>
 #include <openssl/asn1.h>
 

@@ -2,7 +2,7 @@ AM_CPPFLAGS = \
 	-I$(top_srcdir)/src/libstrongswan
 
 AM_CFLAGS = \
-	$(PLUGIN_CFLAGS)
+	-rdynamic
 
 if MONOLITHIC
 noinst_LTLIBRARIES = libstrongswan-pgp.la
@@ -17,4 +17,5 @@ libstrongswan_pgp_la_SOURCES = \
 	pgp_encoder.h pgp_encoder.c \
 	pgp_builder.h pgp_builder.c
 
-libstrongswan_pgp_la_LDFLAGS = -module -avoid-version
+libstrongswan_pgp_la_LDFLAGS = -no-undefined -module -avoid-version
+libstrongswan_pgp_la_LIBADD = $(top_builddir)/src/libstrongswan/libstrongswan.la

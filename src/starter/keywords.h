@@ -16,10 +16,7 @@
 #ifndef _KEYWORDS_H_
 #define _KEYWORDS_H_
 
-typedef enum kw_token_t kw_token_t;
-typedef struct kw_entry_t kw_entry_t;
-
-enum kw_token_t {
+typedef enum {
 	/* config setup keywords */
 	KW_CHARONDEBUG,
 	KW_UNIQUEIDS,
@@ -72,7 +69,6 @@ enum kw_token_t {
 	KW_MEDIATED_BY,
 	KW_ME_PEERID,
 	KW_REQID,
-	KW_REPLAY_WINDOW,
 	KW_MARK,
 	KW_MARK_IN,
 	KW_MARK_OUT,
@@ -188,11 +184,6 @@ enum kw_token_t {
 	KW_ALSO,
 	KW_AUTO,
 
-};
-
-struct kw_entry_t {
-	char *name;
-	kw_token_t token;
-};
+} kw_token_t;
 
 #endif /* _KEYWORDS_H_ */

@@ -29,8 +29,6 @@ typedef struct ike_reauth_t ike_reauth_t;
 
 /**
  * Task of type ike_reauth, reestablishes an IKE_SA.
- *
- * This task implements break-before-make reauthentication.
  */
 struct ike_reauth_t {
 

@@ -81,18 +81,17 @@ struct ha_diffie_hellman_t {
 	chunk_t pub;
 };
 
-METHOD(diffie_hellman_t, dh_get_shared_secret, bool,
+METHOD(diffie_hellman_t, dh_get_shared_secret, status_t,
 	ha_diffie_hellman_t *this, chunk_t *secret)
 {
 	*secret = chunk_clone(this->secret);
-	return TRUE;
+	return SUCCESS;
 }
 
-METHOD(diffie_hellman_t, dh_get_my_public_value, bool,
+METHOD(diffie_hellman_t, dh_get_my_public_value, void,
 	ha_diffie_hellman_t *this, chunk_t *value)
 {
 	*value = chunk_clone(this->pub);
-	return TRUE;
 }
 
 METHOD(diffie_hellman_t, dh_destroy, void,
@@ -135,7 +134,6 @@ static void process_ike_add(private_ha_dispatcher_t *this, ha_message_t *message
 	chunk_t nonce_i = chunk_empty, nonce_r = chunk_empty;
 	chunk_t secret = chunk_empty, old_skd = chunk_empty;
 	chunk_t dh_local = chunk_empty, dh_remote = chunk_empty, psk = chunk_empty;
-	host_t *other = NULL;
 	bool ok = FALSE;
 
 	enumerator = message->create_attribute_enumerator(message);
@@ -150,9 +148,6 @@ static void process_ike_add(private_ha_dispatcher_t *this, ha_message_t *message
 			case HA_IKE_REKEY_ID:
 				old_sa = charon->ike_sa_manager->checkout(charon->ike_sa_manager,
 														  value.ike_sa_id);
-				break;
-			case HA_REMOTE_ADDR:
-				other = value.host->clone(value.host);
 				break;
 			case HA_IKE_VERSION:
 				version = value.u8;
@@ -250,16 +245,16 @@ static void process_ike_add(private_ha_dispatcher_t *this, ha_message_t *message
 		{
 			if (old_sa)
 			{
-				ike_sa->inherit_pre(ike_sa, old_sa);
-				ike_sa->inherit_post(ike_sa, old_sa);
+				peer_cfg_t *peer_cfg = old_sa->get_peer_cfg(old_sa);
+
+				if (peer_cfg)
+				{
+					ike_sa->set_peer_cfg(ike_sa, peer_cfg);
+					ike_sa->inherit(ike_sa, old_sa);
+				}
 				charon->ike_sa_manager->checkin_and_destroy(
 												charon->ike_sa_manager, old_sa);
 				old_sa = NULL;
-			}
-			if (other)
-			{
-				ike_sa->set_other_host(ike_sa, other);
-				other = NULL;
 			}
 			ike_sa->set_state(ike_sa, IKE_CONNECTING);
 			ike_sa->set_proposal(ike_sa, proposal);
@@ -279,7 +274,6 @@ static void process_ike_add(private_ha_dispatcher_t *this, ha_message_t *message
 	{
 		charon->ike_sa_manager->checkin(charon->ike_sa_manager, old_sa);
 	}
-	DESTROY_IF(other);
 	DESTROY_IF(message);
 }
 
@@ -384,9 +378,6 @@ static void process_ike_update(private_ha_dispatcher_t *this,
 				else
 				{
 					DBG1(DBG_IKE, "HA is missing nodes peer configuration");
-					charon->ike_sa_manager->checkin_and_destroy(
-												charon->ike_sa_manager, ike_sa);
-					ike_sa = NULL;
 				}
 				break;
 			case HA_EXTENSIONS:
@@ -451,13 +442,11 @@ static void process_ike_update(private_ha_dispatcher_t *this,
 				pools->destroy(pools);
 			}
 		}
-#ifdef USE_IKEV1
 		if (ike_sa->get_version(ike_sa) == IKEV1)
 		{
 			lib->processor->queue_job(lib->processor, (job_t*)
 							adopt_children_job_create(ike_sa->get_id(ike_sa)));
 		}
-#endif /* USE_IKEV1 */
 		this->cache->cache(this->cache, ike_sa, message);
 		charon->ike_sa_manager->checkin(charon->ike_sa_manager, ike_sa);
 	}
@@ -647,7 +636,7 @@ static void process_child_add(private_ha_dispatcher_t *this,
 	u_int32_t inbound_spi = 0, outbound_spi = 0;
 	u_int16_t inbound_cpi = 0, outbound_cpi = 0;
 	u_int8_t mode = MODE_TUNNEL, ipcomp = 0;
-	u_int16_t encr = 0, integ = 0, len = 0;
+	u_int16_t encr = ENCR_UNDEFINED, integ = AUTH_UNDEFINED, len = 0;
 	u_int16_t esn = NO_EXT_SEQ_NUMBERS;
 	u_int seg_i, seg_o;
 	chunk_t nonce_i = chunk_empty, nonce_r = chunk_empty, secret = chunk_empty;
@@ -732,8 +721,7 @@ static void process_child_add(private_ha_dispatcher_t *this,
 
 	child_sa = child_sa_create(ike_sa->get_my_host(ike_sa),
 							   ike_sa->get_other_host(ike_sa), config, 0,
-							   ike_sa->has_condition(ike_sa, COND_NAT_ANY),
-							   0, 0);
+							   ike_sa->has_condition(ike_sa, COND_NAT_ANY));
 	child_sa->set_mode(child_sa, mode);
 	child_sa->set_protocol(child_sa, PROTO_ESP);
 	child_sa->set_ipcomp(child_sa, ipcomp);
@@ -850,7 +838,7 @@ static void process_child_add(private_ha_dispatcher_t *this,
 
 	DBG1(DBG_CFG, "installed HA CHILD_SA %s{%d} %#R=== %#R "
 		"(segment in: %d%s, out: %d%s)", child_sa->get_name(child_sa),
-		child_sa->get_unique_id(child_sa), local_ts, remote_ts,
+		child_sa->get_reqid(child_sa), local_ts, remote_ts,
 		seg_i, this->segments->is_active(this->segments, seg_i) ? "*" : "",
 		seg_o, this->segments->is_active(this->segments, seg_o) ? "*" : "");
 	child_sa->add_policies(child_sa, local_ts, remote_ts);
@@ -1089,3 +1077,4 @@ ha_dispatcher_t *ha_dispatcher_create(ha_socket_t *socket,
 
 	return &this->public;
 }
+

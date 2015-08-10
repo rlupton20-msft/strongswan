@@ -14,6 +14,8 @@
  */
 
 #include <sys/types.h>
+#include <sys/socket.h>
+#include <netdb.h>
 
 #include "host_resolver.h"
 
@@ -163,25 +165,20 @@ static void *resolve_hosts(private_host_resolver_t *this)
 	int error;
 	bool old, timed_out;
 
-	/* default resolver threads to non-cancellable */
-	thread_cancelability(FALSE);
-
 	while (TRUE)
 	{
 		this->mutex->lock(this->mutex);
+		thread_cleanup_push((thread_cleanup_t)this->mutex->unlock, this->mutex);
 		while (this->queue->remove_first(this->queue,
 										(void**)&query) != SUCCESS)
 		{
-			if (this->disabled)
-			{
-				this->mutex->unlock(this->mutex);
-				return NULL;
-			}
+			old = thread_cancelability(TRUE);
 			timed_out = this->new_query->timed_wait(this->new_query,
 									this->mutex, NEW_QUERY_WAIT_TIMEOUT * 1000);
+			thread_cancelability(old);
 			if (this->disabled)
 			{
-				this->mutex->unlock(this->mutex);
+				thread_cleanup_pop(TRUE);
 				return NULL;
 			}
 			else if (timed_out && (this->threads > this->min_threads))
@@ -190,13 +187,13 @@ static void *resolve_hosts(private_host_resolver_t *this)
 
 				this->threads--;
 				this->pool->remove(this->pool, thread, NULL);
-				this->mutex->unlock(this->mutex);
+				thread_cleanup_pop(TRUE);
 				thread->detach(thread);
 				return NULL;
 			}
 		}
 		this->busy_threads++;
-		this->mutex->unlock(this->mutex);
+		thread_cleanup_pop(TRUE);
 
 		memset(&hints, 0, sizeof(hints));
 		hints.ai_family = query->family;
@@ -358,11 +355,11 @@ host_resolver_t *host_resolver_create()
 	);
 
 	this->min_threads = max(0, lib->settings->get_int(lib->settings,
-												"%s.host_resolver.min_threads",
-												MIN_THREADS_DEFAULT, lib->ns));
+									"libstrongswan.host_resolver.min_threads",
+									 MIN_THREADS_DEFAULT));
 	this->max_threads = max(this->min_threads ?: 1,
 							lib->settings->get_int(lib->settings,
-												"%s.host_resolver.max_threads",
-												MAX_THREADS_DEFAULT, lib->ns));
+									"libstrongswan.host_resolver.max_threads",
+									 MAX_THREADS_DEFAULT));
 	return &this->public;
 }

@@ -222,10 +222,10 @@ static inline bool policy_entry_equals(policy_entry_t *a,
 /**
  * Expiration callback
  */
-static void expire(u_int8_t protocol, u_int32_t spi, host_t *dst, bool hard)
+static void expire(u_int32_t reqid, u_int8_t protocol, u_int32_t spi, bool hard)
 {
-	hydra->kernel_interface->expire(hydra->kernel_interface, protocol,
-									spi, dst, hard);
+	hydra->kernel_interface->expire(hydra->kernel_interface, reqid, protocol,
+									spi, hard);
 }
 
 METHOD(kernel_ipsec_t, get_features, kernel_feature_t,
@@ -236,14 +236,14 @@ METHOD(kernel_ipsec_t, get_features, kernel_feature_t,
 
 METHOD(kernel_ipsec_t, get_spi, status_t,
 	private_kernel_libipsec_ipsec_t *this, host_t *src, host_t *dst,
-	u_int8_t protocol, u_int32_t *spi)
+	u_int8_t protocol, u_int32_t reqid, u_int32_t *spi)
 {
-	return ipsec->sas->get_spi(ipsec->sas, src, dst, protocol, spi);
+	return ipsec->sas->get_spi(ipsec->sas, src, dst, protocol, reqid, spi);
 }
 
 METHOD(kernel_ipsec_t, get_cpi, status_t,
 	private_kernel_libipsec_ipsec_t *this, host_t *src, host_t *dst,
-	u_int16_t *cpi)
+	u_int32_t reqid, u_int16_t *cpi)
 {
 	return NOT_SUPPORTED;
 }
@@ -252,15 +252,14 @@ METHOD(kernel_ipsec_t, add_sa, status_t,
 	private_kernel_libipsec_ipsec_t *this, host_t *src, host_t *dst,
 	u_int32_t spi, u_int8_t protocol, u_int32_t reqid, mark_t mark,
 	u_int32_t tfc, lifetime_cfg_t *lifetime, u_int16_t enc_alg, chunk_t enc_key,
-	u_int16_t int_alg, chunk_t int_key, ipsec_mode_t mode,
-	u_int16_t ipcomp, u_int16_t cpi, u_int32_t replay_window,
-	bool initiator, bool encap, bool esn, bool inbound, bool update,
-	linked_list_t *src_ts, linked_list_t *dst_ts)
+	u_int16_t int_alg, chunk_t int_key, ipsec_mode_t mode, u_int16_t ipcomp,
+	u_int16_t cpi, bool initiator, bool encap, bool esn, bool inbound,
+	traffic_selector_t *src_ts, traffic_selector_t *dst_ts)
 {
 	return ipsec->sas->add_sa(ipsec->sas, src, dst, spi, protocol, reqid, mark,
 							  tfc, lifetime, enc_alg, enc_key, int_alg, int_key,
-							  mode, ipcomp, cpi, initiator, encap, esn,
-							  inbound, update);
+							  mode, ipcomp, cpi, initiator, encap, esn, inbound,
+							  src_ts, dst_ts);
 }
 
 METHOD(kernel_ipsec_t, update_sa, status_t,
@@ -314,7 +313,7 @@ static void add_exclude_route(private_kernel_libipsec_ipsec_t *this,
 	{
 		DBG2(DBG_KNL, "installing new exclude route for %H src %H", dst, src);
 		gtw = hydra->kernel_interface->get_nexthop(hydra->kernel_interface,
-												   dst, -1, NULL);
+												   dst, NULL);
 		if (gtw)
 		{
 			char *if_name = NULL;
@@ -445,7 +444,7 @@ static bool install_route(private_kernel_libipsec_ipsec_t *this,
 #ifndef __linux__
 	/* on Linux we cant't install a gateway */
 	route->gateway = hydra->kernel_interface->get_nexthop(
-										hydra->kernel_interface, dst, -1, src);
+											hydra->kernel_interface, dst, src);
 #endif
 
 	if (policy->route)
@@ -696,7 +695,7 @@ kernel_libipsec_ipsec_t *kernel_libipsec_ipsec_create()
 		.policies = linked_list_create(),
 		.excludes = linked_list_create(),
 		.allow_peer_ts = lib->settings->get_bool(lib->settings,
-					"%s.plugins.kernel-libipsec.allow_peer_ts", FALSE, lib->ns),
+				"%s.plugins.kernel-libipsec.allow_peer_ts", FALSE, hydra->daemon),
 	);
 
 	ipsec->events->register_listener(ipsec->events, &this->ipsec_listener);

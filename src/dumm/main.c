@@ -479,7 +479,7 @@ int main(int argc, char *argv[])
 	enumerator_t *enumerator;
 	guest_t *guest;
 
-	library_init(NULL, "dumm");
+	library_init(NULL);
 	gtk_init(&argc, &argv);
 
 	pages = linked_list_create();

@@ -6,5 +6,7 @@ alice::iptables-restore < /etc/iptables.flush
 venus::iptables-restore < /etc/iptables.flush
 sun::iptables-restore < /etc/iptables.flush
 moon::iptables-restore < /etc/iptables.flush
+moon::conntrack -F
 sun::iptables-restore < /etc/iptables.flush
+sun::conntrack -F
 sun::rm /etc/mark_updown

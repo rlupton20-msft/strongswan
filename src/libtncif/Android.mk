@@ -13,6 +13,7 @@ LOCAL_SRC_FILES := $(filter %.c,$(libtncif_la_SOURCES))
 # build libtncif ---------------------------------------------------------------
 
 LOCAL_C_INCLUDES += \
+	$(libvstr_PATH) \
 	$(strongswan_PATH)/src/libstrongswan
 
 LOCAL_CFLAGS := $(strongswan_CFLAGS)

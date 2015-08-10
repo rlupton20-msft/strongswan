@@ -125,67 +125,11 @@ static bool check_connection(private_radius_socket_t *this,
 	return TRUE;
 }
 
-/**
- * Receive the response to the message with the given ID
- */
-static status_t receive_response(int fd, int timeout, u_int8_t id,
-								 radius_message_t **response)
-{
-	radius_message_t *msg;
-	char buf[4096];
-	int res;
-	struct pollfd pfd = {
-		.fd = fd,
-		.events = POLLIN,
-	};
-
-	while (TRUE)
-	{
-		res = poll(&pfd, 1, timeout);
-		if (res < 0)
-		{
-			DBG1(DBG_CFG, "waiting for RADIUS message failed: %s",
-				 strerror(errno));
-			return FAILED;
-		}
-		if (res == 0)
-		{	/* timeout */
-			return OUT_OF_RES;
-		}
-		res = recv(fd, buf, sizeof(buf), MSG_DONTWAIT);
-		if (res <= 0)
-		{
-			DBG1(DBG_CFG, "receiving RADIUS message failed: %s",
-				 strerror(errno));
-			return FAILED;
-		}
-		msg = radius_message_parse(chunk_create(buf, res));
-		if (!msg)
-		{
-			DBG1(DBG_CFG, "received invalid RADIUS message, ignored");
-			return FAILED;
-		}
-		if (id != msg->get_identifier(msg))
-		{
-			/* we haven't received the response to our current request, but
-			 * perhaps one for an earlier request for which we didn't wait
-			 * long enough */
-			DBG1(DBG_CFG, "received RADIUS message with unexpected ID %d "
-				 "[%d expected], ignored", msg->get_identifier(msg), id);
-			msg->destroy(msg);
-			continue;
-		}
-		*response = msg;
-		return SUCCESS;
-	}
-}
-
 METHOD(radius_socket_t, request, radius_message_t*,
 	private_radius_socket_t *this, radius_message_t *request)
 {
-	radius_message_t *response;
 	chunk_t data;
-	int i, *fd, retransmit = 0;
+	int i, *fd;
 	u_int16_t port;
 	rng_t *rng = NULL;
 
@@ -221,38 +165,65 @@ METHOD(radius_socket_t, request, radius_message_t*,
 	/* timeout after 2, 3, 4, 5 seconds */
 	for (i = 2; i <= 5; i++)
 	{
-		if (retransmit)
-		{
-			DBG1(DBG_CFG, "retransmitting RADIUS %N (attempt %d)",
-				 radius_message_code_names, request->get_code(request),
-				 retransmit);
-		}
+		radius_message_t *response;
+		bool retransmit = FALSE;
+		struct timeval tv;
+		char buf[4096];
+		fd_set fds;
+		int res;
+
 		if (send(*fd, data.ptr, data.len, 0) != data.len)
 		{
 			DBG1(DBG_CFG, "sending RADIUS message failed: %s", strerror(errno));
 			return NULL;
 		}
-		switch (receive_response(*fd, i*1000, request->get_identifier(request),
-								 &response))
+		tv.tv_sec = i;
+		tv.tv_usec = 0;
+
+		while (TRUE)
 		{
-			case SUCCESS:
+			FD_ZERO(&fds);
+			FD_SET(*fd, &fds);
+			res = select((*fd) + 1, &fds, NULL, NULL, &tv);
+			/* TODO: updated tv to time not waited. Linux does this for us. */
+			if (res < 0)
+			{	/* failed */
+				DBG1(DBG_CFG, "waiting for RADIUS message failed: %s",
+					 strerror(errno));
 				break;
-			case OUT_OF_RES:
-				retransmit++;
-				continue;
-			default:
-				return NULL;
+			}
+			if (res == 0)
+			{	/* timeout */
+				DBG1(DBG_CFG, "retransmitting RADIUS message");
+				retransmit = TRUE;
+				break;
+			}
+			res = recv(*fd, buf, sizeof(buf), MSG_DONTWAIT);
+			if (res <= 0)
+			{
+				DBG1(DBG_CFG, "receiving RADIUS message failed: %s",
+					 strerror(errno));
+				break;
+			}
+			response = radius_message_parse(chunk_create(buf, res));
+			if (response)
+			{
+				if (response->verify(response,
+							request->get_authenticator(request), this->secret,
+							this->hasher, this->signer))
+				{
+					return response;
+				}
+				response->destroy(response);
+			}
+			DBG1(DBG_CFG, "received invalid RADIUS message, ignored");
 		}
-		if (response->verify(response, request->get_authenticator(request),
-							 this->secret, this->hasher, this->signer))
+		if (!retransmit)
 		{
-			return response;
+			break;
 		}
-		response->destroy(response);
-		return NULL;
 	}
-	DBG1(DBG_CFG, "RADIUS %N timed out after %d retransmits",
-		 radius_message_code_names, request->get_code(request), retransmit - 1);
+	DBG1(DBG_CFG, "RADIUS server is not responding");
 	return NULL;
 }
 

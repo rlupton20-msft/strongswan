@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2013-2015 Andreas Steffen
+ * Copyright (C) 2013 Andreas Steffen
  * HSR Hochschule fuer Technik Rapperswil
  *
  * This program is free software; you can redistribute it and/or modify it
@@ -23,12 +23,10 @@
 #define  IMV_SESSION_H_
 
 #include "imv_workitem.h"
-#include "imv_os_info.h"
 
 #include <tncifimv.h>
-#include <library.h>
 
-#include <time.h>
+#include <library.h>
 
 typedef struct imv_session_t imv_session_t;
 
@@ -38,22 +36,11 @@ typedef struct imv_session_t imv_session_t;
 struct imv_session_t {
 
 	/**
-	 * Set unique session ID
-	 *
-	 * @param session_id	primary key into sessions table
-	 * @param pid			primary key into products table
-	 * @param did			Primary key into devices table
-	 */
-	void (*set_session_id)(imv_session_t *this, int session_id, int pid, int did);
-
-	/**
 	 * Get unique session ID
 	 *
-	 * @param pid			primary key into products table
-	 * @param did			Primary key into devices table
-	 * @return				primary key into sessions table
+	 * @return				Session ID
 	 */
-	int (*get_session_id)(imv_session_t *this, int *pid, int *did);
+	int (*get_session_id)(imv_session_t *this);
 
 	/**
 	 * Get TNCCS Connection ID
@@ -61,57 +48,6 @@ struct imv_session_t {
 	 * @return				TNCCS Connection ID
 	 */
 	TNC_ConnectionID (*get_connection_id)(imv_session_t *this);
-
-	/**
-	 * Get session creation time
-	 *
-	 * @return				Session creation time
-	 */
-	time_t (*get_creation_time)(imv_session_t *this);
-
-	/**
-	 * Get list of Access Requestor identities
-	 *
-	 * @return				List of Access Requestor identities
-	 */
-	enumerator_t* (*create_ar_identities_enumerator)(imv_session_t *this);
-
-	/**
-	 * Get OS Information
-	 *
-	 * @return				OS info object
-	 */
-	imv_os_info_t* (*get_os_info)(imv_session_t *this);
-
-	/**
-	 * Set Device ID
-	 *
-	 * @param device_id		Device ID
-	 */
-	void (*set_device_id)(imv_session_t *this, chunk_t device_id);
-
-	/**
-	 * Get Device ID
-	 *
-	 * @param device_id		Device ID
-	 * @return				TRUE if Device ID has already been set
-	 */
-	bool (*get_device_id)(imv_session_t *this, chunk_t *device_id);
-
-	/**
-	 * Set trust into Device ID
-	 *
-	 * @param trusted		TRUE if Device ID is trusted
-	 */
-	void (*set_device_trust)(imv_session_t *this, bool trusted);
-
-
-	/**
-	 * Get device ID trust (needed for TPM-based attestation)
-	 *
-	 * @return				TRUE if Device ID is trusted
-	 */
-	bool (*get_device_trust)(imv_session_t *this);
 
 	/**
 	 * Set policy_started status
@@ -169,11 +105,9 @@ struct imv_session_t {
 /**
  * Create an imv_session_t instance
  *
+ * @param session_id		Unique Session ID
  * @param id				Associated Connection ID
- * @param created			Session creation time
- * @param ar_identities		List of Access Requestor identities
  */
-imv_session_t* imv_session_create(TNC_ConnectionID id, time_t created,
-								  linked_list_t *ar_identities);
+imv_session_t* imv_session_create(int session_id, TNC_ConnectionID id);
 
 #endif /**  IMV_SESSION_H_ @}*/

@@ -34,7 +34,7 @@ int main (int arc, char *argv[])
 	bool debug;
 	int threads, timeout;
 
-	library_init(NULL, "manager");
+	library_init(NULL);
 	if (!lib->plugins->load(lib->plugins,
 			lib->settings->get_str(lib->settings, "manager.load", PLUGINS)))
 	{

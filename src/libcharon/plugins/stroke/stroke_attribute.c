@@ -94,7 +94,7 @@ static mem_pool_t *find_pool(private_stroke_attribute_t *this, char *name)
  */
 static host_t *find_addr(private_stroke_attribute_t *this, linked_list_t *pools,
 						 identification_t *id, host_t *requested,
-						 mem_pool_op_t operation, host_t *peer)
+						 mem_pool_op_t operation)
 {
 	host_t *addr = NULL;
 	enumerator_t *enumerator;
@@ -107,7 +107,7 @@ static host_t *find_addr(private_stroke_attribute_t *this, linked_list_t *pools,
 		pool = find_pool(this, name);
 		if (pool)
 		{
-			addr = pool->acquire_address(pool, id, requested, operation, peer);
+			addr = pool->acquire_address(pool, id, requested, operation);
 			if (addr)
 			{
 				break;
@@ -120,24 +120,20 @@ static host_t *find_addr(private_stroke_attribute_t *this, linked_list_t *pools,
 }
 
 METHOD(attribute_provider_t, acquire_address, host_t*,
-	private_stroke_attribute_t *this, linked_list_t *pools, ike_sa_t *ike_sa,
+	private_stroke_attribute_t *this, linked_list_t *pools, identification_t *id,
 	host_t *requested)
 {
-	identification_t *id;
-	host_t *addr, *peer;
-
-	id = ike_sa->get_other_eap_id(ike_sa);
-	peer = ike_sa->get_other_host(ike_sa);
+	host_t *addr;
 
 	this->lock->read_lock(this->lock);
 
-	addr = find_addr(this, pools, id, requested, MEM_POOL_EXISTING, peer);
+	addr = find_addr(this, pools, id, requested, MEM_POOL_EXISTING);
 	if (!addr)
 	{
-		addr = find_addr(this, pools, id, requested, MEM_POOL_NEW, peer);
+		addr = find_addr(this, pools, id, requested, MEM_POOL_NEW);
 		if (!addr)
 		{
-			addr = find_addr(this, pools, id, requested, MEM_POOL_REASSIGN, peer);
+			addr = find_addr(this, pools, id, requested, MEM_POOL_REASSIGN);
 		}
 	}
 
@@ -148,15 +144,12 @@ METHOD(attribute_provider_t, acquire_address, host_t*,
 
 METHOD(attribute_provider_t, release_address, bool,
 	private_stroke_attribute_t *this, linked_list_t *pools, host_t *address,
-	ike_sa_t *ike_sa)
+	identification_t *id)
 {
 	enumerator_t *enumerator;
-	identification_t *id;
 	mem_pool_t *pool;
 	bool found = FALSE;
 	char *name;
-
-	id = ike_sa->get_other_eap_id(ike_sa);
 
 	enumerator = pools->create_enumerator(pools);
 	this->lock->read_lock(this->lock);
@@ -204,8 +197,9 @@ static bool attr_filter(void *lock, host_t **in,
 
 METHOD(attribute_provider_t, create_attribute_enumerator, enumerator_t*,
 	private_stroke_attribute_t *this, linked_list_t *pools,
-	ike_sa_t *ike_sa, linked_list_t *vips)
+	identification_t *id, linked_list_t *vips)
 {
+	ike_sa_t *ike_sa;
 	peer_cfg_t *peer_cfg;
 	enumerator_t *enumerator;
 	attributes_t *attr;
@@ -419,3 +413,4 @@ stroke_attribute_t *stroke_attribute_create()
 
 	return &this->public;
 }
+

@@ -24,5 +24,6 @@ void usage(void)
 {
 	printf("\
 Usage:\n\
-  imv_policy_manager start|stop <tnc-session-id>\n");
+  imv_policy_manager start|stop\n");
 }
+

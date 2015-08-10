@@ -3,7 +3,7 @@ AM_CPPFLAGS = \
 	-DIPSEC_CONFDIR=\"${sysconfdir}\"
 
 AM_CFLAGS = \
-	$(PLUGIN_CFLAGS)
+	-rdynamic
 
 if MONOLITHIC
 noinst_LTLIBRARIES = libstrongswan-unbound.la

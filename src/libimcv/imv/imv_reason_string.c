@@ -35,11 +35,6 @@ struct private_imv_reason_string_t {
 	char *lang;
 
 	/**
-	 * Separator concatenating multiple reasons
-	 */
-	char *separator;
-
-	/**
 	 * Contains the concatenated reasons
 	 */
 	chunk_t reasons;
@@ -56,8 +51,7 @@ METHOD(imv_reason_string_t, add_reason, void,
 	if (this->reasons.len)
 	{
 		/* append any further reasons */
-		this->reasons = chunk_cat("mcc", this->reasons,
-								  chunk_from_str(this->separator),
+		this->reasons = chunk_cat("mcc", this->reasons, chunk_from_chars('\n'),
 								  chunk_create(s_reason, strlen(s_reason)));
 	}
 	else
@@ -83,7 +77,7 @@ METHOD(imv_reason_string_t, destroy, void,
 /**
  * Described in header.
  */
-imv_reason_string_t *imv_reason_string_create(char *lang, char *separator)
+imv_reason_string_t *imv_reason_string_create(char *lang)
 {
 	private_imv_reason_string_t *this;
 
@@ -94,7 +88,6 @@ imv_reason_string_t *imv_reason_string_create(char *lang, char *separator)
 			.destroy = _destroy,
 		},
 		.lang = lang,
-		.separator = separator,
 	);
 
 	return &this->public;

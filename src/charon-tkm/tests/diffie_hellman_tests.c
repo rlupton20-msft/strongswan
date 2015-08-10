@@ -14,8 +14,7 @@
  * for more details.
  */
 
-#include <daemon.h>
-#include <tests/test_suite.h>
+#include <check.h>
 
 #include "tkm_diffie_hellman.h"
 
@@ -40,7 +39,7 @@ START_TEST(test_dh_get_my_pubvalue)
 	fail_if(!dh, "Unable to create DH");
 
 	chunk_t value;
-	ck_assert(dh->dh.get_my_public_value(&dh->dh, &value));
+	dh->dh.get_my_public_value(&dh->dh, &value);
 	dh->dh.destroy(&dh->dh);
 
 	fail_if(value.ptr == NULL, "Pubvalue is NULL");
@@ -50,20 +49,11 @@ START_TEST(test_dh_get_my_pubvalue)
 }
 END_TEST
 
-Suite *make_diffie_hellman_tests()
+TCase *make_diffie_hellman_tests(void)
 {
-	Suite *s;
-	TCase *tc;
-
-	s = suite_create("Diffie-Hellman");
-
-	tc = tcase_create("creation");
+	TCase *tc = tcase_create("Diffie-Hellman tests");
 	tcase_add_test(tc, test_dh_creation);
-	suite_add_tcase(s, tc);
-
-	tc = tcase_create("get_my_pubvalue");
 	tcase_add_test(tc, test_dh_get_my_pubvalue);
-	suite_add_tcase(s, tc);
 
-	return s;
+	return tc;
 }

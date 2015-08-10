@@ -1,5 +1,4 @@
 /*
- * Copyright (C) 2015 Tobias Brunner
  * Copyright (C) 2011 Andreas Steffen
  * HSR Hochschule fuer Technik Rapperswil
  *
@@ -19,10 +18,8 @@
 #include <hydra.h>
 #include <daemon.h>
 #include <threading/rwlock.h>
-#include <threading/rwlock_condvar.h>
 #include <collections/linked_list.h>
 
-#define INSTALL_DISABLED ((u_int)~0)
 
 typedef struct private_shunt_manager_t private_shunt_manager_t;
 
@@ -40,21 +37,6 @@ struct private_shunt_manager_t {
 	 * Installed shunts, as child_cfg_t
 	 */
 	linked_list_t *shunts;
-
-	/**
-	 * Lock to safely access the list of shunts
-	 */
-	rwlock_t *lock;
-
-	/**
-	 * Number of threads currently installing shunts, or INSTALL_DISABLED
-	 */
-	u_int installing;
-
-	/**
-	 * Condvar to signal shunt installation
-	 */
-	rwlock_condvar_t *condvar;
 };
 
 /**
@@ -67,24 +49,11 @@ static bool install_shunt_policy(child_cfg_t *child)
 	traffic_selector_t *my_ts, *other_ts;
 	host_t *host_any;
 	policy_type_t policy_type;
-	policy_priority_t policy_prio;
 	status_t status = SUCCESS;
 	ipsec_sa_cfg_t sa = { .mode = MODE_TRANSPORT };
 
-	switch (child->get_mode(child))
-	{
-		case MODE_PASS:
-			policy_type = POLICY_PASS;
-			policy_prio = POLICY_PRIORITY_PASS;
-			break;
-		case MODE_DROP:
-			policy_type = POLICY_DROP;
-			policy_prio = POLICY_PRIORITY_FALLBACK;
-			break;
-		default:
-			return FALSE;
-	}
-
+	policy_type = (child->get_mode(child) == MODE_PASS) ?
+											 POLICY_PASS : POLICY_DROP;
 	my_ts_list =    child->get_traffic_selectors(child, TRUE,  NULL, NULL);
 	other_ts_list = child->get_traffic_selectors(child, FALSE, NULL, NULL);
 	host_any = host_create_any(AF_INET);
@@ -101,21 +70,21 @@ static bool install_shunt_policy(child_cfg_t *child)
 								hydra->kernel_interface, host_any, host_any,
 								my_ts, other_ts, POLICY_OUT, policy_type,
 								&sa, child->get_mark(child, FALSE),
-								policy_prio);
+								POLICY_PRIORITY_DEFAULT);
 
 			/* install in policy */
 			status |= hydra->kernel_interface->add_policy(
 								hydra->kernel_interface, host_any, host_any,
 								other_ts, my_ts, POLICY_IN, policy_type,
 								&sa, child->get_mark(child, TRUE),
-								policy_prio);
+								POLICY_PRIORITY_DEFAULT);
 
 			/* install forward policy */
 			status |= hydra->kernel_interface->add_policy(
 								hydra->kernel_interface, host_any, host_any,
 								other_ts, my_ts, POLICY_FWD, policy_type,
 								&sa, child->get_mark(child, TRUE),
-								policy_prio);
+								POLICY_PRIORITY_DEFAULT);
 		}
 		e_other_ts->destroy(e_other_ts);
 	}
@@ -135,15 +104,9 @@ METHOD(shunt_manager_t, install, bool,
 {
 	enumerator_t *enumerator;
 	child_cfg_t *child_cfg;
-	bool found = FALSE, success;
+	bool found = FALSE;
 
 	/* check if not already installed */
-	this->lock->write_lock(this->lock);
-	if (this->installing == INSTALL_DISABLED)
-	{	/* flush() has been called */
-		this->lock->unlock(this->lock);
-		return FALSE;
-	}
 	enumerator = this->shunts->create_enumerator(this->shunts);
 	while (enumerator->enumerate(enumerator, &child_cfg))
 	{
@@ -154,29 +117,16 @@ METHOD(shunt_manager_t, install, bool,
 		}
 	}
 	enumerator->destroy(enumerator);
+
 	if (found)
 	{
 		DBG1(DBG_CFG, "shunt %N policy '%s' already installed",
 			 ipsec_mode_names, child->get_mode(child), child->get_name(child));
-		this->lock->unlock(this->lock);
 		return TRUE;
 	}
 	this->shunts->insert_last(this->shunts, child->get_ref(child));
-	this->installing++;
-	this->lock->unlock(this->lock);
 
-	success = install_shunt_policy(child);
-
-	this->lock->write_lock(this->lock);
-	if (!success)
-	{
-		this->shunts->remove(this->shunts, child, NULL);
-		child->destroy(child);
-	}
-	this->installing--;
-	this->condvar->signal(this->condvar);
-	this->lock->unlock(this->lock);
-	return success;
+	return install_shunt_policy(child);
 }
 
 /**
@@ -187,20 +137,7 @@ static void uninstall_shunt_policy(child_cfg_t *child)
 	enumerator_t *e_my_ts, *e_other_ts;
 	linked_list_t *my_ts_list, *other_ts_list;
 	traffic_selector_t *my_ts, *other_ts;
-	policy_priority_t policy_prio;
 	status_t status = SUCCESS;
-
-	switch (child->get_mode(child))
-	{
-		case MODE_PASS:
-			policy_prio = POLICY_PRIORITY_PASS;
-			break;
-		case MODE_DROP:
-			policy_prio = POLICY_PRIORITY_FALLBACK;
-			break;
-		default:
-			return;
-	}
 
 	my_ts_list =    child->get_traffic_selectors(child, TRUE,  NULL, NULL);
 	other_ts_list = child->get_traffic_selectors(child, FALSE, NULL, NULL);
@@ -216,19 +153,19 @@ static void uninstall_shunt_policy(child_cfg_t *child)
 			status |= hydra->kernel_interface->del_policy(
 							hydra->kernel_interface, my_ts, other_ts,
 							POLICY_OUT, 0, child->get_mark(child, FALSE),
-							policy_prio);
+							POLICY_PRIORITY_DEFAULT);
 
 			/* uninstall in policy */
 			status |= hydra->kernel_interface->del_policy(
 							hydra->kernel_interface, other_ts, my_ts,
 							POLICY_IN, 0, child->get_mark(child, TRUE),
-							policy_prio);
+							POLICY_PRIORITY_DEFAULT);
 
 			/* uninstall forward policy */
 			status |= hydra->kernel_interface->del_policy(
 							hydra->kernel_interface, other_ts, my_ts,
 							POLICY_FWD, 0, child->get_mark(child, TRUE),
-							policy_prio);
+							POLICY_PRIORITY_DEFAULT);
 		}
 		e_other_ts->destroy(e_other_ts);
 	}
@@ -252,7 +189,6 @@ METHOD(shunt_manager_t, uninstall, bool,
 	enumerator_t *enumerator;
 	child_cfg_t *child, *found = NULL;
 
-	this->lock->write_lock(this->lock);
 	enumerator = this->shunts->create_enumerator(this->shunts);
 	while (enumerator->enumerate(enumerator, &child))
 	{
@@ -264,7 +200,6 @@ METHOD(shunt_manager_t, uninstall, bool,
 		}
 	}
 	enumerator->destroy(enumerator);
-	this->lock->unlock(this->lock);
 
 	if (!found)
 	{
@@ -278,37 +213,20 @@ METHOD(shunt_manager_t, uninstall, bool,
 METHOD(shunt_manager_t, create_enumerator, enumerator_t*,
 	private_shunt_manager_t *this)
 {
-	this->lock->read_lock(this->lock);
-	return enumerator_create_cleaner(
-							this->shunts->create_enumerator(this->shunts),
-							(void*)this->lock->unlock, this->lock);
-}
-
-METHOD(shunt_manager_t, flush, void,
-	private_shunt_manager_t *this)
-{
-	child_cfg_t *child;
-
-	this->lock->write_lock(this->lock);
-	while (this->installing)
-	{
-		this->condvar->wait(this->condvar, this->lock);
-	}
-	while (this->shunts->remove_last(this->shunts, (void**)&child) == SUCCESS)
-	{
-		uninstall_shunt_policy(child);
-		child->destroy(child);
-	}
-	this->installing = INSTALL_DISABLED;
-	this->lock->unlock(this->lock);
+	return this->shunts->create_enumerator(this->shunts);
 }
 
 METHOD(shunt_manager_t, destroy, void,
 	private_shunt_manager_t *this)
 {
-	this->shunts->destroy_offset(this->shunts, offsetof(child_cfg_t, destroy));
-	this->lock->destroy(this->lock);
-	this->condvar->destroy(this->condvar);
+	child_cfg_t *child;
+
+	while (this->shunts->remove_last(this->shunts, (void**)&child) == SUCCESS)
+	{
+		uninstall_shunt_policy(child);
+		child->destroy(child);
+	}
+	this->shunts->destroy(this->shunts);
 	free(this);
 }
 
@@ -324,13 +242,11 @@ shunt_manager_t *shunt_manager_create()
 			.install = _install,
 			.uninstall = _uninstall,
 			.create_enumerator = _create_enumerator,
-			.flush = _flush,
 			.destroy = _destroy,
 		},
 		.shunts = linked_list_create(),
-		.lock = rwlock_create(RWLOCK_TYPE_DEFAULT),
-		.condvar = rwlock_condvar_create(),
 	);
 
 	return &this->public;
 }
+

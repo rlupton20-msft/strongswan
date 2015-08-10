@@ -1,5 +1,4 @@
 /*
- * Copyright (C) 2010-2014 Tobias Brunner
  * Copyright (C) 2008 Martin Willi
  * Hochschule fuer Technik Rapperswil
  *
@@ -79,9 +78,6 @@
  *
  * @defgroup utils utils
  * @ingroup libstrongswan
- *
- * @defgroup compat compat
- * @ingroup utils
  */
 
 /**
@@ -116,8 +112,8 @@
 #include "utils/capabilities.h"
 #include "utils/integrity_checker.h"
 #include "utils/leak_detective.h"
+#include "utils/settings.h"
 #include "plugins/plugin_loader.h"
-#include "settings/settings.h"
 
 typedef struct library_t library_t;
 
@@ -142,17 +138,6 @@ struct library_t {
 	 * @return			TRUE if registered, FALSE if name already taken
 	 */
 	bool (*set)(library_t *this, char *name, void *object);
-
-	/**
-	 * Namespace used for settings etc. (i.e. the name of the binary that uses
-	 * the library)
-	 */
-	const char *ns;
-
-	/**
-	 * Main configuration file passed to library_init(), the default, or NULL
-	 */
-	char *conf;
 
 	/**
 	 * Printf hook registering facility
@@ -254,17 +239,12 @@ struct library_t {
  * Initialize library, creates "lib" instance.
  *
  * library_init() may be called multiple times in a single process, but each
- * caller must call library_deinit() for each call to library_init().
- *
- * The settings and namespace arguments are only used on the first call.
+ * caller should call library_deinit() for each call to library_init().
  *
  * @param settings		file to read settings from, may be NULL for default
- * @param namespace		name of the binary that uses the library, determines
- *						the first section name when reading config options.
- *						Defaults to libstrongswan if NULL.
  * @return				FALSE if integrity check failed
  */
-bool library_init(char *settings, const char *namespace);
+bool library_init(char *settings);
 
 /**
  * Deinitialize library, destroys "lib" instance.

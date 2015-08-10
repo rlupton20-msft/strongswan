@@ -5,7 +5,7 @@ AM_CPPFLAGS = \
 
 AM_CFLAGS = \
 	${maemo_CFLAGS} \
-	$(PLUGIN_CFLAGS)
+	-rdynamic
 
 if MONOLITHIC
 noinst_LTLIBRARIES = libstrongswan-maemo.la

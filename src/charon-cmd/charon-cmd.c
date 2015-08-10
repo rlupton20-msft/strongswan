@@ -126,7 +126,7 @@ static int run()
 			{
 				DBG1(DBG_DMN, "signal of type SIGHUP received. Reloading "
 					 "configuration");
-				if (lib->settings->load_files(lib->settings, lib->conf, FALSE))
+				if (lib->settings->load_files(lib->settings, NULL, FALSE))
 				{
 					charon->load_loggers(charon, levels, TRUE);
 					lib->plugins->reload(lib->plugins, NULL);
@@ -322,7 +322,7 @@ int main(int argc, char *argv[])
 
 	dbg = dbg_stderr;
 	atexit(library_deinit);
-	if (!library_init(NULL, "charon-cmd"))
+	if (!library_init(NULL))
 	{
 		exit(SS_RC_LIBSTRONGSWAN_INTEGRITY);
 	}
@@ -334,12 +334,12 @@ int main(int argc, char *argv[])
 		}
 	}
 	atexit(libhydra_deinit);
-	if (!libhydra_init())
+	if (!libhydra_init("charon-cmd"))
 	{
 		exit(SS_RC_INITIALIZATION_FAILED);
 	}
 	atexit(libcharon_deinit);
-	if (!libcharon_init())
+	if (!libcharon_init("charon-cmd"))
 	{
 		exit(SS_RC_INITIALIZATION_FAILED);
 	}
@@ -389,7 +389,6 @@ int main(int argc, char *argv[])
 	sigaddset(&action.sa_mask, SIGINT);
 	sigaddset(&action.sa_mask, SIGTERM);
 	sigaddset(&action.sa_mask, SIGHUP);
-	sigaddset(&action.sa_mask, SIGUSR1);
 	sigaction(SIGSEGV, &action, NULL);
 	sigaction(SIGILL, &action, NULL);
 	sigaction(SIGBUS, &action, NULL);

@@ -172,7 +172,7 @@ METHOD(aead_t, destroy, void,
 /**
  * See header
  */
-aead_t *aead_create(crypter_t *crypter, signer_t *signer, iv_gen_t *iv_gen)
+aead_t *aead_create(crypter_t *crypter, signer_t *signer)
 {
 	private_aead_t *this;
 
@@ -190,7 +190,7 @@ aead_t *aead_create(crypter_t *crypter, signer_t *signer, iv_gen_t *iv_gen)
 		},
 		.crypter = crypter,
 		.signer = signer,
-		.iv_gen = iv_gen,
+		.iv_gen = iv_gen_rand_create(),
 	);
 
 	return &this->public;

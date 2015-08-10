@@ -85,7 +85,7 @@ METHOD(signer_t, verify_signature, bool,
 		return FALSE;
 	}
 	return this->mac->get_mac(this->mac, data, mac) &&
-		   memeq_const(signature.ptr, mac, this->truncation);
+		   memeq(signature.ptr, mac, this->truncation);
 }
 
 METHOD(signer_t, get_key_size, size_t,
@@ -136,3 +136,4 @@ signer_t *mac_signer_create(mac_t *mac, size_t len)
 
 	return &this->public;
 }
+

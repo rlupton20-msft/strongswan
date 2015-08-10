@@ -1,6 +1,6 @@
 /*
- * Copyright (C) 2010-2014 Martin Willi
- * Copyright (C) 2010-2014 revosec AG
+ * Copyright (C) 2010 Martin Willi
+ * Copyright (C) 2010 revosec AG
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -16,7 +16,6 @@
 #include "tls_crypto.h"
 
 #include <utils/debug.h>
-#include <plugins/plugin_feature.h>
 
 ENUM_BEGIN(tls_cipher_suite_names, TLS_NULL_WITH_NULL_NULL,
 								   TLS_DH_anon_WITH_3DES_EDE_CBC_SHA,
@@ -81,7 +80,7 @@ ENUM_NEXT(tls_cipher_suite_names, TLS_KRB5_WITH_DES_CBC_SHA,
 	"TLS_DHE_RSA_WITH_AES_256_CBC_SHA",
 	"TLS_DH_anon_WITH_AES_256_CBC_SHA",
 	"TLS_RSA_WITH_NULL_SHA256",
-	"TLS_RSA_WITH_AES_128_CBC_SHA256",
+	"TLS_RSA_WITH_AES_128_CBC_SHA256 ",
 	"TLS_RSA_WITH_AES_256_CBC_SHA256",
 	"TLS_DH_DSS_WITH_AES_128_CBC_SHA256",
 	"TLS_DH_RSA_WITH_AES_128_CBC_SHA256",
@@ -112,13 +111,13 @@ ENUM_NEXT(tls_cipher_suite_names, TLS_RSA_WITH_CAMELLIA_256_CBC_SHA,
 	"TLS_DHE_RSA_WITH_CAMELLIA_256_CBC_SHA",
 	"TLS_DH_anon_WITH_CAMELLIA_256_CBC_SHA",
 	"TLS_PSK_WITH_RC4_128_SHA",
-	"TLS_PSK_WITH_3DES_EDE_CBC_SHA",
+	"TLS_PSK_WITH_3DES_EDE_CBC_SHA2",
 	"TLS_PSK_WITH_AES_128_CBC_SHA",
 	"TLS_PSK_WITH_AES_256_CBC_SHA",
 	"TLS_DHE_PSK_WITH_RC4_128_SHA",
 	"TLS_DHE_PSK_WITH_3DES_EDE_CBC_SHA",
 	"TLS_DHE_PSK_WITH_AES_128_CBC_SHA",
-	"TLS_DHE_PSK_WITH_AES_256_CBC_SHA",
+	"TLS_DHE_PSK_WITH_AES_256_CBC_SHA2",
 	"TLS_RSA_PSK_WITH_RC4_128_SHA",
 	"TLS_RSA_PSK_WITH_3DES_EDE_CBC_SHA",
 	"TLS_RSA_PSK_WITH_AES_128_CBC_SHA",
@@ -386,14 +385,34 @@ struct private_tls_crypto_t {
 	tls_prf_t *prf;
 
 	/**
-	 * AEAD transform for inbound traffic
+	 * Signer instance for inbound traffic
 	 */
-	tls_aead_t *aead_in;
+	signer_t *signer_in;
 
 	/**
-	 * AEAD transform for outbound traffic
+	 * Signer instance for outbound traffic
 	 */
-	tls_aead_t *aead_out;
+	signer_t *signer_out;
+
+	/**
+	 * Crypter instance for inbound traffic
+	 */
+	crypter_t *crypter_in;
+
+	/**
+	 * Crypter instance for outbound traffic
+	 */
+	crypter_t *crypter_out;
+
+	/**
+	 * IV for input decryption, if < TLSv1.2
+	 */
+	chunk_t iv_in;
+
+	/**
+	 * IV for output decryption, if < TLSv1.2
+	 */
+	chunk_t iv_out;
 
 	/**
 	 * EAP-[T]TLS MSK
@@ -441,16 +460,6 @@ static suite_algs_t suite_algs[] = {
 		HASH_SHA384, PRF_HMAC_SHA2_384,
 		AUTH_HMAC_SHA2_384_384, ENCR_AES_CBC, 32
 	},
-	{ TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256,
-		KEY_ECDSA, ECP_256_BIT,
-		HASH_SHA256, PRF_HMAC_SHA2_256,
-		AUTH_UNDEFINED, ENCR_AES_GCM_ICV16, 16
-	},
-	{ TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384,
-		KEY_ECDSA, ECP_384_BIT,
-		HASH_SHA384, PRF_HMAC_SHA2_384,
-		AUTH_UNDEFINED, ENCR_AES_GCM_ICV16, 32
-	},
 	{ TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA,
 		KEY_RSA, ECP_256_BIT,
 		HASH_SHA256, PRF_HMAC_SHA2_256,
@@ -471,16 +480,6 @@ static suite_algs_t suite_algs[] = {
 		HASH_SHA384, PRF_HMAC_SHA2_384,
 		AUTH_HMAC_SHA2_384_384, ENCR_AES_CBC, 32
 	},
-	{ TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,
-		KEY_RSA, ECP_256_BIT,
-		HASH_SHA256, PRF_HMAC_SHA2_256,
-		AUTH_UNDEFINED, ENCR_AES_GCM_ICV16, 16
-	},
-	{ TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384,
-		KEY_RSA, ECP_384_BIT,
-		HASH_SHA384, PRF_HMAC_SHA2_384,
-		AUTH_UNDEFINED, ENCR_AES_GCM_ICV16, 32
-	},
 	{ TLS_DHE_RSA_WITH_AES_128_CBC_SHA,
 		KEY_RSA, MODP_2048_BIT,
 		HASH_SHA256,PRF_HMAC_SHA2_256,
@@ -500,16 +499,6 @@ static suite_algs_t suite_algs[] = {
 		KEY_RSA, MODP_4096_BIT,
 		HASH_SHA256, PRF_HMAC_SHA2_256,
 		AUTH_HMAC_SHA2_256_256, ENCR_AES_CBC, 32
-	},
-	{ TLS_DHE_RSA_WITH_AES_128_GCM_SHA256,
-		KEY_RSA, MODP_3072_BIT,
-		HASH_SHA256, PRF_HMAC_SHA2_256,
-		AUTH_UNDEFINED, ENCR_AES_GCM_ICV16, 16
-	},
-	{ TLS_DHE_RSA_WITH_AES_256_GCM_SHA384,
-		KEY_RSA, MODP_4096_BIT,
-		HASH_SHA384, PRF_HMAC_SHA2_384,
-		AUTH_UNDEFINED, ENCR_AES_GCM_ICV16, 32
 	},
 	{ TLS_DHE_RSA_WITH_CAMELLIA_128_CBC_SHA,
 		KEY_RSA, MODP_2048_BIT,
@@ -555,16 +544,6 @@ static suite_algs_t suite_algs[] = {
 		KEY_RSA, MODP_NONE,
 		HASH_SHA256, PRF_HMAC_SHA2_256,
 		AUTH_HMAC_SHA2_256_256, ENCR_AES_CBC, 32
-	},
-	{ TLS_RSA_WITH_AES_128_GCM_SHA256,
-		KEY_RSA, MODP_NONE,
-		HASH_SHA256, PRF_HMAC_SHA2_256,
-		AUTH_UNDEFINED, ENCR_AES_GCM_ICV16, 16
-	},
-	{ TLS_RSA_WITH_AES_256_GCM_SHA384,
-		KEY_RSA, MODP_NONE,
-		HASH_SHA384, PRF_HMAC_SHA2_384,
-		AUTH_UNDEFINED, ENCR_AES_GCM_ICV16, 32
 	},
 	{ TLS_RSA_WITH_CAMELLIA_128_CBC_SHA,
 		KEY_RSA, MODP_NONE,
@@ -648,7 +627,8 @@ static suite_algs_t *find_suite(tls_cipher_suite_t suite)
 /**
  * Filter a suite list using a transform enumerator
  */
-static void filter_suite(suite_algs_t suites[], int *count, int offset,
+static void filter_suite(private_tls_crypto_t *this,
+						 suite_algs_t suites[], int *count, int offset,
 						 enumerator_t*(*create_enumerator)(crypto_factory_t*))
 {
 	const char *plugin_name;
@@ -661,56 +641,21 @@ static void filter_suite(suite_algs_t suites[], int *count, int offset,
 
 	for (i = 0; i < *count; i++)
 	{
-		if (create_enumerator == lib->crypto->create_crypter_enumerator &&
-			encryption_algorithm_is_aead(suites[i].encr))
-		{	/* filtering crypters, but current suite uses an AEAD, apply */
-			suites[remaining] = suites[i];
-			remaining++;
-			continue;
-		}
-		if (create_enumerator == lib->crypto->create_aead_enumerator &&
-			!encryption_algorithm_is_aead(suites[i].encr))
-		{	/* filtering AEADs, but current suite doesn't use one, apply */
-			suites[remaining] = suites[i];
-			remaining++;
-			continue;
-		}
 		enumerator = create_enumerator(lib->crypto);
 		while (enumerator->enumerate(enumerator, current_alg, &plugin_name))
 		{
-			if (current.encr && current.encr != suites[i].encr)
+			if ((suites[i].encr == ENCR_NULL ||
+				 !current.encr || current.encr == suites[i].encr) &&
+				(!current.mac  || current.mac  == suites[i].mac) &&
+				(!current.prf  || current.prf  == suites[i].prf) &&
+				(!current.hash || current.hash == suites[i].hash) &&
+				(suites[i].dh == MODP_NONE ||
+				 !current.dh   || current.dh   == suites[i].dh))
 			{
-				if (suites[i].encr != ENCR_NULL)
-				{	/* skip, ENCR does not match nor is NULL */
-					continue;
-				}
+				suites[remaining] = suites[i];
+				remaining++;
+				break;
 			}
-			if (current.mac && current.mac != suites[i].mac)
-			{
-				if (suites[i].mac != AUTH_UNDEFINED)
-				{	/* skip, MAC does not match nor is it undefined */
-					continue;
-				}
-			}
-			if (current.prf && current.prf != suites[i].prf)
-			{	/* skip, PRF does not match */
-				continue;
-			}
-			if (current.hash && current.hash != suites[i].hash)
-			{	/* skip, hash does not match */
-				continue;
-			}
-			if (current.dh && current.dh != suites[i].dh)
-			{
-				if (suites[i].dh != MODP_NONE)
-				{	/* skip DH group, does not match nor NONE */
-					continue;
-				}
-			}
-			/* suite supported, apply */
-			suites[remaining] = suites[i];
-			remaining++;
-			break;
 		}
 		enumerator->destroy(enumerator);
 	}
@@ -720,7 +665,8 @@ static void filter_suite(suite_algs_t suites[], int *count, int offset,
 /**
  * Purge NULL encryption cipher suites from list
  */
-static void filter_null_suites(suite_algs_t suites[], int *count)
+static void filter_null_suites(private_tls_crypto_t *this,
+							   suite_algs_t suites[], int *count)
 {
 	int i, remaining = 0;
 
@@ -765,8 +711,7 @@ static void filter_key_exchange_config_suites(private_tls_crypto_t *this,
 	int i, remaining = 0;
 	char *token, *config;
 
-	config = lib->settings->get_str(lib->settings, "%s.tls.key_exchange", NULL,
-									lib->ns);
+	config = lib->settings->get_str(lib->settings, "libtls.key_exchange", NULL);
 	if (config)
 	{
 		for (i = 0; i < *count; i++)
@@ -820,8 +765,7 @@ static void filter_cipher_config_suites(private_tls_crypto_t *this,
 	int i, remaining = 0;
 	char *token, *config;
 
-	config = lib->settings->get_str(lib->settings, "%s.tls.cipher", NULL,
-									lib->ns);
+	config = lib->settings->get_str(lib->settings, "libtls.cipher", NULL);
 	if (config)
 	{
 		for (i = 0; i < *count; i++)
@@ -838,20 +782,6 @@ static void filter_cipher_config_suites(private_tls_crypto_t *this,
 				}
 				if (strcaseeq(token, "aes256") &&
 					suites[i].encr == ENCR_AES_CBC &&
-					suites[i].encr_size == 32)
-				{
-					suites[remaining++] = suites[i];
-					break;
-				}
-				if (strcaseeq(token, "aes128gcm") &&
-					suites[i].encr == ENCR_AES_GCM_ICV16 &&
-					suites[i].encr_size == 16)
-				{
-					suites[remaining++] = suites[i];
-					break;
-				}
-				if (strcaseeq(token, "aes256gcm") &&
-					suites[i].encr == ENCR_AES_GCM_ICV16 &&
 					suites[i].encr_size == 32)
 				{
 					suites[remaining++] = suites[i];
@@ -900,8 +830,7 @@ static void filter_mac_config_suites(private_tls_crypto_t *this,
 	int i, remaining = 0;
 	char *token, *config;
 
-	config = lib->settings->get_str(lib->settings, "%s.tls.mac", NULL,
-									lib->ns);
+	config = lib->settings->get_str(lib->settings, "libtls.mac", NULL);
 	if (config)
 	{
 		for (i = 0; i < *count; i++)
@@ -950,8 +879,7 @@ static void filter_specific_config_suites(private_tls_crypto_t *this,
 	int i, remaining = 0, suite;
 	char *token, *config;
 
-	config = lib->settings->get_str(lib->settings, "%s.tls.suites", NULL,
-									lib->ns);
+	config = lib->settings->get_str(lib->settings, "libtls.suites", NULL);
 	if (config)
 	{
 		for (i = 0; i < *count; i++)
@@ -959,8 +887,8 @@ static void filter_specific_config_suites(private_tls_crypto_t *this,
 			enumerator = enumerator_create_token(config, ",", " ");
 			while (enumerator->enumerate(enumerator, &token))
 			{
-				if (enum_from_name(tls_cipher_suite_names, token, &suite) &&
-					suite == suites[i].suite)
+				suite = enum_from_name(tls_cipher_suite_names, token);
+				if (suite == suites[i].suite)
 				{
 					suites[remaining++] = suites[i];
 					break;
@@ -970,26 +898,6 @@ static void filter_specific_config_suites(private_tls_crypto_t *this,
 		}
 		*count = remaining;
 	}
-}
-
-/**
- * Filter out unsupported suites on given suite array
- */
-static void filter_unsupported_suites(suite_algs_t suites[], int *count)
-{
-	/* filter suite list by each algorithm */
-	filter_suite(suites, count, offsetof(suite_algs_t, encr),
-				 lib->crypto->create_crypter_enumerator);
-	filter_suite(suites, count, offsetof(suite_algs_t, encr),
-				 lib->crypto->create_aead_enumerator);
-	filter_suite(suites, count, offsetof(suite_algs_t, mac),
-				 lib->crypto->create_signer_enumerator);
-	filter_suite(suites, count, offsetof(suite_algs_t, prf),
-				 lib->crypto->create_prf_enumerator);
-	filter_suite(suites, count, offsetof(suite_algs_t, hash),
-				 lib->crypto->create_hasher_enumerator);
-	filter_suite(suites, count, offsetof(suite_algs_t, dh),
-				 lib->crypto->create_dh_enumerator);
 }
 
 /**
@@ -1006,10 +914,9 @@ static void build_cipher_suite_list(private_tls_crypto_t *this,
 	{
 		suites[i] = suite_algs[i];
 	}
-
 	if (require_encryption)
 	{
-		filter_null_suites(suites, &count);
+		filter_null_suites(this, suites, &count);
 	}
 	if (!this->rsa)
 	{
@@ -1020,7 +927,17 @@ static void build_cipher_suite_list(private_tls_crypto_t *this,
 		filter_key_suites(this, suites, &count, KEY_ECDSA);
 	}
 
-	filter_unsupported_suites(suites, &count);
+	/* filter suite list by each algorithm */
+	filter_suite(this, suites, &count, offsetof(suite_algs_t, encr),
+				 lib->crypto->create_crypter_enumerator);
+	filter_suite(this, suites, &count, offsetof(suite_algs_t, mac),
+				 lib->crypto->create_signer_enumerator);
+	filter_suite(this, suites, &count, offsetof(suite_algs_t, prf),
+				 lib->crypto->create_prf_enumerator);
+	filter_suite(this, suites, &count, offsetof(suite_algs_t, hash),
+				 lib->crypto->create_hasher_enumerator);
+	filter_suite(this, suites, &count, offsetof(suite_algs_t, dh),
+				 lib->crypto->create_dh_enumerator);
 
 	/* filter suites with strongswan.conf options */
 	filter_key_exchange_config_suites(this, suites, &count);
@@ -1048,82 +965,10 @@ METHOD(tls_crypto_t, get_cipher_suites, int,
 }
 
 /**
- * Create NULL encryption transforms
- */
-static bool create_null(private_tls_crypto_t *this, suite_algs_t *algs)
-{
-	this->aead_in = tls_aead_create_null(algs->mac);
-	this->aead_out = tls_aead_create_null(algs->mac);
-	if (!this->aead_in || !this->aead_out)
-	{
-		DBG1(DBG_TLS, "selected TLS MAC %N not supported",
-			 integrity_algorithm_names, algs->mac);
-		return FALSE;
-	}
-	return TRUE;
-}
-
-/**
- * Create traditional transforms
- */
-static bool create_traditional(private_tls_crypto_t *this, suite_algs_t *algs)
-{
-	if (this->tls->get_version(this->tls) < TLS_1_1)
-	{
-		this->aead_in = tls_aead_create_implicit(algs->mac,
-								algs->encr, algs->encr_size);
-		this->aead_out = tls_aead_create_implicit(algs->mac,
-								algs->encr, algs->encr_size);
-	}
-	else
-	{
-		this->aead_in = tls_aead_create_explicit(algs->mac,
-								algs->encr, algs->encr_size);
-		this->aead_out = tls_aead_create_explicit(algs->mac,
-								algs->encr, algs->encr_size);
-	}
-	if (!this->aead_in || !this->aead_out)
-	{
-		DBG1(DBG_TLS, "selected TLS transforms %N-%u-%N not supported",
-			 encryption_algorithm_names, algs->encr, algs->encr_size * 8,
-			 integrity_algorithm_names, algs->mac);
-		return FALSE;
-	}
-	return TRUE;
-}
-
-/**
- * Create AEAD transforms
- */
-static bool create_aead(private_tls_crypto_t *this, suite_algs_t *algs)
-{
-	this->aead_in = tls_aead_create_aead(algs->encr, algs->encr_size);
-	this->aead_out = tls_aead_create_aead(algs->encr, algs->encr_size);
-	if (!this->aead_in || !this->aead_out)
-	{
-		DBG1(DBG_TLS, "selected TLS transforms %N-%u not supported",
-			 encryption_algorithm_names, algs->encr, algs->encr_size * 8);
-		return FALSE;
-	}
-	return TRUE;
-}
-
-/**
- * Clean up and unset AEAD transforms
- */
-static void destroy_aeads(private_tls_crypto_t *this)
-{
-	DESTROY_IF(this->aead_in);
-	DESTROY_IF(this->aead_out);
-	this->aead_in = this->aead_out = NULL;
-}
-
-/**
  * Create crypto primitives
  */
 static bool create_ciphers(private_tls_crypto_t *this, suite_algs_t *algs)
 {
-	destroy_aeads(this);
 	DESTROY_IF(this->prf);
 	if (this->tls->get_version(this->tls) < TLS_1_2)
 	{
@@ -1138,29 +983,38 @@ static bool create_ciphers(private_tls_crypto_t *this, suite_algs_t *algs)
 		DBG1(DBG_TLS, "selected TLS PRF not supported");
 		return FALSE;
 	}
+
+	DESTROY_IF(this->signer_in);
+	DESTROY_IF(this->signer_out);
+	this->signer_in = lib->crypto->create_signer(lib->crypto, algs->mac);
+	this->signer_out = lib->crypto->create_signer(lib->crypto, algs->mac);
+	if (!this->signer_in || !this->signer_out)
+	{
+		DBG1(DBG_TLS, "selected TLS MAC %N not supported",
+			 integrity_algorithm_names, algs->mac);
+		return FALSE;
+	}
+
+	DESTROY_IF(this->crypter_in);
+	DESTROY_IF(this->crypter_out);
 	if (algs->encr == ENCR_NULL)
 	{
-		if (create_null(this, algs))
-		{
-			return TRUE;
-		}
-	}
-	else if (encryption_algorithm_is_aead(algs->encr))
-	{
-		if (create_aead(this, algs))
-		{
-			return TRUE;
-		}
+		this->crypter_in = this->crypter_out = NULL;
 	}
 	else
 	{
-		if (create_traditional(this, algs))
+		this->crypter_in = lib->crypto->create_crypter(lib->crypto,
+												algs->encr, algs->encr_size);
+		this->crypter_out = lib->crypto->create_crypter(lib->crypto,
+												algs->encr, algs->encr_size);
+		if (!this->crypter_in || !this->crypter_out)
 		{
-			return TRUE;
+			DBG1(DBG_TLS, "selected TLS crypter %N not supported",
+				 encryption_algorithm_names, algs->encr);
+			return FALSE;
 		}
 	}
-	destroy_aeads(this);
-	return FALSE;
+	return TRUE;
 }
 
 METHOD(tls_crypto_t, select_cipher_suite, tls_cipher_suite_t,
@@ -1207,79 +1061,58 @@ METHOD(tls_crypto_t, get_dh_group, diffie_hellman_group_t,
 	return MODP_NONE;
 }
 
-/**
- * Map signature schemes to TLS key types and hashes, ordered by preference
- */
-static struct {
-	tls_signature_algorithm_t sig;
-	tls_hash_algorithm_t hash;
-	signature_scheme_t scheme;
-} schemes[] = {
-	{ TLS_SIG_ECDSA,	TLS_HASH_SHA256,	SIGN_ECDSA_WITH_SHA256_DER	},
-	{ TLS_SIG_ECDSA,	TLS_HASH_SHA384,	SIGN_ECDSA_WITH_SHA384_DER	},
-	{ TLS_SIG_ECDSA,	TLS_HASH_SHA512,	SIGN_ECDSA_WITH_SHA512_DER	},
-	{ TLS_SIG_ECDSA,	TLS_HASH_SHA1,		SIGN_ECDSA_WITH_SHA1_DER	},
-	{ TLS_SIG_RSA,		TLS_HASH_SHA256,	SIGN_RSA_EMSA_PKCS1_SHA256	},
-	{ TLS_SIG_RSA,		TLS_HASH_SHA384,	SIGN_RSA_EMSA_PKCS1_SHA384	},
-	{ TLS_SIG_RSA,		TLS_HASH_SHA512,	SIGN_RSA_EMSA_PKCS1_SHA512	},
-	{ TLS_SIG_RSA,		TLS_HASH_SHA224,	SIGN_RSA_EMSA_PKCS1_SHA224	},
-	{ TLS_SIG_RSA,		TLS_HASH_SHA1,		SIGN_RSA_EMSA_PKCS1_SHA1	},
-	{ TLS_SIG_RSA,		TLS_HASH_MD5,		SIGN_RSA_EMSA_PKCS1_MD5		},
-};
-
 METHOD(tls_crypto_t, get_signature_algorithms, void,
 	private_tls_crypto_t *this, bio_writer_t *writer)
 {
 	bio_writer_t *supported;
-	int i;
+	enumerator_t *enumerator;
+	hash_algorithm_t alg;
+	tls_hash_algorithm_t hash;
+	const char *plugin_name;
 
 	supported = bio_writer_create(32);
-
-	for (i = 0; i < countof(schemes); i++)
+	enumerator = lib->crypto->create_hasher_enumerator(lib->crypto);
+	while (enumerator->enumerate(enumerator, &alg, &plugin_name))
 	{
-		if (schemes[i].sig == TLS_SIG_RSA && !this->rsa)
+		switch (alg)
 		{
-			continue;
+			case HASH_MD5:
+				hash = TLS_HASH_MD5;
+				break;
+			case HASH_SHA1:
+				hash = TLS_HASH_SHA1;
+				break;
+			case HASH_SHA224:
+				hash = TLS_HASH_SHA224;
+				break;
+			case HASH_SHA256:
+				hash = TLS_HASH_SHA256;
+				break;
+			case HASH_SHA384:
+				hash = TLS_HASH_SHA384;
+				break;
+			case HASH_SHA512:
+				hash = TLS_HASH_SHA512;
+				break;
+			default:
+				continue;
 		}
-		if (schemes[i].sig == TLS_SIG_ECDSA && !this->ecdsa)
+		if (this->rsa)
 		{
-			continue;
+			supported->write_uint8(supported, hash);
+			supported->write_uint8(supported, TLS_SIG_RSA);
 		}
-		if (!lib->plugins->has_feature(lib->plugins,
-						PLUGIN_PROVIDE(PUBKEY_VERIFY, schemes[i].scheme)))
-		{
-			continue;
+		if (this->ecdsa && alg != HASH_MD5 && alg != HASH_SHA224)
+		{	/* currently we have no signature scheme for MD5/SHA224 */
+			supported->write_uint8(supported, hash);
+			supported->write_uint8(supported, TLS_SIG_ECDSA);
 		}
-		supported->write_uint8(supported, schemes[i].hash);
-		supported->write_uint8(supported, schemes[i].sig);
 	}
+	enumerator->destroy(enumerator);
 
 	supported->wrap16(supported);
 	writer->write_data16(writer, supported->get_buf(supported));
 	supported->destroy(supported);
-}
-
-/**
- * Get the signature scheme from a TLS 1.2 hash/sig algorithm pair
- */
-static signature_scheme_t hashsig_to_scheme(key_type_t type,
-											tls_hash_algorithm_t hash,
-											tls_signature_algorithm_t sig)
-{
-	int i;
-
-	if ((sig == TLS_SIG_RSA && type == KEY_RSA) ||
-		(sig == TLS_SIG_ECDSA && type == KEY_ECDSA))
-	{
-		for (i = 0; i < countof(schemes); i++)
-		{
-			if (schemes[i].sig == sig && schemes[i].hash == hash)
-			{
-				return schemes[i].scheme;
-			}
-		}
-	}
-	return SIGN_UNKNOWN;
 }
 
 /**
@@ -1397,6 +1230,59 @@ static bool hash_data(private_tls_crypto_t *this, chunk_t data, chunk_t *hash)
 		*hash = chunk_clone(chunk_from_thing(buf));
 	}
 	return TRUE;
+}
+
+/**
+ * Get the signature scheme from a TLS 1.2 hash/sig algorithm pair
+ */
+static signature_scheme_t hashsig_to_scheme(key_type_t type,
+					tls_hash_algorithm_t hash, tls_signature_algorithm_t sig)
+{
+	switch (sig)
+	{
+		case TLS_SIG_RSA:
+			if (type != KEY_RSA)
+			{
+				return SIGN_UNKNOWN;
+			}
+			switch (hash)
+			{
+				case TLS_HASH_MD5:
+					return SIGN_RSA_EMSA_PKCS1_MD5;
+				case TLS_HASH_SHA1:
+					return SIGN_RSA_EMSA_PKCS1_SHA1;
+				case TLS_HASH_SHA224:
+					return SIGN_RSA_EMSA_PKCS1_SHA224;
+				case TLS_HASH_SHA256:
+					return SIGN_RSA_EMSA_PKCS1_SHA256;
+				case TLS_HASH_SHA384:
+					return SIGN_RSA_EMSA_PKCS1_SHA384;
+				case TLS_HASH_SHA512:
+					return SIGN_RSA_EMSA_PKCS1_SHA512;
+				default:
+					return SIGN_UNKNOWN;
+			}
+		case TLS_SIG_ECDSA:
+			if (type != KEY_ECDSA)
+			{
+				return SIGN_UNKNOWN;
+			}
+			switch (hash)
+			{
+				case TLS_HASH_SHA224:
+					return SIGN_ECDSA_WITH_SHA1_DER;
+				case TLS_HASH_SHA256:
+					return SIGN_ECDSA_WITH_SHA256_DER;
+				case TLS_HASH_SHA384:
+					return SIGN_ECDSA_WITH_SHA384_DER;
+				case TLS_HASH_SHA512:
+					return SIGN_ECDSA_WITH_SHA512_DER;
+				default:
+					return SIGN_UNKNOWN;
+			}
+		default:
+			return SIGN_UNKNOWN;
+	}
 }
 
 METHOD(tls_crypto_t, sign, bool,
@@ -1622,60 +1508,90 @@ static bool derive_master(private_tls_crypto_t *this, chunk_t premaster,
 static bool expand_keys(private_tls_crypto_t *this,
 						chunk_t client_random, chunk_t server_random)
 {
-	chunk_t seed, block;
-	chunk_t cw_mac, cw, cw_iv;
-	chunk_t sw_mac, sw, sw_iv;
-	int mklen, eklen, ivlen;
-
-	if (!this->aead_in || !this->aead_out)
-	{
-		return FALSE;
-	}
+	chunk_t seed, block, client_write, server_write;
+	int mks, eks = 0, ivs = 0;
 
 	/* derive key block for key expansion */
-	mklen = this->aead_in->get_mac_key_size(this->aead_in);
-	eklen = this->aead_in->get_encr_key_size(this->aead_in);
-	ivlen = this->aead_in->get_iv_size(this->aead_in);
+	mks = this->signer_out->get_key_size(this->signer_out);
+	if (this->crypter_out)
+	{
+		eks = this->crypter_out->get_key_size(this->crypter_out);
+		if (this->tls->get_version(this->tls) < TLS_1_1)
+		{
+			ivs = this->crypter_out->get_iv_size(this->crypter_out);
+		}
+	}
 	seed = chunk_cata("cc", server_random, client_random);
-	block = chunk_alloca((mklen + eklen + ivlen) * 2);
+	block = chunk_alloca((mks + eks + ivs) * 2);
 	if (!this->prf->get_bytes(this->prf, "key expansion", seed,
 							  block.len, block.ptr))
 	{
 		return FALSE;
 	}
 
-	/* client/server write signer keys */
-	cw_mac = chunk_create(block.ptr, mklen);
-	block = chunk_skip(block, mklen);
-	sw_mac = chunk_create(block.ptr, mklen);
-	block = chunk_skip(block, mklen);
-
-	/* client/server write encryption keys */
-	cw = chunk_create(block.ptr, eklen);
-	block = chunk_skip(block, eklen);
-	sw = chunk_create(block.ptr, eklen);
-	block = chunk_skip(block, eklen);
-
-	/* client/server write IV; TLS 1.0 implicit IVs or AEAD salt, if any */
-	cw_iv = chunk_create(block.ptr, ivlen);
-	block = chunk_skip(block, ivlen);
-	sw_iv = chunk_create(block.ptr, ivlen);
-	block = chunk_skip(block, ivlen);
-
+	/* signer keys */
+	client_write = chunk_create(block.ptr, mks);
+	block = chunk_skip(block, mks);
+	server_write = chunk_create(block.ptr, mks);
+	block = chunk_skip(block, mks);
 	if (this->tls->is_server(this->tls))
 	{
-		if (!this->aead_in->set_keys(this->aead_in, cw_mac, cw, cw_iv) ||
-			!this->aead_out->set_keys(this->aead_out, sw_mac, sw, sw_iv))
+		if (!this->signer_in->set_key(this->signer_in, client_write) ||
+			!this->signer_out->set_key(this->signer_out, server_write))
 		{
 			return FALSE;
 		}
 	}
 	else
 	{
-		if (!this->aead_out->set_keys(this->aead_out, cw_mac, cw, cw_iv) ||
-			!this->aead_in->set_keys(this->aead_in, sw_mac, sw, sw_iv))
+		if (!this->signer_out->set_key(this->signer_out, client_write) ||
+			!this->signer_in->set_key(this->signer_in, server_write))
 		{
 			return FALSE;
+		}
+	}
+
+	/* crypter keys, and IVs if < TLSv1.2 */
+	if (this->crypter_out && this->crypter_in)
+	{
+		client_write = chunk_create(block.ptr, eks);
+		block = chunk_skip(block, eks);
+		server_write = chunk_create(block.ptr, eks);
+		block = chunk_skip(block, eks);
+
+		if (this->tls->is_server(this->tls))
+		{
+			if (!this->crypter_in->set_key(this->crypter_in, client_write) ||
+				!this->crypter_out->set_key(this->crypter_out, server_write))
+			{
+				return FALSE;
+			}
+		}
+		else
+		{
+			if (!this->crypter_out->set_key(this->crypter_out, client_write) ||
+				!this->crypter_in->set_key(this->crypter_in, server_write))
+			{
+				return FALSE;
+			}
+		}
+		if (ivs)
+		{
+			client_write = chunk_create(block.ptr, ivs);
+			block = chunk_skip(block, ivs);
+			server_write = chunk_create(block.ptr, ivs);
+			block = chunk_skip(block, ivs);
+
+			if (this->tls->is_server(this->tls))
+			{
+				this->iv_in = chunk_clone(client_write);
+				this->iv_out = chunk_clone(server_write);
+			}
+			else
+			{
+				this->iv_out = chunk_clone(client_write);
+				this->iv_in = chunk_clone(server_write);
+			}
 		}
 	}
 
@@ -1746,11 +1662,13 @@ METHOD(tls_crypto_t, change_cipher, void,
 	{
 		if (inbound)
 		{
-			this->protection->set_cipher(this->protection, TRUE, this->aead_in);
+			this->protection->set_cipher(this->protection, TRUE,
+							this->signer_in, this->crypter_in, this->iv_in);
 		}
 		else
 		{
-			this->protection->set_cipher(this->protection, FALSE, this->aead_out);
+			this->protection->set_cipher(this->protection, FALSE,
+							this->signer_out, this->crypter_out, this->iv_out);
 		}
 	}
 }
@@ -1764,7 +1682,12 @@ METHOD(tls_crypto_t, get_eap_msk, chunk_t,
 METHOD(tls_crypto_t, destroy, void,
 	private_tls_crypto_t *this)
 {
-	destroy_aeads(this);
+	DESTROY_IF(this->signer_in);
+	DESTROY_IF(this->signer_out);
+	DESTROY_IF(this->crypter_in);
+	DESTROY_IF(this->crypter_out);
+	free(this->iv_in.ptr);
+	free(this->iv_out.ptr);
 	free(this->handshake.ptr);
 	free(this->msk.ptr);
 	DESTROY_IF(this->prf);
@@ -1846,43 +1769,8 @@ tls_crypto_t *tls_crypto_create(tls_t *tls, tls_cache_t *cache)
 		case TLS_PURPOSE_GENERIC:
 			build_cipher_suite_list(this, TRUE);
 			break;
-		case TLS_PURPOSE_GENERIC_NULLOK:
-			build_cipher_suite_list(this, FALSE);
-			break;
 		default:
 			break;
 	}
 	return &this->public;
-}
-
-/**
- * See header.
- */
-int tls_crypto_get_supported_suites(bool null, tls_cipher_suite_t **out)
-{
-	suite_algs_t suites[countof(suite_algs)];
-	int count = countof(suite_algs), i;
-
-	/* initialize copy of suite list */
-	for (i = 0; i < count; i++)
-	{
-		suites[i] = suite_algs[i];
-	}
-
-	filter_unsupported_suites(suites, &count);
-
-	if (!null)
-	{
-		filter_null_suites(suites, &count);
-	}
-
-	if (out)
-	{
-		*out = calloc(count, sizeof(tls_cipher_suite_t));
-		for (i = 0; i < count; i++)
-		{
-			(*out)[i] = suites[i].suite;
-		}
-	}
-	return count;
 }

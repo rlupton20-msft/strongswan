@@ -13,24 +13,17 @@
  * for more details.
  */
 
-#define _GNU_SOURCE /* for stdndup() */
+#include "tnc.h"
+
 #include <sys/types.h>
 #include <sys/stat.h>
+#include <sys/mman.h>
 #include <unistd.h>
 #include <errno.h>
 #include <fcntl.h>
-#include <string.h>
-
-#include "tnc.h"
 
 #include <utils/lexparser.h>
 #include <utils/debug.h>
-
-#ifdef WIN32
-# define DEFAULT_TNC_CONFIG "tnc_config"
-#else
-# define DEFAULT_TNC_CONFIG "/etc/tnc_config"
-#endif
 
 typedef struct private_tnc_t private_tnc_t;
 
@@ -78,10 +71,8 @@ void libtnccs_init(void)
 		},
 		.ref = 1,
 	);
+
 	tnc = &this->public;
-	lib->settings->add_fallback(lib->settings, "%s.tnc", "libtnccs", lib->ns);
-	lib->settings->add_fallback(lib->settings, "%s.plugins", "libtnccs.plugins",
-								lib->ns);
 }
 
 /**
@@ -103,8 +94,10 @@ void libtnccs_deinit(void)
 static bool load_imcvs_from_config(char *filename, bool is_imc)
 {
 	bool success = FALSE;
-	int line_nr = 0;
-	chunk_t *src, line;
+	int fd, line_nr = 0;
+	chunk_t src, line;
+	struct stat sb;
+	void *addr;
 	char *label;
 
 	if (!filename || !*filename)
@@ -115,15 +108,30 @@ static bool load_imcvs_from_config(char *filename, bool is_imc)
 	label = is_imc ? "IMC" : "IMV";
 
 	DBG1(DBG_TNC, "loading %ss from '%s'", label, filename);
-	src = chunk_map(filename, FALSE);
-	if (!src)
+	fd = open(filename, O_RDONLY);
+	if (fd == -1)
 	{
 		DBG1(DBG_TNC, "opening configuration file '%s' failed: %s", filename,
 			 strerror(errno));
 		return FALSE;
 	}
+	if (fstat(fd, &sb) == -1)
+	{
+		DBG1(DBG_LIB, "getting file size of '%s' failed: %s", filename,
+			 strerror(errno));
+		close(fd);
+		return FALSE;
+	}
+	addr = mmap(NULL, sb.st_size, PROT_READ | PROT_WRITE, MAP_PRIVATE, fd, 0);
+	if (addr == MAP_FAILED)
+	{
+		DBG1(DBG_LIB, "mapping '%s' failed: %s", filename, strerror(errno));
+		close(fd);
+		return FALSE;
+	}
+	src = chunk_create(addr, sb.st_size);
 
-	while (fetchline(src, &line))
+	while (fetchline(&src, &line))
 	{
 		char *name, *path;
 		chunk_t token;
@@ -193,7 +201,8 @@ static bool load_imcvs_from_config(char *filename, bool is_imc)
 			break;
 		}
 	}
-	chunk_unmap(src);
+	munmap(addr, sb.st_size);
+	close(fd);
 	return success;
 }
 
@@ -257,9 +266,10 @@ bool tnc_manager_register(plugin_t *plugin, plugin_feature_t *feature,
 		{
 			load_imcvs_from_config(
 						lib->settings->get_str(lib->settings,
-							"%s.tnc.tnc_config", DEFAULT_TNC_CONFIG, lib->ns),
+									"libtnccs.tnc_config", "/etc/tnc_config"),
 						is_imc);
 		}
 	}
 	return TRUE;
 }
+

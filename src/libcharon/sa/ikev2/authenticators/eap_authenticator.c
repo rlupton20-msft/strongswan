@@ -450,7 +450,7 @@ static bool verify_auth(private_eap_authenticator_t *this, message_t *message,
 	keymat_v2_t *keymat;
 
 	auth_payload = (auth_payload_t*)message->get_payload(message,
-														 PLV2_AUTH);
+														 AUTHENTICATION);
 	if (!auth_payload)
 	{
 		DBG1(DBG_IKE, "AUTH payload missing");
@@ -464,7 +464,7 @@ static bool verify_auth(private_eap_authenticator_t *this, message_t *message,
 		return FALSE;
 	}
 	recv_auth_data = auth_payload->get_data(auth_payload);
-	if (!auth_data.len || !chunk_equals_const(auth_data, recv_auth_data))
+	if (!auth_data.len || !chunk_equals(auth_data, recv_auth_data))
 	{
 		DBG1(DBG_IKE, "verification of AUTH payload with%s EAP MSK failed",
 			 this->msk.ptr ? "" : "out");
@@ -522,13 +522,6 @@ METHOD(authenticator_t, process_server, status_t,
 		{
 			return FAILED;
 		}
-		if (this->method->get_auth)
-		{
-			auth_cfg_t *auth;
-
-			auth = this->ike_sa->get_auth_cfg(this->ike_sa, FALSE);
-			auth->merge(auth, this->method->get_auth(this->method), FALSE);
-		}
 		return NEED_MORE;
 	}
 
@@ -539,7 +532,7 @@ METHOD(authenticator_t, process_server, status_t,
 	else
 	{
 		eap_payload = (eap_payload_t*)message->get_payload(message,
-													PLV2_EAP);
+													EXTENSIBLE_AUTHENTICATION);
 		if (!eap_payload)
 		{
 			return FAILED;
@@ -597,7 +590,7 @@ METHOD(authenticator_t, process_client, status_t,
 	}
 
 	eap_payload = (eap_payload_t*)message->get_payload(message,
-													PLV2_EAP);
+													EXTENSIBLE_AUTHENTICATION);
 	if (eap_payload)
 	{
 		switch (eap_payload->get_code(eap_payload))

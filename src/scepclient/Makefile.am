@@ -14,4 +14,3 @@ scepclient_LDADD = \
 $(top_builddir)/src/libstrongswan/libstrongswan.la
 
 dist_man_MANS = scepclient.8
-EXTRA_DIST = Android.mk

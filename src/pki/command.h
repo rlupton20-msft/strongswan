@@ -22,14 +22,14 @@
 #define COMMAND_H_
 
 /**
- * Maximum number of commands (+1).
+ * Maximum number of commands.
  */
-#define MAX_COMMANDS 13
+#define MAX_COMMANDS 10
 
 /**
- * Maximum number of options in a command (+3)
+ * Maximum number of options in a command (+1)
  */
-#define MAX_OPTIONS 36
+#define MAX_OPTIONS 32
 
 /**
  * Maximum number of usage summary lines (+1)

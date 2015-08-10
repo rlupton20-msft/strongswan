@@ -247,9 +247,6 @@ METHOD(mac_t, set_key, bool,
 {
 	chunk_t resized, iv, l;
 
-	memset(this->t, 0, this->b);
-	this->remaining_bytes = 0;
-
 	/* we support variable keys as defined in RFC 4615 */
 	if (key.len == this->b)
 	{

@@ -45,6 +45,9 @@
 #include <daemon.h>
 #include <threading/thread.h>
 
+/* Maximum size of a packet */
+#define MAX_PACKET 10000
+
 /* these are not defined on some platforms */
 #ifndef SOL_IP
 #define SOL_IP IPPROTO_IP
@@ -141,11 +144,6 @@ struct private_socket_default_socket_t {
 	 * TRUE if the source address should be set on outbound packets
 	 */
 	bool set_source;
-
-	/**
-	 * A counter to implement round-robin selection of read sockets
-	 */
-	u_int rr_counter;
 };
 
 METHOD(socket_t, receiver, status_t,
@@ -155,43 +153,66 @@ METHOD(socket_t, receiver, status_t,
 	chunk_t data;
 	packet_t *pkt;
 	host_t *source = NULL, *dest = NULL;
-	int i, rr, index, bytes_read = 0, selected = -1;
+	int bytes_read = 0;
 	bool oldstate;
+
+	fd_set rfds;
+	int max_fd = 0, selected = 0;
 	u_int16_t port = 0;
-	struct pollfd pfd[] = {
-		{ .fd = this->ipv4,			.events = POLLIN },
-		{ .fd = this->ipv4_natt,	.events = POLLIN },
-		{ .fd = this->ipv6,			.events = POLLIN },
-		{ .fd = this->ipv6_natt,	.events = POLLIN },
-	};
-	int ports[] = {
-		/* port numbers associated to pollfds */
-		this->port, this->natt, this->port, this->natt,
-	};
+
+	FD_ZERO(&rfds);
+
+	if (this->ipv4 != -1)
+	{
+		FD_SET(this->ipv4, &rfds);
+		max_fd = max(max_fd, this->ipv4);
+	}
+	if (this->ipv4_natt != -1)
+	{
+		FD_SET(this->ipv4_natt, &rfds);
+		max_fd = max(max_fd, this->ipv4_natt);
+	}
+	if (this->ipv6 != -1)
+	{
+		FD_SET(this->ipv6, &rfds);
+		max_fd = max(max_fd, this->ipv6);
+	}
+	if (this->ipv6_natt != -1)
+	{
+		FD_SET(this->ipv6_natt, &rfds);
+		max_fd = max(max_fd, this->ipv6_natt);
+	}
 
 	DBG2(DBG_NET, "waiting for data on sockets");
 	oldstate = thread_cancelability(TRUE);
-	if (poll(pfd, countof(pfd), -1) <= 0)
+	if (select(max_fd + 1, &rfds, NULL, NULL, NULL) <= 0)
 	{
 		thread_cancelability(oldstate);
 		return FAILED;
 	}
 	thread_cancelability(oldstate);
 
-	rr = this->rr_counter++;
-	for (i = 0; i < countof(pfd); i++)
+	if (this->ipv4 != -1 && FD_ISSET(this->ipv4, &rfds))
 	{
-		/* To serve all ports with equal priority, we use a round-robin
-		 * scheme to choose the one to process in this invocation */
-		index = (rr + i) % countof(pfd);
-		if (pfd[index].revents & POLLIN)
-		{
-			selected = pfd[index].fd;
-			port = ports[index];
-			break;
-		}
+		port = this->port;
+		selected = this->ipv4;
 	}
-	if (selected != -1)
+	if (this->ipv4_natt != -1 && FD_ISSET(this->ipv4_natt, &rfds))
+	{
+		port = this->natt;
+		selected = this->ipv4_natt;
+	}
+	if (this->ipv6 != -1 && FD_ISSET(this->ipv6, &rfds))
+	{
+		port = this->port;
+		selected = this->ipv6;
+	}
+	if (this->ipv6_natt != -1 && FD_ISSET(this->ipv6_natt, &rfds))
+	{
+		port = this->natt;
+		selected = this->ipv6_natt;
+	}
+	if (selected)
 	{
 		struct msghdr msg;
 		struct cmsghdr *cmsgptr;
@@ -596,7 +617,7 @@ static int open_socket(private_socket_default_socket_t *this,
 		mark_t mark;
 
 		fwmark = lib->settings->get_str(lib->settings,
-							"%s.plugins.socket-default.fwmark", NULL, lib->ns);
+						"%s.plugins.socket-default.fwmark", NULL, charon->name);
 		if (fwmark && mark_from_string(fwmark, &mark))
 		{
 			if (setsockopt(skt, SOL_SOCKET, SO_MARK, &mark.value,
@@ -636,10 +657,10 @@ static bool use_family(int family)
 	{
 		case AF_INET:
 			return lib->settings->get_bool(lib->settings,
-						"%s.plugins.socket-default.use_ipv4", TRUE, lib->ns);
+					"%s.plugins.socket-default.use_ipv4", TRUE, charon->name);
 		case AF_INET6:
 			return lib->settings->get_bool(lib->settings,
-						"%s.plugins.socket-default.use_ipv6", TRUE, lib->ns);
+					"%s.plugins.socket-default.use_ipv6", TRUE, charon->name);
 		default:
 			return FALSE;
 	}
@@ -714,14 +735,14 @@ socket_default_socket_t *socket_default_socket_create()
 			},
 		},
 		.port = lib->settings->get_int(lib->settings,
-							"%s.port", CHARON_UDP_PORT, lib->ns),
+							"%s.port", CHARON_UDP_PORT, charon->name),
 		.natt = lib->settings->get_int(lib->settings,
-							"%s.port_nat_t", CHARON_NATT_PORT, lib->ns),
+							"%s.port_nat_t", CHARON_NATT_PORT, charon->name),
 		.max_packet = lib->settings->get_int(lib->settings,
-							"%s.max_packet", PACKET_MAX_DEFAULT, lib->ns),
+							"%s.max_packet", MAX_PACKET, charon->name),
 		.set_source = lib->settings->get_bool(lib->settings,
 							"%s.plugins.socket-default.set_source", TRUE,
-							lib->ns),
+							charon->name),
 	);
 
 	if (this->port && this->port == this->natt)

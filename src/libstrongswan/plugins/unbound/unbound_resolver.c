@@ -97,14 +97,14 @@ resolver_t *unbound_resolver_create(void)
 	char *resolv_conf, *trust_anchors, *dlv_anchors;
 
 	resolv_conf = lib->settings->get_str(lib->settings,
-										"%s.plugins.unbound.resolv_conf",
-										RESOLV_CONF_FILE, lib->ns);
+						"libstrongswan.plugins.unbound.resolv_conf",
+						RESOLV_CONF_FILE);
 	trust_anchors = lib->settings->get_str(lib->settings,
-										"%s.plugins.unbound.trust_anchors",
-										TRUST_ANCHOR_FILE, lib->ns);
+						"libstrongswan.plugins.unbound.trust_anchors",
+						TRUST_ANCHOR_FILE);
 	dlv_anchors = lib->settings->get_str(lib->settings,
-										"%s.plugins.unbound.dlv_anchors",
-										NULL, lib->ns);
+						"libstrongswan.plugins.unbound.dlv_anchors",
+						NULL);
 
 	INIT(this,
 		.public = {

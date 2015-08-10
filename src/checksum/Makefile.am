@@ -4,16 +4,15 @@ ipseclib_LTLIBRARIES = $(LIBCHECKSUM_LIBS)
 nodist_libchecksum_la_SOURCES = checksum.c
 libchecksum_la_LDFLAGS = -module -avoid-version -rpath '$(ipseclibdir)'
 
-EXTRA_PROGRAMS = checksum_builder
+noinst_PROGRAMS = checksum_builder
 checksum_builder_SOURCES = checksum_builder.c
 checksum_builder_LDADD = \
 	$(top_builddir)/src/libstrongswan/libstrongswan.la \
 	$(top_builddir)/src/libhydra/libhydra.la \
 	$(top_builddir)/src/libcharon/libcharon.la \
 	$(DLLIB)
-checksum_builder_LDFLAGS = -rpath '$(DESTDIR)$(ipseclibdir)'
 
-CLEANFILES = checksum.c $(EXTRA_PROGRAMS)
+CLEANFILES = checksum.c
 
 AM_CPPFLAGS = \
 	-I$(top_srcdir)/src/libstrongswan \
@@ -22,7 +21,7 @@ AM_CPPFLAGS = \
 	-DPLUGINDIR=\"${DESTDIR}${plugindir}\"
 
 AM_CFLAGS = \
-	$(PLUGIN_CFLAGS)
+	-rdynamic
 
 # we keep track of build dependencies in deps and use libs to store the paths
 # to the installed libraries. for executables we use the built files directly
@@ -81,37 +80,36 @@ if USE_IMCV
   libs += $(DESTDIR)$(ipseclibdir)/libimcv.so
 endif
 
+if USE_PTS
+  deps += $(top_builddir)/src/libpts/libpts.la
+  libs += $(DESTDIR)$(ipseclibdir)/libpts.so
+endif
+
 if USE_CHARON
   deps += $(top_builddir)/src/libcharon/libcharon.la
   libs += $(DESTDIR)$(ipseclibdir)/libcharon.so
-  exes += $(DESTDIR)$(ipsecdir)/charon
+  exes += $(top_builddir)/src/charon/.libs/charon
 if !MONOLITHIC
   AM_CPPFLAGS += -DC_PLUGINS=\""${c_plugins}\""
 endif
 endif
 
 if USE_CMD
-  exes += $(DESTDIR)$(sbindir)/charon-cmd
+  exes += $(top_builddir)/src/charon-cmd/.libs/charon-cmd
 endif
 
-if USE_SCEPCLIENT
-  exes += $(DESTDIR)$(ipsecdir)/scepclient
-endif
-
-if USE_PKI
-  exes += $(DESTDIR)$(bindir)/pki
-endif
-
-if USE_SWANCTL
-  exes += $(DESTDIR)$(sbindir)/swanctl
+if USE_TOOLS
+  exes += $(top_builddir)/src/openac/.libs/openac
+  exes += $(top_builddir)/src/pki/.libs/pki
+  exes += $(top_builddir)/src/scepclient/.libs/scepclient
 endif
 
 if USE_ATTR_SQL
-  exes += $(DESTDIR)$(ipsecdir)/pool
+  exes += $(top_builddir)/src/pool/.libs/pool
 endif
 
 if USE_IMV_ATTESTATION
-  exes += $(DESTDIR)$(ipsecdir)/attest
+  exes += $(top_builddir)/src/libpts/plugins/imv_attestation/.libs/attest
 endif
 
 checksum.c : checksum_builder $(deps) $(exes)

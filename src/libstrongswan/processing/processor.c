@@ -467,8 +467,6 @@ METHOD(processor_t, cancel, void,
 {
 	enumerator_t *enumerator;
 	worker_thread_t *worker;
-	job_t *job;
-	int i;
 
 	this->mutex->lock(this->mutex);
 	this->desired_threads = 0;
@@ -498,14 +496,6 @@ METHOD(processor_t, cancel, void,
 		worker->thread->join(worker->thread);
 		free(worker);
 	}
-	for (i = 0; i < JOB_PRIO_MAX; i++)
-	{
-		while (this->jobs[i]->remove_first(this->jobs[i],
-										   (void**)&job) == SUCCESS)
-		{
-			job->destroy(job);
-		}
-	}
 	this->mutex->unlock(this->mutex);
 }
 
@@ -520,7 +510,7 @@ METHOD(processor_t, destroy, void,
 	this->mutex->destroy(this->mutex);
 	for (i = 0; i < JOB_PRIO_MAX; i++)
 	{
-		this->jobs[i]->destroy(this->jobs[i]);
+		this->jobs[i]->destroy_offset(this->jobs[i], offsetof(job_t, destroy));
 	}
 	this->threads->destroy(this->threads);
 	free(this);
@@ -555,7 +545,7 @@ processor_t *processor_create()
 	{
 		this->jobs[i] = linked_list_create();
 		this->prio_threads[i] = lib->settings->get_int(lib->settings,
-						"%s.processor.priority_threads.%N", 0, lib->ns,
+						"libstrongswan.processor.priority_threads.%N", 0,
 						job_priority_names, i);
 	}
 

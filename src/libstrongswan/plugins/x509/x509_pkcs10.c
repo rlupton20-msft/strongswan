@@ -435,7 +435,7 @@ static bool parse_certificate_request(private_x509_pkcs10_t *this)
 				this->algorithm = asn1_parse_algorithmIdentifier(object, level, NULL);
 				break;
 			case PKCS10_SIGNATURE:
-				this->signature = chunk_skip(object, 1);
+				this->signature = object;
 				break;
 			default:
 				break;

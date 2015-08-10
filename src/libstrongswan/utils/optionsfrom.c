@@ -90,13 +90,8 @@ METHOD(options_t, from, bool,
 	}
 
 	/* determine the file size */
-	if (fseek(fd, 0, SEEK_END) == -1 || (src.len = ftell(fd)) == -1)
-	{
-		DBG1(DBG_LIB, "optionsfrom: unable to determine size of '%s': %s",
-			 filename, strerror(errno));
-		fclose(fd);
-		return FALSE;
-	}
+	fseek(fd, 0, SEEK_END);
+	src.len = ftell(fd);
 	rewind(fd);
 
 	/* allocate one byte more just in case of a missing final newline */

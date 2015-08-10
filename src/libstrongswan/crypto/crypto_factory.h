@@ -46,7 +46,7 @@ typedef crypter_t* (*crypter_constructor_t)(encryption_algorithm_t algo,
  * Constructor function for aead transforms
  */
 typedef aead_t* (*aead_constructor_t)(encryption_algorithm_t algo,
-									  size_t key_size, size_t salt_size);
+									  size_t key_size);
 /**
  * Constructor function for signers
  */
@@ -100,12 +100,10 @@ struct crypto_factory_t {
 	 *
 	 * @param algo			encryption algorithm
 	 * @param key_size		length of the key in bytes
-	 * @param salt_size		size of salt, implicit part of the nonce
 	 * @return				aead_t instance, NULL if not supported
 	 */
 	aead_t* (*create_aead)(crypto_factory_t *this,
-						   encryption_algorithm_t algo,
-						   size_t key_size, size_t salt_size);
+						   encryption_algorithm_t algo, size_t key_size);
 
 	/**
 	 * Create a symmetric signer instance.
@@ -162,14 +160,12 @@ struct crypto_factory_t {
 	 * Register a crypter constructor.
 	 *
 	 * @param algo			algorithm to constructor
-	 * @param key size		key size to peform benchmarking for
 	 * @param plugin_name	plugin that registered this algorithm
 	 * @param create		constructor function for that algorithm
 	 * @return				TRUE if registered, FALSE if test vector failed
 	 */
 	bool (*add_crypter)(crypto_factory_t *this, encryption_algorithm_t algo,
-						size_t key_size, const char *plugin_name,
-						crypter_constructor_t create);
+						const char *plugin_name, crypter_constructor_t create);
 
 	/**
 	 * Unregister a crypter constructor.
@@ -189,14 +185,12 @@ struct crypto_factory_t {
 	 * Register a aead constructor.
 	 *
 	 * @param algo			algorithm to constructor
-	 * @param key size		key size to peform benchmarking for
 	 * @param plugin_name	plugin that registered this algorithm
 	 * @param create		constructor function for that algorithm
 	 * @return				TRUE if registered, FALSE if test vector failed
 	 */
 	bool (*add_aead)(crypto_factory_t *this, encryption_algorithm_t algo,
-					 size_t key_size, const char *plugin_name,
-					 aead_constructor_t create);
+					 const char *plugin_name, aead_constructor_t create);
 
 	/**
 	 * Register a signer constructor.
@@ -372,17 +366,14 @@ struct crypto_factory_t {
 							void *vector);
 
 	/**
-	 * Create an enumerator verifying transforms using known test vectors.
+	 * Get the number of test vector failures encountered during add.
 	 *
-	 * The resulting enumerator enumerates over an u_int with the type
-	 * specific transform identifier, the plugin name providing the transform,
-	 * and a boolean value indicating success/failure for the given transform.
+	 * This counter gets incremented only if transforms get tested during
+	 * registration.
 	 *
-	 * @param type			transform type to test
-	 * @return				enumerator over (u_int, char*, bool)
+	 * @return				number of failed test vectors
 	 */
-	enumerator_t* (*create_verify_enumerator)(crypto_factory_t *this,
-											  transform_type_t type);
+	u_int (*get_test_vector_failures)(crypto_factory_t *this);
 
 	/**
 	 * Destroy a crypto_factory instance.

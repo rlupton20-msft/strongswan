@@ -31,16 +31,6 @@ struct private_osx_attr_handler_t {
 	 * Public interface
 	 */
 	osx_attr_handler_t public;
-
-	/**
-	 * Backup of original DNS servers, before we mess with it
-	 */
-	CFMutableArrayRef original;
-
-	/**
-	 * Append DNS servers to existing entries, instead of replacing
-	 */
-	bool append;
 };
 
 /**
@@ -120,8 +110,7 @@ static CFMutableArrayRef get_array_from_dict(CFDictionaryRef dict,
 /**
  * Add/Remove a DNS server to the configuration
  */
-static bool manage_dns(private_osx_attr_handler_t *this,
-					   int family, chunk_t data, bool add)
+static bool manage_dns(int family, chunk_t data, bool add)
 {
 	SCDynamicStoreRef store;
 	CFStringRef path, dns;
@@ -149,11 +138,6 @@ static bool manage_dns(private_osx_attr_handler_t *this,
 		dns = CFStringCreateWithCString(NULL, buf, kCFStringEncodingUTF8);
 		if (add)
 		{
-			if (!this->append && !this->original)
-			{	/* backup orignal config, start with empty set */
-				this->original = arr;
-				arr = CFArrayCreateMutable(NULL, 0, &kCFTypeArrayCallBacks);
-			}
 			DBG1(DBG_CFG, "installing %s as DNS server", buf);
 			CFArrayInsertValueAtIndex(arr, 0, dns);
 		}
@@ -165,12 +149,6 @@ static bool manage_dns(private_osx_attr_handler_t *this,
 			{
 				DBG1(DBG_CFG, "removing %s from DNS servers (%d)", buf, i);
 				CFArrayRemoveValueAtIndex(arr, i);
-			}
-			if (!this->append && this->original && CFArrayGetCount(arr) == 0)
-			{	/* restore original config */
-				CFRelease(arr);
-				arr = this->original;
-				this->original = NULL;
 			}
 		}
 		CFRelease(dns);
@@ -191,26 +169,26 @@ static bool manage_dns(private_osx_attr_handler_t *this,
 }
 
 METHOD(attribute_handler_t, handle, bool,
-	private_osx_attr_handler_t *this, ike_sa_t *ike_sa,
+	private_osx_attr_handler_t *this, identification_t *id,
 	configuration_attribute_type_t type, chunk_t data)
 {
 	switch (type)
 	{
 		case INTERNAL_IP4_DNS:
-			return manage_dns(this, AF_INET, data, TRUE);
+			return manage_dns(AF_INET, data, TRUE);
 		default:
 			return FALSE;
 	}
 }
 
 METHOD(attribute_handler_t, release, void,
-	private_osx_attr_handler_t *this, ike_sa_t *ike_sa,
+	private_osx_attr_handler_t *this, identification_t *server,
 	configuration_attribute_type_t type, chunk_t data)
 {
 	switch (type)
 	{
 		case INTERNAL_IP4_DNS:
-			manage_dns(this, AF_INET, data, FALSE);
+			manage_dns(AF_INET, data, FALSE);
 			break;
 		default:
 			break;
@@ -228,7 +206,7 @@ METHOD(enumerator_t, enumerate_dns, bool,
 }
 
 METHOD(attribute_handler_t, create_attribute_enumerator, enumerator_t *,
-	private_osx_attr_handler_t *this, ike_sa_t *ike_sa,
+	private_osx_attr_handler_t *this, identification_t *id,
 	linked_list_t *vips)
 {
 	enumerator_t *enumerator;
@@ -262,8 +240,6 @@ osx_attr_handler_t *osx_attr_handler_create()
 			},
 			.destroy = _destroy,
 		},
-		.append = lib->settings->get_bool(lib->settings,
-								"%s.plugins.osx-attr.append", TRUE, lib->ns),
 	);
 
 	return &this->public;

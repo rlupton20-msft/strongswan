@@ -3,7 +3,7 @@ AM_CPPFLAGS = \
 
 AM_CFLAGS = \
 	$(MYSQLCFLAG) \
-	$(PLUGIN_CFLAGS)
+	-rdynamic
 
 if MONOLITHIC
 noinst_LTLIBRARIES = libstrongswan-mysql.la

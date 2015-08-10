@@ -1,10 +1,10 @@
 /* Devices */
 
 INSERT INTO devices (                  /*  1 */
-  value, product, created
-)
-SELECT 'aabbccddeeff11223344556677889900', id, 1372330615
-FROM products WHERE name = 'Debian DEBIAN_VERSION x86_64';
+  value, product, created  
+) VALUES (
+  'aabbccddeeff11223344556677889900', 28, 1372330615
+);
 
 /* Groups Members */
 
@@ -26,9 +26,9 @@ INSERT INTO identities (
 
 INSERT INTO sessions (
   time, connection, identity, device, product, rec
-)
-SELECT NOW, 1, 1, 1, id, 0
-FROM products WHERE name = 'Debian DEBIAN_VERSION x86_64';
+) VALUES (
+  NOW, 1, 1, 1, 28, 0
+);
 
 /* Results */
 

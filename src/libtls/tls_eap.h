@@ -66,7 +66,7 @@ struct tls_eap_t {
 	 *
 	 * @return				identifier
 	 */
-	uint8_t (*get_identifier)(tls_eap_t *this);
+	u_int8_t (*get_identifier)(tls_eap_t *this);
 
 	/**
 	 * Set the EAP identifier to a deterministic value, overwriting
@@ -74,14 +74,7 @@ struct tls_eap_t {
 	 *
 	 * @param identifier	EAP identifier
 	 */
-	void (*set_identifier) (tls_eap_t *this, uint8_t identifier);
-
-	/**
-	 * Get the authentication details after completing the handshake.
-	 *
-	 * @return				authentication details, internal data
-	 */
-	auth_cfg_t* (*get_auth)(tls_eap_t *this);
+	void (*set_identifier) (tls_eap_t *this, u_int8_t identifier);
 
 	/**
 	 * Destroy a tls_eap_t.

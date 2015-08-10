@@ -167,7 +167,7 @@ static bool get_next_test_vector(test_vector_t *test)
 	while (fgets(line, sizeof(line), ctx.in))
 	{
 		enumerator_t *enumerator;
-		chunk_t value = chunk_empty;
+		chunk_t value;
 		char *token;
 		int i;
 
@@ -313,7 +313,7 @@ static bool do_test_gcm(test_vector_t *test)
 			return FALSE;
 	}
 
-	aead = lib->crypto->create_aead(lib->crypto, alg, test->key.len, 4);
+	aead = lib->crypto->create_aead(lib->crypto, alg, test->key.len);
 	if (!aead)
 	{
 		DBG1(DBG_APP, "algorithm %N or key length (%d bits) not supported",
@@ -556,7 +556,7 @@ int main(int argc, char *argv[])
 	ctx.in = stdin;
 	ctx.out = stdout;
 
-	library_init(NULL, "aes-test");
+	library_init(NULL);
 	atexit(library_deinit);
 
 	while (true)

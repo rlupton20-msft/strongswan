@@ -17,7 +17,6 @@
 
 #include <daemon.h>
 #include <encoding/payloads/delete_payload.h>
-#include <sa/ikev2/tasks/child_create.h>
 
 
 typedef struct private_child_delete_t private_child_delete_t;
@@ -93,7 +92,7 @@ static void build_payloads(private_child_delete_t *this, message_t *message)
 			case PROTO_ESP:
 				if (esp == NULL)
 				{
-					esp = delete_payload_create(PLV2_DELETE, PROTO_ESP);
+					esp = delete_payload_create(DELETE, PROTO_ESP);
 					message->add_payload(message, (payload_t*)esp);
 				}
 				esp->add_spi(esp, spi);
@@ -103,7 +102,7 @@ static void build_payloads(private_child_delete_t *this, message_t *message)
 			case PROTO_AH:
 				if (ah == NULL)
 				{
-					ah = delete_payload_create(PLV2_DELETE, PROTO_AH);
+					ah = delete_payload_create(DELETE, PROTO_AH);
 					message->add_payload(message, (payload_t*)ah);
 				}
 				ah->add_spi(ah, spi);
@@ -133,7 +132,7 @@ static void process_payloads(private_child_delete_t *this, message_t *message)
 	payloads = message->create_payload_enumerator(message);
 	while (payloads->enumerate(payloads, &payload))
 	{
-		if (payload->get_type(payload) == PLV2_DELETE)
+		if (payload->get_type(payload) == DELETE)
 		{
 			delete_payload = (delete_payload_t*)payload;
 			protocol = delete_payload->get_protocol_id(delete_payload);
@@ -267,7 +266,7 @@ static void log_children(private_child_delete_t *this)
 		{
 			DBG0(DBG_IKE, "closing expired CHILD_SA %s{%d} "
 				 "with SPIs %.8x_i %.8x_o and TS %#R=== %#R",
-				 child_sa->get_name(child_sa), child_sa->get_unique_id(child_sa),
+				 child_sa->get_name(child_sa), child_sa->get_reqid(child_sa),
 				 ntohl(child_sa->get_spi(child_sa, TRUE)),
 				 ntohl(child_sa->get_spi(child_sa, FALSE)), my_ts, other_ts);
 		}
@@ -278,7 +277,7 @@ static void log_children(private_child_delete_t *this)
 
 			DBG0(DBG_IKE, "closing CHILD_SA %s{%d} with SPIs %.8x_i "
 				 "(%llu bytes) %.8x_o (%llu bytes) and TS %#R=== %#R",
-				 child_sa->get_name(child_sa), child_sa->get_unique_id(child_sa),
+				 child_sa->get_name(child_sa), child_sa->get_reqid(child_sa),
 				 ntohl(child_sa->get_spi(child_sa, TRUE)), bytes_in,
 				 ntohl(child_sa->get_spi(child_sa, FALSE)), bytes_out,
 				 my_ts, other_ts);
@@ -314,17 +313,6 @@ METHOD(task_t, build_i, status_t,
 	}
 	log_children(this);
 	build_payloads(this, message);
-
-	if (!this->rekeyed && this->expired)
-	{
-		child_cfg_t *child_cfg;
-
-		DBG1(DBG_IKE, "scheduling CHILD_SA recreate after hard expire");
-		child_cfg = child_sa->get_config(child_sa);
-		this->ike_sa->queue_task(this->ike_sa, (task_t*)
-				child_create_create(this->ike_sa, child_cfg->get_ref(child_cfg),
-									FALSE, NULL, NULL));
-	}
 	return NEED_MORE;
 }
 

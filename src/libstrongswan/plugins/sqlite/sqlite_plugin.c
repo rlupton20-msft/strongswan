@@ -16,7 +16,6 @@
 #include "sqlite_plugin.h"
 
 #include <library.h>
-#include <sqlite3.h>
 #include "sqlite_database.h"
 
 typedef struct private_sqlite_plugin_t private_sqlite_plugin_t;
@@ -61,7 +60,6 @@ METHOD(plugin_t, destroy, void,
 plugin_t *sqlite_plugin_create()
 {
 	private_sqlite_plugin_t *this;
-	int threadsave = 0;
 
 	INIT(this,
 		.public = {
@@ -73,11 +71,6 @@ plugin_t *sqlite_plugin_create()
 		},
 	);
 
-#if SQLITE_VERSION_NUMBER >= 3005000
-	threadsave = sqlite3_threadsafe();
-#endif
-	DBG2(DBG_LIB, "using SQLite %s, thread safety %d",
-		 sqlite3_libversion(), threadsave);
-
 	return &this->public.plugin;
 }
+

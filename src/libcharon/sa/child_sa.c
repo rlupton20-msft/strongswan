@@ -34,8 +34,6 @@ ENUM(child_sa_state_names, CHILD_CREATED, CHILD_DESTROYING,
 	"INSTALLED",
 	"UPDATING",
 	"REKEYING",
-	"REKEYED",
-	"RETRYING",
 	"DELETING",
 	"DESTROYING",
 );
@@ -102,16 +100,6 @@ struct private_child_sa_t {
 	u_int32_t reqid;
 
 	/**
-	 * Did we allocate/confirm and must release the reqid?
-	 */
-	bool reqid_allocated;
-
-	/*
-	 * Unique CHILD_SA identifier
-	 */
-	u_int32_t unique_id;
-
-	/**
 	 * inbound mark used for this child_sa
 	 */
 	mark_t mark_in;
@@ -130,11 +118,6 @@ struct private_child_sa_t {
 	 * absolute time when the SA expires
 	 */
 	time_t expire_time;
-
-	/**
-	 * absolute time when SA has been installed
-	 */
-	time_t install_time;
 
 	/**
 	 * state of the CHILD_SA
@@ -238,12 +221,6 @@ METHOD(child_sa_t, get_reqid, u_int32_t,
 	   private_child_sa_t *this)
 {
 	return this->reqid;
-}
-
-METHOD(child_sa_t, get_unique_id, u_int32_t,
-	private_child_sa_t *this)
-{
-	return this->unique_id;
 }
 
 METHOD(child_sa_t, get_config, child_cfg_t*,
@@ -609,18 +586,12 @@ METHOD(child_sa_t, get_lifetime, time_t,
 	return hard ? this->expire_time : this->rekey_time;
 }
 
-METHOD(child_sa_t, get_installtime, time_t,
-	private_child_sa_t *this)
-{
-	return this->install_time;
-}
-
 METHOD(child_sa_t, alloc_spi, u_int32_t,
 	   private_child_sa_t *this, protocol_id_t protocol)
 {
 	if (hydra->kernel_interface->get_spi(hydra->kernel_interface,
 										 this->other_addr, this->my_addr,
-										 proto_ike2ip(protocol),
+										 proto_ike2ip(protocol), this->reqid,
 										 &this->my_spi) == SUCCESS)
 	{
 		/* if we allocate a SPI, but then are unable to establish the SA, we
@@ -636,7 +607,7 @@ METHOD(child_sa_t, alloc_cpi, u_int16_t,
 {
 	if (hydra->kernel_interface->get_cpi(hydra->kernel_interface,
 										 this->other_addr, this->my_addr,
-										 &this->my_cpi) == SUCCESS)
+										 this->reqid, &this->my_cpi) == SUCCESS)
 	{
 		return this->my_cpi;
 	}
@@ -650,7 +621,7 @@ METHOD(child_sa_t, install, status_t,
 {
 	u_int16_t enc_alg = ENCR_UNDEFINED, int_alg = AUTH_UNDEFINED, size;
 	u_int16_t esn = NO_EXT_SEQ_NUMBERS;
-	linked_list_t *src_ts = NULL, *dst_ts = NULL;
+	traffic_selector_t *src_ts = NULL, *dst_ts = NULL;
 	time_t now;
 	lifetime_cfg_t *lifetime;
 	u_int32_t tfc = 0;
@@ -698,18 +669,6 @@ METHOD(child_sa_t, install, status_t,
 	this->proposal->get_algorithm(this->proposal, EXTENDED_SEQUENCE_NUMBERS,
 								  &esn, NULL);
 
-	if (!this->reqid_allocated && !this->reqid)
-	{
-		status = hydra->kernel_interface->alloc_reqid(hydra->kernel_interface,
-							my_ts, other_ts, this->mark_in, this->mark_out,
-							&this->reqid);
-		if (status != SUCCESS)
-		{
-			return status;
-		}
-		this->reqid_allocated = TRUE;
-	}
-
 	lifetime = this->config->get_lifetime(this->config);
 
 	now = time_monotonic(NULL);
@@ -734,39 +693,30 @@ METHOD(child_sa_t, install, status_t,
 		lifetime->time.rekey = 0;
 	}
 
-	/* BEET requires the bound address from the traffic selectors */
+	/* BEET requires the bound address from the traffic selectors.
+	 * TODO: We add just the first traffic selector for now, as the
+	 * kernel accepts a single TS per SA only */
 	if (inbound)
 	{
-		dst_ts = my_ts;
-		src_ts = other_ts;
+		my_ts->get_first(my_ts, (void**)&dst_ts);
+		other_ts->get_first(other_ts, (void**)&src_ts);
 	}
 	else
 	{
-		src_ts = my_ts;
-		dst_ts = other_ts;
+		my_ts->get_first(my_ts, (void**)&src_ts);
+		other_ts->get_first(other_ts, (void**)&dst_ts);
 	}
 
 	status = hydra->kernel_interface->add_sa(hydra->kernel_interface,
 				src, dst, spi, proto_ike2ip(this->protocol), this->reqid,
 				inbound ? this->mark_in : this->mark_out, tfc,
 				lifetime, enc_alg, encr, int_alg, integ, this->mode,
-				this->ipcomp, cpi, this->config->get_replay_window(this->config),
-				initiator, this->encap, esn, inbound, update, src_ts, dst_ts);
+				this->ipcomp, cpi, initiator, this->encap, esn, update,
+				src_ts, dst_ts);
 
 	free(lifetime);
 
 	return status;
-}
-
-/**
- * Check kernel interface if policy updates are required
- */
-static bool require_policy_update()
-{
-	kernel_feature_t f;
-
-	f = hydra->kernel_interface->get_features(hydra->kernel_interface);
-	return !(f & KERNEL_NO_POLICY_UPDATES);
 }
 
 /**
@@ -826,19 +776,6 @@ METHOD(child_sa_t, add_policies, status_t,
 	traffic_selector_t *my_ts, *other_ts;
 	status_t status = SUCCESS;
 
-	if (!this->reqid_allocated && !this->reqid)
-	{
-		/* trap policy, get or confirm reqid */
-		status = hydra->kernel_interface->alloc_reqid(
-							hydra->kernel_interface, my_ts_list, other_ts_list,
-							this->mark_in, this->mark_out, &this->reqid);
-		if (status != SUCCESS)
-		{
-			return status;
-		}
-		this->reqid_allocated = TRUE;
-	}
-
 	/* apply traffic selectors */
 	enumerator = my_ts_list->create_enumerator(my_ts_list);
 	while (enumerator->enumerate(enumerator, &my_ts))
@@ -846,15 +783,12 @@ METHOD(child_sa_t, add_policies, status_t,
 		array_insert(this->my_ts, ARRAY_TAIL, my_ts->clone(my_ts));
 	}
 	enumerator->destroy(enumerator);
-	array_sort(this->my_ts, (void*)traffic_selector_cmp, NULL);
-
 	enumerator = other_ts_list->create_enumerator(other_ts_list);
 	while (enumerator->enumerate(enumerator, &other_ts))
 	{
 		array_insert(this->other_ts, ARRAY_TAIL, other_ts->clone(other_ts));
 	}
 	enumerator->destroy(enumerator);
-	array_sort(this->other_ts, (void*)traffic_selector_cmp, NULL);
 
 	if (this->config->install_policy(this->config))
 	{
@@ -891,21 +825,13 @@ METHOD(child_sa_t, add_policies, status_t,
 		priority = this->trap ? POLICY_PRIORITY_ROUTED
 							  : POLICY_PRIORITY_DEFAULT;
 
-		enumerator = create_policy_enumerator(this);
-		while (enumerator->enumerate(enumerator, &my_ts, &other_ts))
-		{
-			my_sa.policy_count++;
-			other_sa.policy_count++;
-		}
-		enumerator->destroy(enumerator);
-
 		/* enumerate pairs of traffic selectors */
 		enumerator = create_policy_enumerator(this);
 		while (enumerator->enumerate(enumerator, &my_ts, &other_ts))
 		{
 			/* install outbound drop policy to avoid packets leaving unencrypted
 			 * when updating policies */
-			if (priority == POLICY_PRIORITY_DEFAULT && require_policy_update())
+			if (priority == POLICY_PRIORITY_DEFAULT)
 			{
 				status |= install_policies_internal(this, this->my_addr,
 									this->other_addr, my_ts, other_ts,
@@ -979,7 +905,6 @@ METHOD(child_sa_t, update, status_t,
 							this->other_addr, this->my_addr, other, me,
 							this->encap, encap, this->mark_in) == NOT_SUPPORTED)
 			{
-				set_state(this, old);
 				return NOT_SUPPORTED;
 			}
 		}
@@ -993,13 +918,12 @@ METHOD(child_sa_t, update, status_t,
 							this->my_addr, this->other_addr, me, other,
 							this->encap, encap, this->mark_out) == NOT_SUPPORTED)
 			{
-				set_state(this, old);
 				return NOT_SUPPORTED;
 			}
 		}
 	}
 
-	if (this->config->install_policy(this->config) && require_policy_update())
+	if (this->config->install_policy(this->config))
 	{
 		ipsec_sa_cfg_t my_sa = {
 			.mode = this->mode,
@@ -1115,22 +1039,6 @@ METHOD(child_sa_t, destroy, void,
 
 	set_state(this, CHILD_DESTROYING);
 
-	if (this->config->install_policy(this->config))
-	{
-		/* delete all policies in the kernel */
-		enumerator = create_policy_enumerator(this);
-		while (enumerator->enumerate(enumerator, &my_ts, &other_ts))
-		{
-			del_policies_internal(this, my_ts, other_ts, priority);
-			if (priority == POLICY_PRIORITY_DEFAULT && require_policy_update())
-			{
-				del_policies_internal(this, my_ts, other_ts,
-									  POLICY_PRIORITY_FALLBACK);
-			}
-		}
-		enumerator->destroy(enumerator);
-	}
-
 	/* delete SAs in the kernel, if they are set up */
 	if (this->my_spi)
 	{
@@ -1147,13 +1055,20 @@ METHOD(child_sa_t, destroy, void,
 					this->mark_out);
 	}
 
-	if (this->reqid_allocated)
+	if (this->config->install_policy(this->config))
 	{
-		if (hydra->kernel_interface->release_reqid(hydra->kernel_interface,
-						this->reqid, this->mark_in, this->mark_out) != SUCCESS)
+		/* delete all policies in the kernel */
+		enumerator = create_policy_enumerator(this);
+		while (enumerator->enumerate(enumerator, &my_ts, &other_ts))
 		{
-			DBG1(DBG_CHD, "releasing reqid %u failed", this->reqid);
+			del_policies_internal(this, my_ts, other_ts, priority);
+			if (priority == POLICY_PRIORITY_DEFAULT)
+			{
+				del_policies_internal(this, my_ts, other_ts,
+									  POLICY_PRIORITY_FALLBACK);
+			}
 		}
+		enumerator->destroy(enumerator);
 	}
 
 	array_destroy_offset(this->my_ts, offsetof(traffic_selector_t, destroy));
@@ -1204,17 +1119,15 @@ static host_t* get_proxy_addr(child_cfg_t *config, host_t *ike, bool local)
  * Described in header.
  */
 child_sa_t * child_sa_create(host_t *me, host_t* other,
-							 child_cfg_t *config, u_int32_t rekey, bool encap,
-							 u_int mark_in, u_int mark_out)
+							 child_cfg_t *config, u_int32_t rekey, bool encap)
 {
+	static refcount_t reqid = 0;
 	private_child_sa_t *this;
-	static refcount_t unique_id = 0, unique_mark = 0, mark;
 
 	INIT(this,
 		.public = {
 			.get_name = _get_name,
 			.get_reqid = _get_reqid,
-			.get_unique_id = _get_unique_id,
 			.get_config = _get_config,
 			.get_state = _get_state,
 			.set_state = _set_state,
@@ -1227,7 +1140,6 @@ child_sa_t * child_sa_create(host_t *me, host_t* other,
 			.get_proposal = _get_proposal,
 			.set_proposal = _set_proposal,
 			.get_lifetime = _get_lifetime,
-			.get_installtime = _get_installtime,
 			.get_usestats = _get_usestats,
 			.get_mark = _get_mark,
 			.has_encap = _has_encap,
@@ -1256,46 +1168,16 @@ child_sa_t * child_sa_create(host_t *me, host_t* other,
 		.close_action = config->get_close_action(config),
 		.dpd_action = config->get_dpd_action(config),
 		.reqid = config->get_reqid(config),
-		.unique_id = ref_get(&unique_id),
 		.mark_in = config->get_mark(config, TRUE),
 		.mark_out = config->get_mark(config, FALSE),
-		.install_time = time_monotonic(NULL),
 	);
 
 	this->config = config;
 	config->get_ref(config);
 
-	if (mark_in)
-	{
-		this->mark_in.value = mark_in;
-	}
-	if (mark_out)
-	{
-		this->mark_out.value = mark_out;
-	}
-	if (this->mark_in.value == MARK_UNIQUE ||
-		this->mark_out.value == MARK_UNIQUE)
-	{
-		mark = ref_get(&unique_mark);
-		if (this->mark_in.value == MARK_UNIQUE)
-		{
-			this->mark_in.value = mark;
-		}
-		if (this->mark_out.value == MARK_UNIQUE)
-		{
-			this->mark_out.value = mark;
-		}
-	}
-
 	if (!this->reqid)
 	{
-		/* reuse old reqid if we are rekeying an existing CHILD_SA. While the
-		 * reqid cache would find the same reqid for our selectors, this does
-		 * not work in a special case: If an SA is triggered by a trap policy,
-		 * but the negotiated SA gets narrowed, we still must reuse the same
-		 * reqid to successfully "trigger" the SA on the kernel level. Rekeying
-		 * such an SA requires an explicit reqid, as the cache currently knows
-		 * the original selectors only for that reqid. */
+		/* reuse old reqid if we are rekeying an existing CHILD_SA */
 		if (rekey)
 		{
 			this->reqid = rekey;
@@ -1303,7 +1185,20 @@ child_sa_t * child_sa_create(host_t *me, host_t* other,
 		else
 		{
 			this->reqid = charon->traps->find_reqid(charon->traps, config);
+			if (!this->reqid)
+			{
+				this->reqid = ref_get(&reqid);
+			}
 		}
+	}
+
+	if (this->mark_in.value == MARK_REQID)
+	{
+		this->mark_in.value = this->reqid;
+	}
+	if (this->mark_out.value == MARK_REQID)
+	{
+		this->mark_out.value = this->reqid;
 	}
 
 	/* MIPv6 proxy transport mode sets SA endpoints to TS hosts */

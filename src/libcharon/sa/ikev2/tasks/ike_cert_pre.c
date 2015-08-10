@@ -138,10 +138,10 @@ static void process_certreqs(private_ike_cert_pre_t *this, message_t *message)
 	{
 		switch (payload->get_type(payload))
 		{
-			case PLV2_CERTREQ:
+			case CERTIFICATE_REQUEST:
 				process_certreq(this, (certreq_payload_t*)payload, auth);
 				break;
-			case PLV2_NOTIFY:
+			case NOTIFY:
 				process_notify(this, (notify_payload_t*)payload);
 				break;
 			default:
@@ -229,12 +229,12 @@ static void process_x509(cert_payload_t *payload, auth_cfg_t *auth,
 			return;
 		}
 		url = strdup(url);
-		if (*first)
+		if (first)
 		{	/* first URL is for an end entity certificate */
 			DBG1(DBG_IKE, "received hash-and-url for end entity cert \"%s\"",
 				 url);
 			auth->add(auth, AUTH_HELPER_SUBJECT_HASH_URL, url);
-			*first = FALSE;
+			first = FALSE;
 		}
 		else
 		{
@@ -260,30 +260,6 @@ static void process_crl(cert_payload_t *payload, auth_cfg_t *auth)
 }
 
 /**
- * Process an attribute certificate payload
- */
-static void process_ac(cert_payload_t *payload, auth_cfg_t *auth)
-{
-	certificate_t *cert;
-
-	cert = payload->get_cert(payload);
-	if (cert)
-	{
-		if (cert->get_issuer(cert))
-		{
-			DBG1(DBG_IKE, "received attribute certificate issued by \"%Y\"",
-				 cert->get_issuer(cert));
-		}
-		else if (cert->get_subject(cert))
-		{
-			DBG1(DBG_IKE, "received attribute certificate for \"%Y\"",
-				 cert->get_subject(cert));
-		}
-		auth->add(auth, AUTH_HELPER_AC_CERT, cert);
-	}
-}
-
-/**
  * Process certificate payloads
  */
 static void process_certs(private_ike_cert_pre_t *this, message_t *message)
@@ -298,7 +274,7 @@ static void process_certs(private_ike_cert_pre_t *this, message_t *message)
 	enumerator = message->create_payload_enumerator(message);
 	while (enumerator->enumerate(enumerator, &payload))
 	{
-		if (payload->get_type(payload) == PLV2_CERTIFICATE)
+		if (payload->get_type(payload) == CERTIFICATE)
 		{
 			cert_payload_t *cert_payload;
 			cert_encoding_t encoding;
@@ -322,15 +298,13 @@ static void process_certs(private_ike_cert_pre_t *this, message_t *message)
 				case ENC_CRL:
 					process_crl(cert_payload, auth);
 					break;
-				case ENC_X509_ATTRIBUTE:
-					process_ac(cert_payload, auth);
-					break;
 				case ENC_PKCS7_WRAPPED_X509:
 				case ENC_PGP:
 				case ENC_DNS_SIGNED_KEY:
 				case ENC_KERBEROS_TOKEN:
 				case ENC_ARL:
 				case ENC_SPKI:
+				case ENC_X509_ATTRIBUTE:
 				case ENC_RAW_RSA_KEY:
 				case ENC_X509_HASH_AND_URL_BUNDLE:
 				case ENC_OCSP_CONTENT:
@@ -454,7 +428,7 @@ static void build_certreqs(private_ike_cert_pre_t *this, message_t *message)
 		message->add_payload(message, (payload_t*)req);
 
 		if (lib->settings->get_bool(lib->settings,
-									"%s.hash_and_url", FALSE, lib->ns))
+									"%s.hash_and_url", FALSE, charon->name))
 		{
 			message->add_notify(message, FALSE, HTTP_CERT_LOOKUP_SUPPORTED,
 								chunk_empty);
@@ -469,7 +443,7 @@ static void build_certreqs(private_ike_cert_pre_t *this, message_t *message)
 static bool final_auth(message_t *message)
 {
 	/* we check for an AUTH payload without a ANOTHER_AUTH_FOLLOWS notify */
-	if (message->get_payload(message, PLV2_AUTH) == NULL)
+	if (message->get_payload(message, AUTHENTICATION) == NULL)
 	{
 		return FALSE;
 	}

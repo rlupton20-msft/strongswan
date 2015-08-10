@@ -87,21 +87,10 @@ static void entry_destroy(entry_t *entry)
 }
 
 /**
- * Data for async disconnect job
+ * Disconnect a stream, remove connection entry
  */
-typedef struct {
-	/** socket ref */
-	private_lookip_socket_t *this;
-	/** stream to disconnect */
-	stream_t *stream;
-} disconnect_data_t;
-
-/**
- * Disconnect a stream asynchronously, remove connection entry
- */
-static job_requeue_t disconnect_async(disconnect_data_t *data)
+static void disconnect(private_lookip_socket_t *this, stream_t *stream)
 {
-	private_lookip_socket_t *this = data->this;
 	enumerator_t *enumerator;
 	entry_t *entry;
 
@@ -109,7 +98,7 @@ static job_requeue_t disconnect_async(disconnect_data_t *data)
 	enumerator = this->connected->create_enumerator(this->connected);
 	while (enumerator->enumerate(enumerator, &entry))
 	{
-		if (entry->stream == data->stream)
+		if (entry->stream == stream)
 		{
 			this->connected->remove_at(this->connected, enumerator);
 			if (entry->up || entry->down)
@@ -122,24 +111,6 @@ static job_requeue_t disconnect_async(disconnect_data_t *data)
 	}
 	enumerator->destroy(enumerator);
 	this->mutex->unlock(this->mutex);
-	return JOB_REQUEUE_NONE;
-}
-
-/**
- * Queue async disconnect job
- */
-static void disconnect(private_lookip_socket_t *this, stream_t *stream)
-{
-	disconnect_data_t *data;
-
-	INIT(data,
-		.this = this,
-		.stream = stream,
-	);
-
-	lib->processor->queue_job(lib->processor,
-			(job_t*)callback_job_create((void*)disconnect_async, data,
-										free, NULL));
 }
 
 /**
@@ -422,8 +393,8 @@ lookip_socket_t *lookip_socket_create(lookip_listener_t *listener)
 	);
 
 	uri = lib->settings->get_str(lib->settings,
-							"%s.plugins.lookip.socket", "unix://" LOOKIP_SOCKET,
-							lib->ns);
+				"%s.plugins.lookip.socket", "unix://" LOOKIP_SOCKET,
+				charon->name);
 	this->service = lib->streams->create_service(lib->streams, uri, 10);
 	if (!this->service)
 	{

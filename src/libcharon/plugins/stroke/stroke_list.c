@@ -31,9 +31,8 @@
 #include <credentials/certificates/ac.h>
 #include <credentials/certificates/crl.h>
 #include <credentials/certificates/pgp_certificate.h>
+#include <credentials/ietf_attributes/ietf_attributes.h>
 #include <config/peer_cfg.h>
-#include <asn1/asn1.h>
-#include <asn1/oid.h>
 
 /* warning intervals for list functions */
 #define CERT_WARNING_INTERVAL  30	/* days */
@@ -214,12 +213,11 @@ static void log_child_sa(FILE *out, child_sa_t *child_sa, bool all)
 	config = child_sa->get_config(child_sa);
 	now = time_monotonic(NULL);
 
-	fprintf(out, "%12s{%d}:  %N, %N%s, reqid %u",
-			child_sa->get_name(child_sa), child_sa->get_unique_id(child_sa),
+	fprintf(out, "%12s{%d}:  %N, %N%s",
+			child_sa->get_name(child_sa), child_sa->get_reqid(child_sa),
 			child_sa_state_names, child_sa->get_state(child_sa),
 			ipsec_mode_names, child_sa->get_mode(child_sa),
-			config->use_proxy_mode(config) ? "_PROXY" : "",
-			child_sa->get_reqid(child_sa));
+			config->use_proxy_mode(config) ? "_PROXY" : "");
 
 	if (child_sa->get_state(child_sa) == CHILD_INSTALLED)
 	{
@@ -239,7 +237,7 @@ static void log_child_sa(FILE *out, child_sa_t *child_sa, bool all)
 		if (all)
 		{
 			fprintf(out, "\n%12s{%d}:  ", child_sa->get_name(child_sa),
-					child_sa->get_unique_id(child_sa));
+					child_sa->get_reqid(child_sa));
 
 			proposal = child_sa->get_proposal(child_sa);
 			if (proposal)
@@ -323,8 +321,7 @@ static void log_child_sa(FILE *out, child_sa_t *child_sa, bool all)
 
 		}
 	}
-	else if (child_sa->get_state(child_sa) == CHILD_REKEYING ||
-			 child_sa->get_state(child_sa) == CHILD_REKEYED)
+	else if (child_sa->get_state(child_sa) == CHILD_REKEYING)
 	{
 		rekey = child_sa->get_lifetime(child_sa, TRUE);
 		fprintf(out, ", expires in %V", &now, &rekey);
@@ -335,7 +332,7 @@ static void log_child_sa(FILE *out, child_sa_t *child_sa, bool all)
 	other_ts = linked_list_create_from_enumerator(
 							child_sa->create_ts_enumerator(child_sa, FALSE));
 	fprintf(out, "\n%12s{%d}:   %#R=== %#R\n",
-			child_sa->get_name(child_sa), child_sa->get_unique_id(child_sa),
+			child_sa->get_name(child_sa), child_sa->get_reqid(child_sa),
 			my_ts, other_ts);
 	my_ts->destroy(my_ts);
 	other_ts->destroy(other_ts);
@@ -498,7 +495,7 @@ METHOD(stroke_list_t, status, void,
 		{
 			struct mallinfo mi = mallinfo();
 
-			fprintf(out, "  malloc: sbrk %u, mmap %u, used %u, free %u\n",
+			fprintf(out, "  malloc: sbrk %d, mmap %d, used %d, free %d\n",
 				    mi.arena, mi.hblkhd, mi.uordblks, mi.fordblks);
 		}
 #endif /* HAVE_MALLINFO */
@@ -1030,19 +1027,16 @@ static void stroke_list_certs(linked_list_t *list, char *label,
 static void stroke_list_acerts(linked_list_t *list, bool utc, FILE *out)
 {
 	bool first = TRUE;
-	time_t notBefore, notAfter, now = time(NULL);
-	enumerator_t *enumerator;
+	time_t thisUpdate, nextUpdate, now = time(NULL);
+	enumerator_t *enumerator = list->create_enumerator(list);
 	certificate_t *cert;
 
-	enumerator = list->create_enumerator(list);
-	while (enumerator->enumerate(enumerator, &cert))
+	while (enumerator->enumerate(enumerator, (void**)&cert))
 	{
 		ac_t *ac = (ac_t*)cert;
-		ac_group_type_t type;
 		identification_t *id;
-		enumerator_t *groups;
+		ietf_attributes_t *groups;
 		chunk_t chunk;
-		bool firstgroup = TRUE;
 
 		if (first)
 		{
@@ -1067,79 +1061,30 @@ static void stroke_list_acerts(linked_list_t *list, bool utc, FILE *out)
 		{
 			fprintf(out, "  hserial:   %#B\n", &chunk);
 		}
-		groups = ac->create_group_enumerator(ac);
-		while (groups->enumerate(groups, &type, &chunk))
+		groups = ac->get_groups(ac);
+		if (groups)
 		{
-			int oid;
-			char *str;
-
-			if (firstgroup)
-			{
-				fprintf(out, "  groups:    ");
-				firstgroup = FALSE;
-			}
-			else
-			{
-				fprintf(out, "             ");
-			}
-			switch (type)
-			{
-				case AC_GROUP_TYPE_STRING:
-					fprintf(out, "%.*s", (int)chunk.len, chunk.ptr);
-					break;
-				case AC_GROUP_TYPE_OID:
-					oid = asn1_known_oid(chunk);
-					if (oid == OID_UNKNOWN)
-					{
-						str = asn1_oid_to_string(chunk);
-						if (str)
-						{
-							fprintf(out, "%s", str);
-							free(str);
-						}
-						else
-						{
-							fprintf(out, "OID:%#B", &chunk);
-						}
-					}
-					else
-					{
-						fprintf(out, "%s", oid_names[oid].name);
-					}
-					break;
-				case AC_GROUP_TYPE_OCTETS:
-					fprintf(out, "%#B", &chunk);
-					break;
-			}
-			fprintf(out, "\n");
+			fprintf(out, "  groups:    %s\n", groups->get_string(groups));
+			groups->destroy(groups);
 		}
-		groups->destroy(groups);
 		fprintf(out, "  issuer:   \"%Y\"\n", cert->get_issuer(cert));
 		chunk  = chunk_skip_zero(ac->get_serial(ac));
 		fprintf(out, "  serial:    %#B\n", &chunk);
 
 		/* list validity */
-		cert->get_validity(cert, &now, &notBefore, &notAfter);
-		fprintf(out, "  validity:  not before %T, ", &notBefore, utc);
-		if (now < notBefore)
+		cert->get_validity(cert, &now, &thisUpdate, &nextUpdate);
+		fprintf(out, "  updates:   this %T\n",  &thisUpdate, utc);
+		fprintf(out, "             next %T, ", &nextUpdate, utc);
+		if (now > nextUpdate)
 		{
-			fprintf(out, "not valid yet (valid in %V)\n", &now, &notBefore);
-		}
-		else
-		{
-			fprintf(out, "ok\n");
-		}
-		fprintf(out, "             not after  %T, ", &notAfter, utc);
-		if (now > notAfter)
-		{
-			fprintf(out, "expired (%V ago)\n", &now, &notAfter);
+			fprintf(out, "expired (%V ago)\n", &now, &nextUpdate);
 		}
 		else
 		{
 			fprintf(out, "ok");
-			if (now > notAfter - AC_WARNING_INTERVAL * 60 * 60 * 24)
+			if (now > nextUpdate - AC_WARNING_INTERVAL * 60 * 60 * 24)
 			{
-				fprintf(out, " (expires in %V)", &now, &notAfter);
+				fprintf(out, " (expires in %V)", &now, &nextUpdate);
 			}
 			fprintf(out, " \n");
 		}

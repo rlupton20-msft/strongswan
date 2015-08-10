@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2013-2014 Andreas Steffen
+ * Copyright (C) 2013 Andreas Steffen
  * HSR Hochschule fuer Technik Rapperswil
  *
  * This program is free software; you can redistribute it and/or modify it
@@ -94,14 +94,10 @@ static TNC_Result receive_msg(private_imv_scanner_agent_t *this,
 	ietf_attr_port_filter_t *port_filter_attr;
 	bool fatal_error = FALSE;
 
-	/* generate an outgoing PA-TNC message - we might need it */
-	out_msg = imv_msg_create_as_reply(in_msg);
-
 	/* parse received PA-TNC message and handle local and remote errors */
-	result = in_msg->receive(in_msg, out_msg, &fatal_error);
+	result = in_msg->receive(in_msg, &fatal_error);
 	if (result != TNC_RESULT_SUCCESS)
 	{
-		out_msg->destroy(out_msg);
 		return result;
 	}
 
@@ -125,20 +121,17 @@ static TNC_Result receive_msg(private_imv_scanner_agent_t *this,
 		state->set_recommendation(state,
 								TNC_IMV_ACTION_RECOMMENDATION_NO_RECOMMENDATION,
 								TNC_IMV_EVALUATION_RESULT_ERROR);
+		out_msg = imv_msg_create_as_reply(in_msg);
 		result = out_msg->send_assessment(out_msg);
-		if (result == TNC_RESULT_SUCCESS)
+		out_msg->destroy(out_msg);
+		if (result != TNC_RESULT_SUCCESS)
 		{
-			result = this->agent->provide_recommendation(this->agent, state);
+			return result;
 		}
+		return this->agent->provide_recommendation(this->agent, state);
 	}
-	else
-	{
-		/* send PA-TNC message with the EXCL flag set */
-		result = out_msg->send(out_msg, TRUE);
-	}
-	out_msg->destroy(out_msg);
 
-	return result;
+	return TNC_RESULT_SUCCESS;
 }
 
 METHOD(imv_agent_if_t, receive_message, TNC_Result,
@@ -266,7 +259,7 @@ METHOD(imv_agent_if_t, batch_ending, TNC_Result,
 	out_msg = imv_msg_create(this->agent, state, id, imv_id, TNC_IMCID_ANY,
 							 msg_types[0]);
 
-	if (!imcv_db)
+	if (!session)
 	{
 		DBG2(DBG_IMV, "no workitems available - no evaluation possible");
 		state->set_recommendation(state,
@@ -283,8 +276,7 @@ METHOD(imv_agent_if_t, batch_ending, TNC_Result,
 		return this->agent->provide_recommendation(this->agent, state);
 	}
 
-	if (handshake_state == IMV_SCANNER_STATE_INIT &&
-		session->get_policy_started(session))
+	if (handshake_state == IMV_SCANNER_STATE_INIT)
 	{
 		enumerator = session->create_workitem_enumerator(session);
 		if (enumerator)

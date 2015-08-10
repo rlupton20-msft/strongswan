@@ -79,7 +79,8 @@ static linked_list_t* load_proposals(private_custom_proposal_t *this,
 			type = strtoul(key, &end, 10);
 			if (end == key || errno)
 			{
-				if (!enum_from_name(transform_type_names, key, &type))
+				type = enum_from_name(transform_type_names, key);
+				if (type == -1)
 				{
 					DBG1(DBG_CFG, "unknown transform: '%s', skipped", key);
 					continue;
@@ -124,7 +125,7 @@ METHOD(listener_t, message, bool,
 		enumerator = message->create_payload_enumerator(message);
 		while (enumerator->enumerate(enumerator, &payload))
 		{
-			if (payload->get_type(payload) == PLV2_SECURITY_ASSOCIATION)
+			if (payload->get_type(payload) == SECURITY_ASSOCIATION)
 			{
 				old = (sa_payload_t*)payload;
 				message->remove_payload_at(message, enumerator);

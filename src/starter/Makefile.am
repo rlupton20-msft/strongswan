@@ -1,22 +1,15 @@
-SUBDIRS = . tests
-
 ipsec_PROGRAMS = starter
 starter_SOURCES = \
-starter.c files.h \
-args.c args.h confread.c confread.h keywords.c keywords.h cmp.c cmp.h \
-invokecharon.c invokecharon.h starterstroke.c starterstroke.h \
-netkey.c netkey.h klips.c klips.h
-
-# parser is also used by tests
-noinst_LTLIBRARIES = libstarter.la
-libstarter_la_SOURCES = \
-parser/parser.y parser/lexer.l parser/conf_parser.c parser/conf_parser.h
+parser.y lexer.l ipsec-parser.h netkey.c args.h netkey.h \
+starterstroke.c confread.c \
+starterstroke.h confread.h args.c \
+keywords.c files.h keywords.h cmp.c starter.c cmp.h invokecharon.c \
+invokecharon.h klips.c klips.h
 
 AM_CPPFLAGS = \
 	-I${linux_headers} \
 	-I$(top_srcdir)/src/libstrongswan \
 	-I$(top_srcdir)/src/libhydra \
-	-I$(top_srcdir)/src/starter \
 	-I$(top_srcdir)/src/stroke \
 	-DIPSEC_DIR=\"${ipsecdir}\" \
 	-DIPSEC_CONFDIR=\"${sysconfdir}\" \
@@ -30,21 +23,20 @@ AM_CPPFLAGS = \
 
 AM_YFLAGS = -v -d
 
-starter_LDADD = \
-	$(top_builddir)/src/libstrongswan/libstrongswan.la \
-	$(top_builddir)/src/libhydra/libhydra.la \
-	libstarter.la \
-	$(SOCKLIB) $(PTHREADLIB)
-
+starter_LDADD = $(top_builddir)/src/libstrongswan/libstrongswan.la $(top_builddir)/src/libhydra/libhydra.la $(SOCKLIB) $(PTHREADLIB)
 EXTRA_DIST = keywords.txt ipsec.conf Android.mk
 MAINTAINERCLEANFILES = keywords.c
-BUILT_SOURCES = keywords.c parser/parser.h
+BUILT_SOURCES = parser.h
+
+if USE_CHARON
+  AM_CPPFLAGS += -DSTART_CHARON
+endif
 
 if USE_LOAD_WARNING
   AM_CPPFLAGS += -DLOAD_WARNING
 endif
 
-if USE_SCEPCLIENT
+if USE_TOOLS
   AM_CPPFLAGS += -DGENERATE_SELFCERT
 endif
 

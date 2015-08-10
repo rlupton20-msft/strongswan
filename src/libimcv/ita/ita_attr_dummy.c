@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2012-2014 Andreas Steffen
+ * Copyright (C) 2012 Andreas Steffen
  * HSR Hochschule fuer Technik Rapperswil
  *
  * This program is free software; you can redistribute it and/or modify it
@@ -38,12 +38,7 @@ struct private_ita_attr_dummy_t {
 	pen_type_t type;
 
 	/**
-	 * Length of attribute value
-	 */
-	size_t length;
-
-	/**
-	 * Attribute value or segment
+	 * Attribute value
 	 */
 	chunk_t value;
 
@@ -94,26 +89,16 @@ METHOD(pa_tnc_attr_t, build, void,
 	{
 		return;
 	}
-	this->value = chunk_alloc(this->length);
+	this->value = chunk_alloc(this->size);
 	memset(this->value.ptr, 0xdd, this->value.len);
 }
 
 METHOD(pa_tnc_attr_t, process, status_t,
 	private_ita_attr_dummy_t *this, u_int32_t *offset)
 {
-	*offset = 0;
+	this->size = this->value.len;
 
-	if (this->value.len < this->length)
-	{
-		return NEED_MORE;
-	}
 	return SUCCESS;
-}
-
-METHOD(pa_tnc_attr_t, add_segment, void,
-	private_ita_attr_dummy_t *this, chunk_t segment)
-{
-	this->value = chunk_cat("mc", this->value, segment);
 }
 
 METHOD(pa_tnc_attr_t, get_ref, pa_tnc_attr_t*,
@@ -136,13 +121,13 @@ METHOD(pa_tnc_attr_t, destroy, void,
 METHOD(ita_attr_dummy_t, get_size, int,
 	private_ita_attr_dummy_t *this)
 {
-	return this->length;
+	return this->size;
 }
 
 /**
  * Described in header.
  */
-pa_tnc_attr_t *ita_attr_dummy_create(size_t size)
+pa_tnc_attr_t *ita_attr_dummy_create(int size)
 {
 	private_ita_attr_dummy_t *this;
 
@@ -155,14 +140,13 @@ pa_tnc_attr_t *ita_attr_dummy_create(size_t size)
 				.set_noskip_flag = _set_noskip_flag,
 				.build = _build,
 				.process = _process,
-				.add_segment = _add_segment,
 				.get_ref = _get_ref,
 				.destroy = _destroy,
 			},
 			.get_size = _get_size,
 		},
 		.type = { PEN_ITA, ITA_ATTR_DUMMY },
-		.length = size,
+		.size = size,
 		.ref = 1,
 	);
 
@@ -172,7 +156,7 @@ pa_tnc_attr_t *ita_attr_dummy_create(size_t size)
 /**
  * Described in header.
  */
-pa_tnc_attr_t *ita_attr_dummy_create_from_data(size_t length, chunk_t data)
+pa_tnc_attr_t *ita_attr_dummy_create_from_data(chunk_t data)
 {
 	private_ita_attr_dummy_t *this;
 
@@ -185,14 +169,12 @@ pa_tnc_attr_t *ita_attr_dummy_create_from_data(size_t length, chunk_t data)
 				.set_noskip_flag = _set_noskip_flag,
 				.build = _build,
 				.process = _process,
-				.add_segment = _add_segment,
 				.get_ref = _get_ref,
 				.destroy = _destroy,
 			},
 			.get_size = _get_size,
 		},
 		.type = { PEN_ITA, ITA_ATTR_DUMMY },
-		.length = length,
 		.value = chunk_clone(data),
 		.ref = 1,
 	);

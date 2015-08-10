@@ -16,8 +16,7 @@
 #include <library.h>
 #include <errno.h>
 #include <unistd.h>
-
-#include "stream.h"
+#include <limits.h>
 
 typedef struct private_stream_t private_stream_t;
 
@@ -66,7 +65,7 @@ METHOD(stream_t, read_, ssize_t,
 
 		if (block)
 		{
-			ret = recv(this->fd, buf, len, 0);
+			ret = read(this->fd, buf, len);
 		}
 		else
 		{
@@ -117,7 +116,7 @@ METHOD(stream_t, write_, ssize_t,
 	{
 		if (block)
 		{
-			ret = send(this->fd, buf, len, 0);
+			ret = write(this->fd, buf, len);
 		}
 		else
 		{
@@ -157,6 +156,17 @@ METHOD(stream_t, write_all, bool,
 		buf += ret;
 	}
 	return TRUE;
+}
+
+/**
+ * Remove a registered watcher
+ */
+static void remove_watcher(private_stream_t *this)
+{
+	if (this->read_cb || this->write_cb)
+	{
+		lib->watcher->remove(lib->watcher, this->fd);
+	}
 }
 
 /**
@@ -218,7 +228,7 @@ static void add_watcher(private_stream_t *this)
 METHOD(stream_t, on_read, void,
 	private_stream_t *this, stream_cb_t cb, void *data)
 {
-	lib->watcher->remove(lib->watcher, this->fd);
+	remove_watcher(this);
 
 	this->read_cb = cb;
 	this->read_data = data;
@@ -229,7 +239,7 @@ METHOD(stream_t, on_read, void,
 METHOD(stream_t, on_write, void,
 	private_stream_t *this, stream_cb_t cb, void *data)
 {
-	lib->watcher->remove(lib->watcher, this->fd);
+	remove_watcher(this);
 
 	this->write_cb = cb;
 	this->write_data = data;
@@ -260,7 +270,7 @@ METHOD(stream_t, get_file, FILE*,
 METHOD(stream_t, destroy, void,
 	private_stream_t *this)
 {
-	lib->watcher->remove(lib->watcher, this->fd);
+	remove_watcher(this);
 	close(this->fd);
 	free(this);
 }
@@ -287,4 +297,130 @@ stream_t *stream_create_from_fd(int fd)
 	);
 
 	return &this->public;
+}
+
+/**
+ * See header
+ */
+int stream_parse_uri_unix(char *uri, struct sockaddr_un *addr)
+{
+	if (!strpfx(uri, "unix://"))
+	{
+		return -1;
+	}
+	uri += strlen("unix://");
+
+	memset(addr, 0, sizeof(*addr));
+	addr->sun_family = AF_UNIX;
+	strncpy(addr->sun_path, uri, sizeof(addr->sun_path));
+	addr->sun_path[sizeof(addr->sun_path)-1] = '\0';
+
+	return offsetof(struct sockaddr_un, sun_path) + strlen(addr->sun_path);
+}
+
+/**
+ * See header
+ */
+stream_t *stream_create_unix(char *uri)
+{
+	struct sockaddr_un addr;
+	int len, fd;
+
+	len = stream_parse_uri_unix(uri, &addr);
+	if (len == -1)
+	{
+		DBG1(DBG_NET, "invalid stream URI: '%s'", uri);
+		return NULL;
+	}
+	fd = socket(AF_UNIX, SOCK_STREAM, 0);
+	if (fd < 0)
+	{
+		DBG1(DBG_NET, "opening socket '%s' failed: %s", uri, strerror(errno));
+		return NULL;
+	}
+	if (connect(fd, (struct sockaddr*)&addr, len) < 0)
+	{
+		DBG1(DBG_NET, "connecting to '%s' failed: %s", uri, strerror(errno));
+		close(fd);
+		return NULL;
+	}
+	return stream_create_from_fd(fd);
+}
+
+/**
+ * See header.
+ */
+int stream_parse_uri_tcp(char *uri, struct sockaddr *addr)
+{
+	char *pos, buf[128];
+	host_t *host;
+	u_long port;
+	int len;
+
+	if (!strpfx(uri, "tcp://"))
+	{
+		return -1;
+	}
+	uri += strlen("tcp://");
+	pos = strrchr(uri, ':');
+	if (!pos)
+	{
+		return -1;
+	}
+	if (*uri == '[' && pos > uri && *(pos - 1) == ']')
+	{
+		/* IPv6 URI */
+		snprintf(buf, sizeof(buf), "%.*s", (int)(pos - uri - 2), uri + 1);
+	}
+	else
+	{
+		snprintf(buf, sizeof(buf), "%.*s", (int)(pos - uri), uri);
+	}
+	port = strtoul(pos + 1, &pos, 10);
+	if (port == ULONG_MAX || *pos || port > 65535)
+	{
+		return -1;
+	}
+	host = host_create_from_dns(buf, AF_UNSPEC, port);
+	if (!host)
+	{
+		return -1;
+	}
+	len = *host->get_sockaddr_len(host);
+	memcpy(addr, host->get_sockaddr(host), len);
+	host->destroy(host);
+	return len;
+}
+
+/**
+ * See header
+ */
+stream_t *stream_create_tcp(char *uri)
+{
+	union {
+		struct sockaddr_in in;
+		struct sockaddr_in6 in6;
+		struct sockaddr sa;
+	} addr;
+	int fd, len;
+
+	len = stream_parse_uri_tcp(uri, &addr.sa);
+	if (len == -1)
+	{
+		DBG1(DBG_NET, "invalid stream URI: '%s'", uri);
+		return NULL;
+	}
+	fd = socket(addr.sa.sa_family, SOCK_STREAM, 0);
+	if (fd < 0)
+	{
+		DBG1(DBG_NET, "opening socket '%s' failed: %s", uri, strerror(errno));
+		return NULL;
+	}
+	if (connect(fd, &addr.sa, len))
+	{
+		DBG1(DBG_NET, "connecting to '%s' failed: %s", uri, strerror(errno));
+		close(fd);
+		return NULL;
+	}
+	return stream_create_from_fd(fd);
 }

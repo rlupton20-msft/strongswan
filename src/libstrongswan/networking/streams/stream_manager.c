@@ -15,13 +15,6 @@
 
 #include "stream_manager.h"
 
-#include "stream_tcp.h"
-#include "stream_service_tcp.h"
-#ifndef WIN32
-# include "stream_unix.h"
-# include "stream_service_unix.h"
-#endif
-
 #include <threading/rwlock.h>
 
 typedef struct private_stream_manager_t private_stream_manager_t;
@@ -200,12 +193,10 @@ METHOD(stream_manager_t, remove_service, void,
 METHOD(stream_manager_t, destroy, void,
 	private_stream_manager_t *this)
 {
-	remove_stream(this, stream_create_tcp);
-	remove_service(this, stream_service_create_tcp);
-#ifndef WIN32
 	remove_stream(this, stream_create_unix);
+	remove_stream(this, stream_create_tcp);
 	remove_service(this, stream_service_create_unix);
-#endif
+	remove_service(this, stream_service_create_tcp);
 
 	this->streams->destroy(this->streams);
 	this->services->destroy(this->services);
@@ -235,12 +226,10 @@ stream_manager_t *stream_manager_create()
 		.lock = rwlock_create(RWLOCK_TYPE_DEFAULT),
 	);
 
-	add_stream(this, "tcp://", stream_create_tcp);
-	add_service(this, "tcp://", stream_service_create_tcp);
-#ifndef WIN32
 	add_stream(this, "unix://", stream_create_unix);
+	add_stream(this, "tcp://", stream_create_tcp);
 	add_service(this, "unix://", stream_service_create_unix);
-#endif
+	add_service(this, "tcp://", stream_service_create_tcp);
 
 	return &this->public;
 }

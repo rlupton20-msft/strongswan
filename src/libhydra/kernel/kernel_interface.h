@@ -69,8 +69,6 @@ enum kernel_feature_t {
 	KERNEL_REQUIRE_EXCLUDE_ROUTE = (1<<1),
 	/** IPsec implementation requires UDP encapsulation of ESP packets */
 	KERNEL_REQUIRE_UDP_ENCAPSULATION = (1<<2),
-	/** IPsec backend does not require a policy reinstall on SA updates */
-	KERNEL_NO_POLICY_UPDATES = (1<<3),
 };
 
 /**
@@ -104,67 +102,39 @@ struct kernel_interface_t {
 	 * @param src		source address of SA
 	 * @param dst		destination address of SA
 	 * @param protocol	protocol for SA (ESP/AH)
+	 * @param reqid		unique ID for this SA
 	 * @param spi		allocated spi
-	 * @return			SUCCESS if operation completed
+	 * @return				SUCCESS if operation completed
 	 */
 	status_t (*get_spi)(kernel_interface_t *this, host_t *src, host_t *dst,
-						u_int8_t protocol, u_int32_t *spi);
+						u_int8_t protocol, u_int32_t reqid, u_int32_t *spi);
 
 	/**
 	 * Get a Compression Parameter Index (CPI) from the kernel.
 	 *
 	 * @param src		source address of SA
 	 * @param dst		destination address of SA
+	 * @param reqid		unique ID for the corresponding SA
 	 * @param cpi		allocated cpi
-	 * @return			SUCCESS if operation completed
+	 * @return				SUCCESS if operation completed
 	 */
 	status_t (*get_cpi)(kernel_interface_t *this, host_t *src, host_t *dst,
-						u_int16_t *cpi);
-
-	/**
-	 * Allocate or confirm a reqid to use for a given SA pair.
-	 *
-	 * Each returned reqid by a successful call to alloc_reqid() must be
-	 * released using release_reqid().
-	 *
-	 * The reqid parameter is an in/out parameter. If it points to non-zero,
-	 * the reqid is confirmed and registered for use. If it points to zero,
-	 * a reqid is allocated for the given selectors, and returned to reqid.
-	 *
-	 * @param local_ts	traffic selectors of local side for SA
-	 * @param remote_ts	traffic selectors of remote side for SA
-	 * @param mark_in	inbound mark on SA
-	 * @param mark_out	outbound mark on SA
-	 * @param reqid		allocated reqid
-	 * @return			SUCCESS if reqid allocated
-	 */
-	status_t (*alloc_reqid)(kernel_interface_t *this,
-							linked_list_t *local_ts, linked_list_t *remote_ts,
-							mark_t mark_in, mark_t mark_out,
-							u_int32_t *reqid);
-
-	/**
-	 * Release a previously allocated reqid.
-	 *
-	 * @param reqid		reqid to release
-	 * @param mark_in	inbound mark on SA
-	 * @param mark_out	outbound mark on SA
-	 * @return			SUCCESS if reqid released
-	 */
-	status_t (*release_reqid)(kernel_interface_t *this, u_int32_t reqid,
-							  mark_t mark_in, mark_t mark_out);
+						u_int32_t reqid, u_int16_t *cpi);
 
 	/**
 	 * Add an SA to the SAD.
 	 *
-	 * This function does install a single SA for a single protocol in one
-	 * direction.
+	 * add_sa() may update an already allocated
+	 * SPI (via get_spi). In this case, the replace
+	 * flag must be set.
+	 * This function does install a single SA for a
+	 * single protocol in one direction.
 	 *
 	 * @param src			source address for this SA
 	 * @param dst			destination address for this SA
 	 * @param spi			SPI allocated by us or remote peer
 	 * @param protocol		protocol for this SA (ESP/AH)
-	 * @param reqid			reqid for this SA
+	 * @param reqid			unique ID for this SA
 	 * @param mark			optional mark for this SA
 	 * @param tfc			Traffic Flow Confidentiality padding for this SA
 	 * @param lifetime		lifetime_cfg_t for this SA
@@ -175,14 +145,12 @@ struct kernel_interface_t {
 	 * @param mode			mode of the SA (tunnel, transport)
 	 * @param ipcomp		IPComp transform to use
 	 * @param cpi			CPI for IPComp
-	 * @param replay_window	anti-replay window size
 	 * @param initiator		TRUE if initiator of the exchange creating this SA
 	 * @param encap			enable UDP encapsulation for NAT traversal
 	 * @param esn			TRUE to use Extended Sequence Numbers
 	 * @param inbound		TRUE if this is an inbound SA
-	 * @param update		TRUE if an SPI has already been allocated for SA
-	 * @param src_ts		list of source traffic selectors
-	 * @param dst_ts		list of destination traffic selectors
+	 * @param src_ts		traffic selector with BEET source address
+	 * @param dst_ts		traffic selector with BEET destination address
 	 * @return				SUCCESS if operation completed
 	 */
 	status_t (*add_sa) (kernel_interface_t *this,
@@ -192,9 +160,8 @@ struct kernel_interface_t {
 						u_int16_t enc_alg, chunk_t enc_key,
 						u_int16_t int_alg, chunk_t int_key,
 						ipsec_mode_t mode, u_int16_t ipcomp, u_int16_t cpi,
-						u_int32_t replay_window, bool initiator, bool encap,
-						bool esn, bool inbound, bool update,
-						linked_list_t *src_ts, linked_list_t *dst_ts);
+						bool initiator, bool encap, bool esn, bool inbound,
+						traffic_selector_t *src_ts, traffic_selector_t *dst_ts);
 
 	/**
 	 * Update the hosts on an installed SA.
@@ -359,12 +326,9 @@ struct kernel_interface_t {
 	 * for the given source to dest.
 	 *
 	 * @param dest			target destination address
-	 * @param prefix		prefix length if dest is a subnet, -1 for auto
-	 * @param src			source address to check, or NULL
 	 * @return				next hop address, NULL if unreachable
 	 */
-	host_t* (*get_nexthop)(kernel_interface_t *this, host_t *dest,
-						   int prefix, host_t *src);
+	host_t* (*get_nexthop)(kernel_interface_t *this, host_t *dest, host_t *src);
 
 	/**
 	 * Get the interface name of a local address. Interfaces that are down or
@@ -560,24 +524,23 @@ struct kernel_interface_t {
 	/**
 	 * Raise an expire event.
 	 *
+	 * @param reqid			reqid of the expired SA
 	 * @param protocol		protocol of the expired SA
 	 * @param spi			spi of the expired SA
-	 * @param dst			destination address of expired SA
 	 * @param hard			TRUE if it is a hard expire, FALSE otherwise
 	 */
-	void (*expire)(kernel_interface_t *this, u_int8_t protocol, u_int32_t spi,
-				   host_t *dst, bool hard);
+	void (*expire)(kernel_interface_t *this, u_int32_t reqid,
+				   u_int8_t protocol, u_int32_t spi, bool hard);
 
 	/**
 	 * Raise a mapping event.
 	 *
-	 * @param protocol		protocol of affected SA
+	 * @param reqid			reqid of the SA
 	 * @param spi			spi of the SA
-	 * @param dst			original destination address of SA
 	 * @param remote		new remote host
 	 */
-	void (*mapping)(kernel_interface_t *this, u_int8_t protocol, u_int32_t spi,
-					host_t *dst, host_t *remote);
+	void (*mapping)(kernel_interface_t *this, u_int32_t reqid, u_int32_t spi,
+					host_t *remote);
 
 	/**
 	 * Raise a migrate event.

@@ -69,18 +69,6 @@ typedef struct {
 } transaction_t;
 
 /**
- * Check if the SQLite library is thread safe
- */
-static bool is_threadsave()
-{
-#if SQLITE_VERSION_NUMBER >= 3005000
-	return sqlite3_threadsafe() > 0;
-#endif
-	/* sqlite connections prior to 3.5 may be used by a single thread only */
-	return FALSE;
-}
-
-/**
  * Create and run a sqlite stmt using a sql string and args
  */
 static sqlite3_stmt* run(private_sqlite_database_t *this, char *sql,
@@ -113,15 +101,13 @@ static sqlite3_stmt* run(private_sqlite_database_t *this, char *sql,
 				case DB_TEXT:
 				{
 					const char *text = va_arg(*args, const char*);
-					res = sqlite3_bind_text(stmt, i, text, -1,
-											SQLITE_TRANSIENT);
+					res = sqlite3_bind_text(stmt, i, text, -1, SQLITE_STATIC);
 					break;
 				}
 				case DB_BLOB:
 				{
 					chunk_t c = va_arg(*args, chunk_t);
-					res = sqlite3_bind_blob(stmt, i, c.ptr, c.len,
-											SQLITE_TRANSIENT);
+					res = sqlite3_bind_blob(stmt, i, c.ptr, c.len, SQLITE_STATIC);
 					break;
 				}
 				case DB_DOUBLE:
@@ -180,10 +166,9 @@ typedef struct {
 static void sqlite_enumerator_destroy(sqlite_enumerator_t *this)
 {
 	sqlite3_finalize(this->stmt);
-	if (!is_threadsave())
-	{
-		this->database->mutex->unlock(this->database->mutex);
-	}
+#if SQLITE_VERSION_NUMBER < 3005000
+	this->database->mutex->unlock(this->database->mutex);
+#endif
 	free(this->columns);
 	free(this);
 }
@@ -261,10 +246,10 @@ METHOD(database_t, query, enumerator_t*,
 	sqlite_enumerator_t *enumerator = NULL;
 	int i;
 
-	if (!is_threadsave())
-	{
-		this->mutex->lock(this->mutex);
-	}
+#if SQLITE_VERSION_NUMBER < 3005000
+	/* sqlite connections prior to 3.5 may be used by a single thread only, */
+	this->mutex->lock(this->mutex);
+#endif
 
 	va_start(args, sql);
 	stmt = run(this, sql, &args);
@@ -380,7 +365,7 @@ static bool finalize_transaction(private_sqlite_database_t *this,
 	return TRUE;
 }
 
-METHOD(database_t, commit_, bool,
+METHOD(database_t, commit, bool,
 	private_sqlite_database_t *this)
 {
 	return finalize_transaction(this, FALSE);
@@ -444,7 +429,7 @@ sqlite_database_t *sqlite_database_create(char *uri)
 				.query = _query,
 				.execute = _execute,
 				.transaction = _transaction,
-				.commit = _commit_,
+				.commit = _commit,
 				.rollback = _rollback,
 				.get_driver = _get_driver,
 				.destroy = _destroy,

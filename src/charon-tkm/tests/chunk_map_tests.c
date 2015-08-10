@@ -14,7 +14,7 @@
  * for more details.
  */
 
-#include <tests/test_suite.h>
+#include <check.h>
 
 #include "tkm_chunk_map.h"
 
@@ -48,20 +48,11 @@ START_TEST(test_chunk_map_handling)
 }
 END_TEST
 
-Suite *make_chunk_map_tests()
+TCase *make_chunk_map_tests(void)
 {
-	Suite *s;
-	TCase *tc;
-
-	s = suite_create("chunk map");
-
-	tc = tcase_create("creating");
+	TCase *tc = tcase_create("Chunk map tests");
 	tcase_add_test(tc, test_chunk_map_creation);
-	suite_add_tcase(s, tc);
-
-	tc = tcase_create("handling");
 	tcase_add_test(tc, test_chunk_map_handling);
-	suite_add_tcase(s, tc);
 
-	return s;
+	return tc;
 }

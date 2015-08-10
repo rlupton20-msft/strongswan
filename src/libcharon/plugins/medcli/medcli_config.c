@@ -106,7 +106,6 @@ METHOD(backend_t, get_peer_cfg_by_name, peer_cfg_t*,
 							 charon->socket->get_port(charon->socket, FALSE),
 							 address, IKEV2_UDP_PORT, FRAGMENTATION_NO, 0);
 	ike_cfg->add_proposal(ike_cfg, proposal_create_default(PROTO_IKE));
-	ike_cfg->add_proposal(ike_cfg, proposal_create_default_aead(PROTO_IKE));
 	med_cfg = peer_cfg_create(
 		"mediation", ike_cfg,
 		CERT_NEVER_SEND, UNIQUE_REPLACE,
@@ -169,7 +168,6 @@ METHOD(backend_t, get_peer_cfg_by_name, peer_cfg_t*,
 								 ACTION_NONE, ACTION_NONE, ACTION_NONE, FALSE,
 								 0, 0, NULL, NULL, 0);
 	child_cfg->add_proposal(child_cfg, proposal_create_default(PROTO_ESP));
-	child_cfg->add_proposal(child_cfg, proposal_create_default_aead(PROTO_ESP));
 	child_cfg->add_traffic_selector(child_cfg, TRUE, ts_from_string(local_net));
 	child_cfg->add_traffic_selector(child_cfg, FALSE, ts_from_string(remote_net));
 	peer_cfg->add_child_cfg(peer_cfg, child_cfg);
@@ -244,7 +242,6 @@ METHOD(enumerator_t, peer_enumerator_enumerate, bool,
 								 ACTION_NONE, ACTION_NONE, ACTION_NONE, FALSE,
 								 0, 0, NULL, NULL, 0);
 	child_cfg->add_proposal(child_cfg, proposal_create_default(PROTO_ESP));
-	child_cfg->add_proposal(child_cfg, proposal_create_default_aead(PROTO_ESP));
 	child_cfg->add_traffic_selector(child_cfg, TRUE, ts_from_string(local_net));
 	child_cfg->add_traffic_selector(child_cfg, FALSE, ts_from_string(remote_net));
 	this->current->add_child_cfg(this->current, child_cfg);
@@ -385,7 +382,6 @@ medcli_config_t *medcli_config_create(database_t *db)
 							  FRAGMENTATION_NO, 0),
 	);
 	this->ike->add_proposal(this->ike, proposal_create_default(PROTO_IKE));
-	this->ike->add_proposal(this->ike, proposal_create_default_aead(PROTO_IKE));
 
 	schedule_autoinit(this);
 

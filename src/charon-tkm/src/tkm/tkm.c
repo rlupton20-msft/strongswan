@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2012-2014 Reto Buerki
+ * Copyright (C) 2012 Reto Buerki
  * Copyright (C) 2012 Adrian-Ken Rueegsegger
  * Hochschule fuer Technik Rapperswil
  *
@@ -61,7 +61,7 @@ bool tkm_init()
 	ehandler_init();
 
 	ikesock = lib->settings->get_str(lib->settings, "%s.ike_socket", IKE_SOCKET,
-									 lib->ns);
+									 charon->name);
 	if (ike_init(ikesock) != TKM_OK)
 	{
 		tkmlib_final();
@@ -70,7 +70,7 @@ bool tkm_init()
 	DBG1(DBG_DMN, "connected to TKM via socket '%s'", ikesock);
 
 	eessock = lib->settings->get_str(lib->settings, "%s.ees_socket", EES_SOCKET,
-									 lib->ns);
+									 charon->name);
 	ees_server_init(eessock);
 	DBG1(DBG_DMN, "serving EES requests on socket '%s'", eessock);
 
@@ -95,7 +95,6 @@ bool tkm_init()
 		.public = {
 			.idmgr = tkm_id_manager_create(limits),
 			.chunk_map = tkm_chunk_map_create(),
-			.sad = tkm_kernel_sad_create(),
 		},
 	);
 	tkm = &this->public;
@@ -115,7 +114,6 @@ void tkm_deinit()
 	private_tkm_t *this = (private_tkm_t*)tkm;
 	this->public.idmgr->destroy(this->public.idmgr);
 	this->public.chunk_map->destroy(this->public.chunk_map);
-	this->public.sad->destroy(this->public.sad);
 
 	ees_server_finalize();
 

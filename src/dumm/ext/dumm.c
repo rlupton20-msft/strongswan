@@ -32,8 +32,6 @@
 #undef PACKAGE_URL
 /* avoid redefintiion of snprintf etc. */
 #define RUBY_DONT_SUBST
-/* undef our _GNU_SOURCE, as it gets redefined by <ruby.h> */
-#undef _GNU_SOURCE
 #include <ruby.h>
 
 static dumm_t *dumm;
@@ -629,7 +627,7 @@ static VALUE iface_each_addr(int argc, VALUE *argv, VALUE self)
 	linked_list_t *list;
 	iface_t *iface;
 	host_t *addr;
-	char buf[64], *fmt = "%H";
+	char buf[64];
 
 	if (!rb_block_given_p())
 	{
@@ -645,7 +643,7 @@ static VALUE iface_each_addr(int argc, VALUE *argv, VALUE self)
 	enumerator->destroy(enumerator);
 	while (list->remove_first(list, (void**)&addr) == SUCCESS)
 	{
-		snprintf(buf, sizeof(buf), fmt, addr);
+		snprintf(buf, sizeof(buf), "%H", addr);
 		addr->destroy(addr);
 		rb_yield(rb_str_new2(buf));
 	}
@@ -776,7 +774,7 @@ void Init_dumm()
 	/* there are too many to report, rubyruby... */
 	setenv("LEAK_DETECTIVE_DISABLE", "1", 1);
 
-	library_init(NULL, "dumm");
+	library_init(NULL);
 
 	dumm = dumm_create(NULL);
 

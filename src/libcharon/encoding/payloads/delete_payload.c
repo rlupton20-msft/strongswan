@@ -1,5 +1,4 @@
 /*
- * Copyright (C) 2015 Tobias Brunner
  * Copyright (C) 2005-2010 Martin Willi
  * Copyright (C) 2010 revosec AG
  * Copyright (C) 2005 Jan Hutter
@@ -79,7 +78,7 @@ struct private_delete_payload_t {
 	chunk_t spis;
 
 	/**
-	 * Payload type, PLV2_DELETE or PLV1_DELETE
+	 * Payload type, DELETE or DELETE_V1
 	 */
 	payload_type_t type;
 };
@@ -179,7 +178,7 @@ METHOD(payload_t, verify, status_t,
 			break;
 		case PROTO_IKE:
 		case 0:
-			if (this->type == PLV2_DELETE)
+			if (this->type == DELETE)
 			{	/* IKEv2 deletion has no spi assigned! */
 				if (this->spi_size != 0)
 				{
@@ -207,7 +206,7 @@ METHOD(payload_t, verify, status_t,
 METHOD(payload_t, get_encoding_rules, int,
 	private_delete_payload_t *this, encoding_rule_t **rules)
 {
-	if (this->type == PLV2_DELETE)
+	if (this->type == DELETE)
 	{
 		*rules = encodings_v2;
 		return countof(encodings_v2);
@@ -219,7 +218,7 @@ METHOD(payload_t, get_encoding_rules, int,
 METHOD(payload_t, get_header_length, int,
 	private_delete_payload_t *this)
 {
-	if (this->type == PLV2_DELETE)
+	if (this->type == DELETE)
 	{
 		return 8;
 	}
@@ -280,19 +279,6 @@ METHOD(delete_payload_t, set_ike_spi, void,
 								 chunk_from_thing(spi_r));
 	this->spi_count = 1;
 	this->payload_length = get_header_length(this) + this->spi_size;
-}
-
-METHOD(delete_payload_t, get_ike_spi, bool,
-	private_delete_payload_t *this, u_int64_t *spi_i, u_int64_t *spi_r)
-{
-	if (this->protocol_id != PROTO_IKE ||
-		this->spis.len < 2 * sizeof(u_int64_t))
-	{
-		return FALSE;
-	}
-	memcpy(spi_i, this->spis.ptr, sizeof(u_int64_t));
-	memcpy(spi_r, this->spis.ptr + sizeof(u_int64_t), sizeof(u_int64_t));
-	return TRUE;
 }
 
 /**
@@ -366,11 +352,10 @@ delete_payload_t *delete_payload_create(payload_type_t type,
 			.get_protocol_id = _get_protocol_id,
 			.add_spi = _add_spi,
 			.set_ike_spi = _set_ike_spi,
-			.get_ike_spi = _get_ike_spi,
 			.create_spi_enumerator = _create_spi_enumerator,
 			.destroy = _destroy,
 		},
-		.next_payload = PL_NONE,
+		.next_payload = NO_PAYLOAD,
 		.protocol_id = protocol_id,
 		.doi = IKEV1_DOI_IPSEC,
 		.type = type,
@@ -379,7 +364,7 @@ delete_payload_t *delete_payload_create(payload_type_t type,
 
 	if (protocol_id == PROTO_IKE)
 	{
-		if (type == PLV1_DELETE)
+		if (type == DELETE_V1)
 		{
 			this->spi_size = 16;
 		}

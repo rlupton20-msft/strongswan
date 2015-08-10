@@ -81,7 +81,7 @@ static bool load_configs(char *suite_file, char *test_file)
 	}
 	conftest->test = settings_create(suite_file);
 	conftest->test->load_files(conftest->test, test_file, TRUE);
-	conftest->suite_dir = path_dirname(suite_file);
+	conftest->suite_dir = strdup(dirname(suite_file));
 	return TRUE;
 }
 
@@ -435,18 +435,18 @@ int main(int argc, char *argv[])
 	char *suite_file = "suite.conf", *test_file = NULL, *preload, *plugins;
 	file_logger_t *logger;
 
-	if (!library_init(NULL, "conftest"))
+	if (!library_init(NULL))
 	{
 		library_deinit();
 		return SS_RC_LIBSTRONGSWAN_INTEGRITY;
 	}
-	if (!libhydra_init())
+	if (!libhydra_init("conftest"))
 	{
 		libhydra_deinit();
 		library_deinit();
 		return SS_RC_INITIALIZATION_FAILED;
 	}
-	if (!libcharon_init())
+	if (!libcharon_init("conftest"))
 	{
 		libcharon_deinit();
 		libhydra_deinit();

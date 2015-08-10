@@ -73,7 +73,7 @@ static bool open_database(private_sql_plugin_t *this,
 		char *uri;
 
 		uri = lib->settings->get_str(lib->settings, "%s.plugins.sql.database",
-									 NULL, lib->ns);
+									 NULL, charon->name);
 		if (!uri)
 		{
 			DBG1(DBG_CFG, "sql plugin: database URI not set");

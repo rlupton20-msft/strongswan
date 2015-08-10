@@ -6,7 +6,7 @@ AM_CPPFLAGS = \
 	-DROUTING_TABLE_PRIO=${routing_table_prio}
 
 AM_CFLAGS = \
-	$(PLUGIN_CFLAGS)
+	-rdynamic
 
 if MONOLITHIC
 noinst_LTLIBRARIES = libstrongswan-kernel-netlink.la
@@ -21,24 +21,3 @@ libstrongswan_kernel_netlink_la_SOURCES = \
 	kernel_netlink_shared.h kernel_netlink_shared.c
 
 libstrongswan_kernel_netlink_la_LDFLAGS = -module -avoid-version
-
-
-TESTS = tests
-
-check_PROGRAMS = $(TESTS)
-
-tests_SOURCES = \
-	tests.h tests.c \
-	suites/test_socket.c \
-	kernel_netlink_shared.c
-
-tests_CFLAGS = \
-	-I$(top_srcdir)/src/libstrongswan \
-	-I$(top_srcdir)/src/libstrongswan/tests \
-	-DNETLINK_MSG_LOSS_HOOK=netlink_msg_loss \
-	@COVERAGE_CFLAGS@
-
-tests_LDFLAGS = @COVERAGE_LDFLAGS@
-tests_LDADD = \
-	$(top_builddir)/src/libstrongswan/libstrongswan.la \
-	$(top_builddir)/src/libstrongswan/tests/libtest.la

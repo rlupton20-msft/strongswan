@@ -18,8 +18,7 @@
  */
 
 #include <string.h>
-
-#include <library.h>
+#include <arpa/inet.h>
 
 #include "sha1_hasher.h"
 
@@ -258,3 +257,4 @@ sha1_hasher_t *sha1_hasher_create(hash_algorithm_t algo)
 
 	return &(this->public);
 }
+

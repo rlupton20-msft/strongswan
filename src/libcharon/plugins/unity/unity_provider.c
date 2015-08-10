@@ -1,7 +1,4 @@
 /*
- * Copyright (C) 2013 Tobias Brunner
- * Hochschule fuer Technik Rapperswil
- *
  * Copyright (C) 2012 Martin Willi
  * Copyright (C) 2012 revosec AG
  *
@@ -19,7 +16,6 @@
 #include "unity_provider.h"
 
 #include <daemon.h>
-#include <bio/bio_writer.h>
 
 typedef struct private_unity_provider_t private_unity_provider_t;
 
@@ -35,70 +31,58 @@ struct private_unity_provider_t {
 };
 
 /**
- * Attribute enumerator for UNITY_SPLIT_INCLUDE attribute
+ * Attribute enumerator for traffic selector list
  */
 typedef struct {
 	/** Implements enumerator_t */
 	enumerator_t public;
 	/** list of traffic selectors to enumerate */
 	linked_list_t *list;
-	/** attribute value */
-	chunk_t attr;
+	/** currently enumerating subnet */
+	u_char subnet[4];
+	/** currently enumerating subnet mask */
+	u_char mask[4];
 } attribute_enumerator_t;
-
-/**
- * Append data from the given traffic selector to the attribute data
- */
-static void append_ts(bio_writer_t *writer, traffic_selector_t *ts)
-{
-	host_t *net, *mask;
-	chunk_t padding;
-	u_int8_t bits;
-
-	if (!ts->to_subnet(ts, &net, &bits))
-	{
-		return;
-	}
-	mask = host_create_netmask(AF_INET, bits);
-	if (!mask)
-	{
-		net->destroy(net);
-		return;
-	}
-	writer->write_data(writer, net->get_address(net));
-	writer->write_data(writer, mask->get_address(mask));
-	/* the Cisco client parses the "padding" as protocol, src and dst port, the
-	 * first two in network order the last in host order - no other clients seem
-	 * to support these fields so we don't use them either */
-	padding = writer->skip(writer, 6);
-	memset(padding.ptr, 0, padding.len);
-	mask->destroy(mask);
-	net->destroy(net);
-}
 
 METHOD(enumerator_t, attribute_enumerate, bool,
 	attribute_enumerator_t *this, configuration_attribute_type_t *type,
 	chunk_t *attr)
 {
 	traffic_selector_t *ts;
-	bio_writer_t *writer;
+	u_int8_t i, mask;
+	host_t *net;
 
-	if (this->list->get_count(this->list) == 0)
+	while (TRUE)
 	{
-		return FALSE;
-	}
-
-	writer = bio_writer_create(14);
-	while (this->list->remove_first(this->list, (void**)&ts) == SUCCESS)
-	{
-		append_ts(writer, ts);
+		if (this->list->remove_first(this->list, (void**)&ts) != SUCCESS)
+		{
+			return FALSE;
+		}
+		if (ts->to_subnet(ts, &net, &mask))
+		{
+			ts->destroy(ts);
+			break;
+		}
 		ts->destroy(ts);
 	}
 
-	*type = UNITY_SPLIT_INCLUDE;
-	*attr = this->attr = writer->extract_buf(writer);
+	memset(this->mask, 0, sizeof(this->mask));
+	for (i = 0; i < sizeof(this->mask); i++)
+	{
+		if (mask < 8)
+		{
+			this->mask[i] = 0xFF << (8 - mask);
+			break;
+		}
+		this->mask[i] = 0xFF;
+		mask -= 8;
+	}
+	memcpy(this->subnet, net->get_address(net).ptr, sizeof(this->subnet));
+	net->destroy(net);
 
-	writer->destroy(writer);
+	*type = UNITY_SPLIT_INCLUDE;
+	*attr = chunk_create(this->subnet, sizeof(this->subnet) + sizeof(this->mask));
+
 	return TRUE;
 }
 
@@ -106,7 +90,6 @@ METHOD(enumerator_t, attribute_destroy, void,
 	attribute_enumerator_t *this)
 {
 	this->list->destroy_offset(this->list, offsetof(traffic_selector_t, destroy));
-	chunk_free(&this->attr);
 	free(this);
 }
 
@@ -135,17 +118,19 @@ static bool use_ts(traffic_selector_t *ts)
 }
 
 METHOD(attribute_provider_t, create_attribute_enumerator, enumerator_t*,
-	private_unity_provider_t *this, linked_list_t *pools, ike_sa_t *ike_sa,
+	private_unity_provider_t *this, linked_list_t *pools, identification_t *id,
 	linked_list_t *vips)
 {
 	attribute_enumerator_t *attr_enum;
 	enumerator_t *enumerator;
 	linked_list_t *list, *current;
 	traffic_selector_t *ts;
+	ike_sa_t *ike_sa;
 	peer_cfg_t *peer_cfg;
 	child_cfg_t *child_cfg;
 
-	if (ike_sa->get_version(ike_sa) != IKEV1 ||
+	ike_sa = charon->bus->get_sa(charon->bus);
+	if (!ike_sa || ike_sa->get_version(ike_sa) != IKEV1 ||
 		!ike_sa->supports_extension(ike_sa, EXT_CISCO_UNITY) ||
 		!vips->get_count(vips))
 	{

@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2013-2015 Andreas Steffen
+ * Copyright (C) 2013 Andreas Steffen
  * HSR Hochschule fuer Technik Rapperswil
  *
  * This program is free software; you can redistribute it and/or modify it
@@ -18,8 +18,6 @@
 
 #include <library.h>
 #include <utils/debug.h>
-
-#include <tncif_names.h>
 
 #include <stdlib.h>
 #include <stdio.h>
@@ -190,7 +188,7 @@ static bool policy_start(database_t *db, int session_id)
 	e->destroy(e);
 
 	/* if a device ID with a creation date exists, get all group memberships */
-	if (device_id && created)
+	if (device_id & created)
 	{
 		e = db->query(db,
 				"SELECT group_id FROM groups_members WHERE device_id = ?",
@@ -253,13 +251,9 @@ static bool policy_start(database_t *db, int session_id)
 static bool policy_stop(database_t *db, int session_id)
 {
 	enumerator_t *e;
-	int rec, policy, final_rec, id_type;
-	chunk_t id_value;
-	char *result, *format, *ip_address = NULL;
-	char command[512];
-	bool success = TRUE;
+	int rec, policy;
+	char *result;
 
-	/* store all workitem results for this session in the results table */
 	e = db->query(db,
 			"SELECT w.rec_final, w.result, e.policy FROM workitems AS w "
 			"JOIN enforcements AS e ON w.enforcement = e.id "
@@ -276,93 +270,15 @@ static bool policy_stop(database_t *db, int session_id)
 		}
 		e->destroy(e);
 	}
-	else
-	{
-		success = FALSE;
-	}
-
-	/* delete all workitems for this session from the database */
-	if (db->execute(db, NULL,
-					"DELETE FROM workitems WHERE session = ?",
-					DB_UINT, session_id) < 0)
-	{
-		success = FALSE;
-	}
-
-	final_rec = TNC_IMV_ACTION_RECOMMENDATION_NO_RECOMMENDATION;
-
-	/* retrieve the final recommendation for this session */
-	e = db->query(db,
-			"SELECT rec FROM sessions WHERE id = ?",
-			 DB_INT, session_id, DB_INT);
-	if (e)
-	{
-		if (!e->enumerate(e, &final_rec))
-		{
-			success = FALSE;
-		}
-		e->destroy(e);
-	}
-	else
-	{
-		success = FALSE;
-	}
-
-	/* retrieve client IP address for this session */
-	e = db->query(db,
-			"SELECT i.type, i.value FROM identities AS i "
-			"JOIN sessions_identities AS si ON si.identity_id = i.id "
-			"WHERE si.session_id = ? AND (i.type = ? OR i.type = ?)",
-			 DB_INT, session_id, DB_INT, TNC_ID_IPV4_ADDR, DB_INT,
-			 TNC_ID_IPV6_ADDR, DB_INT, DB_BLOB);
-	if (e)
-	{
-		if (e->enumerate(e, &id_type, &id_value))
-		{
-			ip_address = strndup(id_value.ptr, id_value.len);
-		}
-		else
-		{
-			success = FALSE;
-		}
-		e->destroy(e);
-	}
-	else
-	{
-		success = FALSE;
-	}
-
-	fprintf(stderr, "recommendation for access requestor %s is %N\n",
-			ip_address ? ip_address : "0.0.0.0",
-			TNC_IMV_Action_Recommendation_names, final_rec);
-
-	if (final_rec == TNC_IMV_ACTION_RECOMMENDATION_ALLOW)
-	{
-		format = lib->settings->get_str(lib->settings,
-						"imv_policy_manager.command_allow", NULL);
-	}
-	else
-	{
-		format = lib->settings->get_str(lib->settings,
-						"imv_policy_manager.command_block", NULL);
-	}
-	if (format && ip_address)
-	{
-		/* the IP address can occur at most twice in the command string */
-		snprintf(command, sizeof(command), format, ip_address, ip_address);
-		success = system(command) == 0;
-		fprintf(stderr, "%s system command: %s\n",
-			    success ? "successful" : "failed", command);
-	}
-	free(ip_address);
-
-	return success;
+	return db->execute(db, NULL,
+				"DELETE FROM workitems WHERE session = ?",
+				DB_UINT, session_id) >= 0;
 }
 
 int main(int argc, char *argv[])
 {
 	database_t *db;
-	char *uri;
+	char *uri, *tnc_session_id;
 	int session_id;
 	bool start, success;
 
@@ -372,7 +288,7 @@ int main(int argc, char *argv[])
 	atexit(library_deinit);
 
 	/* initialize library */
-	if (!library_init(NULL, "imv_policy_manager"))
+	if (!library_init(NULL))
 	{
 		exit(SS_RC_LIBSTRONGSWAN_INTEGRITY);
 	}
@@ -383,7 +299,7 @@ int main(int argc, char *argv[])
 		exit(SS_RC_INITIALIZATION_FAILED);
 	}
 
-	if (argc < 3)
+	if (argc < 2)
 	{
 		usage();
 		exit(SS_RC_INITIALIZATION_FAILED);
@@ -402,15 +318,17 @@ int main(int argc, char *argv[])
 		exit(SS_RC_INITIALIZATION_FAILED);
 	}
 
-	session_id = atoi(argv[2]);
+	/* get session ID */
+	tnc_session_id = getenv("TNC_SESSION_ID");
+	if (!tnc_session_id)
+	{
+		fprintf(stderr, "environment variable TNC_SESSION_ID is not defined\n");
+		exit(SS_RC_INITIALIZATION_FAILED);
+	}
+	session_id = atoi(tnc_session_id);
 
 	/* attach IMV database */
-	uri = lib->settings->get_str(lib->settings,
-			"imv_policy_manager.database",
-			lib->settings->get_str(lib->settings,
-				"charon.imcv.database",
-				lib->settings->get_str(lib->settings,
-					"libimcv.database", NULL)));
+	uri = lib->settings->get_str(lib->settings, "libimcv.database", NULL);
 	if (!uri)
 	{
 		fprintf(stderr, "database uri not defined.\n");

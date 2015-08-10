@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2012-2015 Tobias Brunner
+ * Copyright (C) 2012 Tobias Brunner
  * Copyright (C) 2005-2007 Martin Willi
  * Copyright (C) 2005 Jan Hutter
  * Hochschule fuer Technik Rapperswil
@@ -148,10 +148,9 @@ struct ike_cfg_t {
 	 * Adds a proposal to the list.
 	 *
 	 * The first added proposal has the highest priority, the last
-	 * added the lowest. It is safe to add NULL as proposal, which has no
-	 * effect.
+	 * added the lowest.
 	 *
-	 * @param proposal		proposal to add, or NULL
+	 * @param proposal		proposal to add
 	 */
 	void (*add_proposal) (ike_cfg_t *this, proposal_t *proposal);
 
@@ -253,16 +252,5 @@ ike_cfg_t *ike_cfg_create(ike_version_t version, bool certreq, bool force_encap,
 						  char *me, u_int16_t my_port,
 						  char *other, u_int16_t other_port,
 						  fragmentation_t fragmentation, u_int8_t dscp);
-
-/**
- * Determine the address family of the local or remtoe address(es).  If multiple
- * families are configured AF_UNSPEC is returned.  %any is ignored (%any4|6 are
- * not though).
- *
- * @param local				TRUE to check local addresses, FALSE for remote
- * @return					address family of address(es) if distinct
- */
-int ike_cfg_get_family(ike_cfg_t *this, bool local);
-
 
 #endif /** IKE_CFG_H_ @}*/

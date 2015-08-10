@@ -215,10 +215,8 @@ static bool create_aead(private_esp_context_t *this, int alg,
 		case ENCR_AES_GCM_ICV8:
 		case ENCR_AES_GCM_ICV12:
 		case ENCR_AES_GCM_ICV16:
-		case ENCR_CHACHA20_POLY1305:
 			/* the key includes a 4 byte salt */
-			this->aead = lib->crypto->create_aead(lib->crypto, alg,
-												  key.len - 4, 4);
+			this->aead = lib->crypto->create_aead(lib->crypto, alg, key.len-4);
 			break;
 		default:
 			break;
@@ -245,7 +243,6 @@ static bool create_traditional(private_esp_context_t *this, int enc_alg,
 {
 	crypter_t *crypter = NULL;
 	signer_t *signer = NULL;
-	iv_gen_t *ivg;
 
 	crypter = lib->crypto->create_crypter(lib->crypto, enc_alg, enc_key.len);
 	if (!crypter)
@@ -274,13 +271,7 @@ static bool create_traditional(private_esp_context_t *this, int enc_alg,
 			 "failed");
 		goto failed;
 	}
-	ivg = iv_gen_create_for_alg(enc_alg);
-	if (!ivg)
-	{
-		DBG1(DBG_ESP, "failed to create ESP context: creating iv gen failed");
-		goto failed;
-	}
-	this->aead = aead_create(crypter, signer, ivg);
+	this->aead = aead_create(crypter, signer);
 	return TRUE;
 
 failed:

@@ -170,7 +170,7 @@ static bool responsible_for(private_ha_attribute_t *this, int bit)
 }
 
 METHOD(attribute_provider_t, acquire_address, host_t*,
-	private_ha_attribute_t *this, linked_list_t *pools, ike_sa_t *ike_sa,
+	private_ha_attribute_t *this, linked_list_t *pools, identification_t *id,
 	host_t *requested)
 {
 	enumerator_t *enumerator;
@@ -233,7 +233,7 @@ METHOD(attribute_provider_t, acquire_address, host_t*,
 
 METHOD(attribute_provider_t, release_address, bool,
 	private_ha_attribute_t *this, linked_list_t *pools, host_t *address,
-	ike_sa_t *ike_sa)
+	identification_t *id)
 {
 	enumerator_t *enumerator;
 	pool_t *pool;
@@ -309,7 +309,7 @@ static void load_pools(private_ha_attribute_t *this)
 	pool_t *pool;
 
 	enumerator = lib->settings->create_key_value_enumerator(lib->settings,
-												"%s.plugins.ha.pools", lib->ns);
+										"%s.plugins.ha.pools", charon->name);
 	while (enumerator->enumerate(enumerator, &name, &net))
 	{
 		net = strdup(net);

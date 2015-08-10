@@ -162,7 +162,7 @@ METHOD(payload_t, get_header_length, int,
 METHOD(payload_t, get_payload_type, payload_type_t,
 	private_eap_payload_t *this)
 {
-	return PLV2_EAP;
+	return EXTENSIBLE_AUTHENTICATION;
 }
 
 METHOD(payload_t, get_next_type, payload_type_t,
@@ -341,7 +341,7 @@ eap_payload_t *eap_payload_create()
 			.is_expanded = _is_expanded,
 			.destroy = _destroy,
 		},
-		.next_payload = PL_NONE,
+		.next_payload = NO_PAYLOAD,
 		.payload_length = get_header_length(this),
 	);
 	return &this->public;

@@ -19,7 +19,6 @@
 #include <hydra.h>
 #include <encoding/payloads/cp_payload.h>
 #include <processing/jobs/adopt_children_job.h>
-#include <sa/ikev1/tasks/mode_config.h>
 
 typedef struct private_xauth_t private_xauth_t;
 
@@ -75,11 +74,6 @@ struct private_xauth_t {
 	 * status of Xauth exchange
 	 */
 	xauth_status_t status;
-
-	/**
-	 * Queue a Mode Config Push mode after completing XAuth?
-	 */
-	bool mode_config_push;
 };
 
 /**
@@ -283,7 +277,7 @@ METHOD(task_t, build_i_status, status_t,
 {
 	cp_payload_t *cp;
 
-	cp = cp_payload_create_type(PLV1_CONFIGURATION, CFG_SET);
+	cp = cp_payload_create_type(CONFIGURATION_V1, CFG_SET);
 	cp->add_attribute(cp,
 			configuration_attribute_create_value(XAUTH_STATUS, this->status));
 
@@ -296,9 +290,8 @@ METHOD(task_t, process_i_status, status_t,
 	private_xauth_t *this, message_t *message)
 {
 	cp_payload_t *cp;
-	adopt_children_job_t *job;
 
-	cp = (cp_payload_t*)message->get_payload(message, PLV1_CONFIGURATION);
+	cp = (cp_payload_t*)message->get_payload(message, CONFIGURATION_V1);
 	if (!cp || cp->get_type(cp) != CFG_ACK)
 	{
 		DBG1(DBG_IKE, "received invalid XAUTH status response");
@@ -314,13 +307,8 @@ METHOD(task_t, process_i_status, status_t,
 		return FAILED;
 	}
 	this->ike_sa->set_condition(this->ike_sa, COND_XAUTH_AUTHENTICATED, TRUE);
-	job = adopt_children_job_create(this->ike_sa->get_id(this->ike_sa));
-	if (this->mode_config_push)
-	{
-		job->queue_task(job,
-				(task_t*)mode_config_create(this->ike_sa, TRUE, FALSE));
-	}
-	lib->processor->queue_job(lib->processor, (job_t*)job);
+	lib->processor->queue_job(lib->processor, (job_t*)
+				adopt_children_job_create(this->ike_sa->get_id(this->ike_sa)));
 	return SUCCESS;
 }
 
@@ -366,11 +354,11 @@ METHOD(task_t, build_r_ack, status_t,
 {
 	cp_payload_t *cp;
 
-	cp = cp_payload_create_type(PLV1_CONFIGURATION, CFG_ACK);
+	cp = cp_payload_create_type(CONFIGURATION_V1, CFG_ACK);
 	cp->set_identifier(cp, this->identifier);
 	cp->add_attribute(cp,
 			configuration_attribute_create_chunk(
-					PLV1_CONFIGURATION_ATTRIBUTE, XAUTH_STATUS, chunk_empty));
+					CONFIGURATION_ATTRIBUTE_V1, XAUTH_STATUS, chunk_empty));
 
 	message->add_payload(message, (payload_t *)cp);
 
@@ -394,7 +382,7 @@ METHOD(task_t, process_r, status_t,
 			return NEED_MORE;
 		}
 	}
-	cp = (cp_payload_t*)message->get_payload(message, PLV1_CONFIGURATION);
+	cp = (cp_payload_t*)message->get_payload(message, CONFIGURATION_V1);
 	if (!cp)
 	{
 		DBG1(DBG_IKE, "configuration payload missing in XAuth request");
@@ -450,7 +438,7 @@ METHOD(task_t, build_r, status_t,
 {
 	if (!this->cp)
 	{	/* send empty reply if building data failed */
-		this->cp = cp_payload_create_type(PLV1_CONFIGURATION, CFG_REPLY);
+		this->cp = cp_payload_create_type(CONFIGURATION_V1, CFG_REPLY);
 	}
 	message->add_payload(message, (payload_t *)this->cp);
 	this->cp = NULL;
@@ -463,7 +451,7 @@ METHOD(task_t, process_i, status_t,
 	identification_t *id;
 	cp_payload_t *cp;
 
-	cp = (cp_payload_t*)message->get_payload(message, PLV1_CONFIGURATION);
+	cp = (cp_payload_t*)message->get_payload(message, CONFIGURATION_V1);
 	if (!cp)
 	{
 		DBG1(DBG_IKE, "configuration payload missing in XAuth response");
@@ -475,6 +463,12 @@ METHOD(task_t, process_i, status_t,
 			return NEED_MORE;
 		case SUCCESS:
 			id = this->xauth->get_identity(this->xauth);
+			if (this->user && !id->matches(id, this->user))
+			{
+				DBG1(DBG_IKE, "XAuth username '%Y' does not match to "
+					 "configured username '%Y'", id, this->user);
+				break;
+			}
 			DBG1(DBG_IKE, "XAuth authentication of '%Y' successful", id);
 			if (add_auth_cfg(this, id, FALSE) && allowed(this))
 			{
@@ -523,12 +517,6 @@ METHOD(task_t, migrate, void,
 	}
 }
 
-METHOD(xauth_t, queue_mode_config_push, void,
-	private_xauth_t *this)
-{
-	this->mode_config_push = TRUE;
-}
-
 METHOD(task_t, destroy, void,
 	private_xauth_t *this)
 {
@@ -551,7 +539,6 @@ xauth_t *xauth_create(ike_sa_t *ike_sa, bool initiator)
 				.migrate = _migrate,
 				.destroy = _destroy,
 			},
-			.queue_mode_config_push = _queue_mode_config_push,
 		},
 		.initiator = initiator,
 		.ike_sa = ike_sa,

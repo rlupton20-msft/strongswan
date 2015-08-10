@@ -91,11 +91,11 @@ TNC_Result TNC_IMC_NotifyConnectionChange(TNC_IMCID imc_id,
 	{
 		case TNC_CONNECTION_STATE_CREATE:
 			command = lib->settings->get_str(lib->settings,
-								"%s.plugins.imc-test.command", "none", lib->ns);
+						 		"libimcv.plugins.imc-test.command", "none");
 			dummy_size = lib->settings->get_int(lib->settings,
-								"%s.plugins.imc-test.dummy_size", 0, lib->ns);
+								"libimcv.plugins.imc-test.dummy_size", 0);
 			retry = lib->settings->get_bool(lib->settings,
-								"%s.plugins.imc-test.retry", FALSE, lib->ns);
+								"libimcv.plugins.imc-test.retry", FALSE);
 			state = imc_test_state_create(connection_id, command, dummy_size,
 										  retry);
 
@@ -107,7 +107,7 @@ TNC_Result TNC_IMC_NotifyConnectionChange(TNC_IMCID imc_id,
 
 			/* Optionally reserve additional IMC IDs */
 			additional_ids = lib->settings->get_int(lib->settings,
-							"%s.plugins.imc-test.additional_ids", 0, lib->ns);
+								"libimcv.plugins.imc-test.additional_ids", 0);
 			imc_test->reserve_additional_ids(imc_test, additional_ids -
 								imc_test->count_additional_ids(imc_test));
 
@@ -127,8 +127,8 @@ TNC_Result TNC_IMC_NotifyConnectionChange(TNC_IMCID imc_id,
 			if (!test_state->is_first_handshake(test_state))
 			{
 				command = lib->settings->get_str(lib->settings,
-								"%s.plugins.imc-test.retry_command",
-								test_state->get_command(test_state), lib->ns);
+								"libimcv.plugins.imc-test.retry_command",
+								test_state->get_command(test_state));
 				test_state->set_command(test_state, command);
 			}
 
@@ -181,7 +181,7 @@ TNC_Result TNC_IMC_NotifyConnectionChange(TNC_IMCID imc_id,
 	}
 }
 
-static void create_message(imc_state_t *state, imc_msg_t *out_msg)
+static TNC_Result send_message(imc_state_t *state, imc_msg_t *out_msg)
 {
 	imc_test_state_t *test_state;
 	pa_tnc_attr_t *attr;
@@ -196,6 +196,9 @@ static void create_message(imc_state_t *state, imc_msg_t *out_msg)
 	attr = ita_attr_command_create(test_state->get_command(test_state));
 	attr->set_noskip_flag(attr, TRUE);
 	out_msg->add_attribute(out_msg, attr);
+
+	/* send PA-TNC message with the excl flag set */
+	return out_msg->send(out_msg, TRUE);
 }
 
 /**
@@ -221,11 +224,10 @@ TNC_Result TNC_IMC_BeginHandshake(TNC_IMCID imc_id,
 		return TNC_RESULT_FATAL;
 	}
 
-	/* send PA message for primary IMC ID with the EXCL flag set */
+	/* send PA message for primary IMC ID */
 	out_msg = imc_msg_create(imc_test, state, connection_id, imc_id,
 							 TNC_IMVID_ANY, msg_types[0]);
-	create_message(state, out_msg);
-	result = out_msg->send(out_msg, TRUE);
+	result = send_message(state, out_msg);
 	out_msg->destroy(out_msg);
 
 	/* Exit if there are no additional IMC IDs */
@@ -251,8 +253,7 @@ TNC_Result TNC_IMC_BeginHandshake(TNC_IMCID imc_id,
 		additional_id = (TNC_UInt32)pointer;
 		out_msg = imc_msg_create(imc_test, state, connection_id, additional_id,
 								 TNC_IMVID_ANY, msg_types[0]);
-		create_message(state, out_msg);
-		result = out_msg->send(out_msg, TRUE);
+		result = send_message(state, out_msg);
 		out_msg->destroy(out_msg);
 	}
 	enumerator->destroy(enumerator);
@@ -266,17 +267,13 @@ static TNC_Result receive_message(imc_state_t *state, imc_msg_t *in_msg)
 	enumerator_t *enumerator;
 	pa_tnc_attr_t *attr;
 	pen_type_t attr_type;
-	TNC_Result result = TNC_RESULT_SUCCESS;
+	TNC_Result result;
 	bool fatal_error = FALSE;
 
-	/* generate an outgoing PA-TNC message - we might need it */
-	out_msg = imc_msg_create_as_reply(in_msg);
-
 	/* parse received PA-TNC message and handle local and remote errors */
-	result = in_msg->receive(in_msg, out_msg, &fatal_error);
+	result = in_msg->receive(in_msg, &fatal_error);
 	if (result != TNC_RESULT_SUCCESS)
 	{
-		out_msg->destroy(out_msg);
 		return result;
 	}
 
@@ -311,17 +308,16 @@ static TNC_Result receive_message(imc_state_t *state, imc_msg_t *in_msg)
 
 	if (fatal_error)
 	{
-		result = TNC_RESULT_FATAL;
+		return TNC_RESULT_FATAL;
 	}
-	else
+
+	/* if no assessment result is known then repeat the measurement */
+	if (state->get_result(state, in_msg->get_dst_id(in_msg), NULL))
 	{
-		/* if no assessment result is known then repeat the measurement */
-		if (!state->get_result(state, in_msg->get_dst_id(in_msg), NULL))
-		{
-			create_message(state, out_msg);
-		}
-		result = out_msg->send(out_msg, TRUE);
+		return TNC_RESULT_SUCCESS;
 	}
+	out_msg = imc_msg_create_as_reply(in_msg);
+ 	result = send_message(state, out_msg);
 	out_msg->destroy(out_msg);
 
 	return result;

@@ -68,7 +68,8 @@ METHOD(listener_t, ike_updown, bool,
 		type = atoi(this->type);
 		if (!type)
 		{
-			if (!enum_from_name(notify_type_names, this->type, &type))
+			type = enum_from_name(notify_type_names, this->type);
+			if (type == -1)
 			{
 				DBG1(DBG_CFG, "unknown notify: '%s', skipped", this->type);
 				return TRUE;
@@ -83,7 +84,7 @@ METHOD(listener_t, ike_updown, bool,
 		{
 			data = chunk_clone(chunk_create(this->data, strlen(this->data)));
 		}
-		notify = notify_payload_create_from_protocol_and_type(PLV2_NOTIFY,
+		notify = notify_payload_create_from_protocol_and_type(NOTIFY,
 									this->esp ? PROTO_ESP : PROTO_IKE, type);
 		notify->set_spi(notify, this->spi);
 		if (data.len)

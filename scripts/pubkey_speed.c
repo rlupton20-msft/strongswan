@@ -71,7 +71,7 @@ int main(int argc, char *argv[])
 		usage();
 	}
 
-	library_init(NULL, "pubkey_speed");
+	library_init(NULL);
 	lib->plugins->load(lib->plugins, argv[1]);
 	atexit(library_deinit);
 

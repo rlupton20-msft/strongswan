@@ -1,7 +1,6 @@
 /*
  * Copyright (C) 2010-2013 Martin Willi, revosec AG
- * Copyright (C) 2013-2015 Andreas Steffen
- * HSR Hochschule für Technik Rapperswil
+ * Copyright (C) 2013 Andreas Steffen, HSR Hochschule für Technik Rapperswil
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -17,13 +16,11 @@
 #include <unistd.h>
 #include <stdio.h>
 #include <sys/types.h>
+#include <sys/socket.h>
 #include <getopt.h>
 #include <errno.h>
 #include <string.h>
 #include <stdlib.h>
-#ifdef HAVE_SYSLOG
-#include <syslog.h>
-#endif
 
 #include <pt_tls.h>
 #include <pt_tls_client.h>
@@ -38,13 +35,12 @@
 /**
  * Print usage information
  */
-static void usage(FILE *out)
+static void usage(FILE *out, char *cmd)
 {
-	fprintf(out,
-		"Usage: pt-tls  --connect <hostname|address> [--port <port>]\n"
-		"              [--cert <file>]+ [--key <file>]\n"
-		"              [--client <client-id>] [--secret <password>]\n"
-		"              [--optionsfrom <filename>] [--quiet] [--debug <level>]\n");
+	fprintf(out, "usage:\n");
+	fprintf(out, "  %s --connect <address> [--port <port>] [--cert <file>]+\n", cmd);
+	fprintf(out, "               [--client <client-id>] [--secret <password>]\n");
+	fprintf(out, "	             [--optionsfrom <filename>]\n");
 }
 
 /**
@@ -54,44 +50,32 @@ static int client(char *address, u_int16_t port, char *identity)
 {
 	pt_tls_client_t *assessment;
 	tls_t *tnccs;
-	identification_t *server_id, *client_id;
-	host_t *server_ip, *client_ip;
+	identification_t *server, *client;
+	host_t *host;
 	status_t status;
 
-	server_ip = host_create_from_dns(address, AF_UNSPEC, port);
-	if (!server_ip)
+	host = host_create_from_dns(address, AF_UNSPEC, port);
+	if (!host)
 	{
 		return 1;
 	}
-
-	client_ip = host_create_any(server_ip->get_family(server_ip));
-	if (!client_ip)
-	{
-		server_ip->destroy(server_ip);
-		return 1;
-	}
-	server_id = identification_create_from_string(address);
-	client_id = identification_create_from_string(identity);
-
+	server = identification_create_from_string(address);
+	client = identification_create_from_string(identity);
 	tnccs = (tls_t*)tnc->tnccs->create_instance(tnc->tnccs, TNCCS_2_0, FALSE,
-								server_id, client_id, server_ip, client_ip,
-								TNC_IFT_TLS_2_0, NULL);
-	client_ip->destroy(client_ip);
-
+								server, client, TNC_IFT_TLS_2_0, NULL);
 	if (!tnccs)
 	{
 		fprintf(stderr, "loading TNCCS failed: %s\n", PLUGINS);
-		server_ip->destroy(server_ip);
-		server_id->destroy(server_id);
-		client_id->destroy(client_id);
+		host->destroy(host);
+		server->destroy(server);
+		client->destroy(client);
 		return 1;
 	}
-	assessment = pt_tls_client_create(server_ip, server_id, client_id);
+	assessment = pt_tls_client_create(host, server, client);
 	status = assessment->run_assessment(assessment, (tnccs_t*)tnccs);
 	assessment->destroy(assessment);
 	tnccs->destroy(tnccs);
-
-	return (status != SUCCESS);
+	return status;
 }
 
 
@@ -137,71 +121,21 @@ static bool load_key(char *filename)
 }
 
 /**
- * Logging and debug level
+ * Debug level
  */
-static bool log_to_stderr = TRUE;
-#ifdef HAVE_SYSLOG
-static bool log_to_syslog = TRUE;
-#endif /* HAVE_SYSLOG */
-static level_t default_loglevel = 1;
+static level_t pt_tls_level = 1;
 
 static void dbg_pt_tls(debug_t group, level_t level, char *fmt, ...)
 {
-	va_list args;
-
-	if (level <= default_loglevel)
+	if (level <= pt_tls_level)
 	{
-		if (log_to_stderr)
-		{
-			va_start(args, fmt);
-			vfprintf(stderr, fmt, args);
-			va_end(args);
-			fprintf(stderr, "\n");
-		}
-#ifdef HAVE_SYSLOG
-		if (log_to_syslog)
-		{
-			char buffer[8192];
-			char *current = buffer, *next;
+		va_list args;
 
-			/* write in memory buffer first */
-			va_start(args, fmt);
-			vsnprintf(buffer, sizeof(buffer), fmt, args);
-			va_end(args);
-
-			/* do a syslog with every line */
-			while (current)
-			{
-				next = strchr(current, '\n');
-				if (next)
-				{
-					*(next++) = '\0';
-				}
-				syslog(LOG_INFO, "%s\n", current);
-				current = next;
-			}
-		}
-#endif /* HAVE_SYSLOG */
+		va_start(args, fmt);
+		vfprintf(stderr, fmt, args);
+		fprintf(stderr, "\n");
+		va_end(args);
 	}
-}
-
-/**
- * Initialize logging to stderr/syslog
- */
-static void init_log(const char *program)
-{
-	dbg = dbg_pt_tls;
-
-	if (log_to_stderr)
-	{
-		setbuf(stderr, NULL);
-	}
-#ifdef HAVE_SYSLOG
-	if (log_to_syslog)
-	{
-		openlog(program, LOG_CONS | LOG_NDELAY | LOG_PID, LOG_AUTHPRIV);
-	}
-#endif /* HAVE_SYSLOG */
 }
 
 /**
@@ -232,14 +166,14 @@ static void init()
 			PLUGIN_PROVIDE(CUSTOM, "pt-tls-client"),
 				PLUGIN_DEPENDS(CUSTOM, "tnccs-manager"),
 	};
-	library_init(NULL, "pt-tls-client");
+	library_init(NULL);
 	libtnccs_init();
 
-	init_log("pt-tls-client");
+	dbg = dbg_pt_tls;
 	options = options_create();
 
 	lib->plugins->add_static_features(lib->plugins, "pt-tls-client", features,
-									  countof(features), TRUE, NULL, NULL);
+									  countof(features), TRUE);
 	if (!lib->plugins->load(lib->plugins,
 			lib->settings->get_str(lib->settings, "pt-tls-client.load", PLUGINS)))
 	{
@@ -270,8 +204,6 @@ int main(int argc, char *argv[])
 			{"port",		required_argument,		NULL,		'p' },
 			{"cert",		required_argument,		NULL,		'x' },
 			{"key",			required_argument,		NULL,		'k' },
-			{"mutual",		no_argument,			NULL,		'm' },
-			{"quiet",		no_argument,			NULL,		'q' },
 			{"debug",		required_argument,		NULL,		'd' },
 			{"optionsfrom",	required_argument,		NULL,		'+' },
 			{0,0,0,0 }
@@ -280,63 +212,56 @@ int main(int argc, char *argv[])
 		{
 			case EOF:
 				break;
-			case 'h':			/* --help */
-				usage(stdout);
+			case 'h':
+				usage(stdout, argv[0]);
 				return 0;
-			case 'x':			/* --cert <file> */
+			case 'x':
 				if (!load_certificate(optarg))
 				{
 					return 1;
 				}
 				continue;
-			case 'k':			/* --key <file> */
+			case 'k':
 				if (!load_key(optarg))
 				{
 					return 1;
 				}
 				continue;
-			case 'c':			/* --connect <hostname|address> */
+			case 'c':
 				if (address)
 				{
-					usage(stderr);
+					usage(stderr, argv[0]);
 					return 1;
 				}
 				address = optarg;
 				continue;
-			case 'i':			/* --client <client-id> */
+			case 'i':
 				identity = optarg;
 				continue;
-			case 's':			/* --secret <password> */
+			case 's':
 				secret = optarg;
 				continue;
-			case 'p':			/* --port <port> */
+			case 'p':
 				port = atoi(optarg);
 				continue;
-			case 'm':			/* --mutual */
-				lib->settings->set_bool(lib->settings,
-								"%s.plugins.tnccs-20.mutual", TRUE, lib->ns);
+			case 'd':
+				pt_tls_level = atoi(optarg);
 				continue;
-			case 'q':       	/* --quiet */
-				log_to_stderr = FALSE;
-				continue;
-			case 'd':			/* --debug <level> */
-				default_loglevel = atoi(optarg);
-				continue;
-			case '+':			/* --optionsfrom <filename> */
+			case '+':	/* --optionsfrom <filename> */
 				if (!options->from(options, optarg, &argc, &argv, optind))
 				{
 					return 1;
 				}
 				continue;
 			default:
-				usage(stderr);
+				usage(stderr, argv[0]);
 				return 1;
 		}
 		break;
 	}
 	if (!address)
 	{
-		usage(stderr);
+		usage(stderr, argv[0]);
 		return 1;
 	}
 	if (secret)

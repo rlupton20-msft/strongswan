@@ -23,6 +23,7 @@
 #ifndef TUN_DEVICE_H_
 #define TUN_DEVICE_H_
 
+#include <library.h>
 #include <networking/host.h>
 
 typedef struct tun_device_t tun_device_t;
@@ -31,6 +32,8 @@ typedef struct tun_device_t tun_device_t;
  * Class to create TUN devices
  *
  * Creating such a device requires the CAP_NET_ADMIN capability.
+ *
+ * @note The implementation is currently very Linux specific
  */
 struct tun_device_t {
 
@@ -40,7 +43,7 @@ struct tun_device_t {
 	 * @note This call blocks until a packet is available. It is a thread
 	 * cancellation point.
 	 *
-	 * @param packet		the packet read from the device, allocated
+	 * @param packet		the packet read from the device
 	 * @return				TRUE if successful
 	 */
 	bool (*read_packet)(tun_device_t *this, chunk_t *packet);

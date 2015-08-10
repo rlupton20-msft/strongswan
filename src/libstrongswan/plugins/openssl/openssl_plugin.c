@@ -14,12 +14,6 @@
  * for more details.
  */
 
-#include <library.h>
-#include <utils/debug.h>
-#include <threading/thread.h>
-#include <threading/mutex.h>
-#include <threading/thread_value.h>
-
 #include <openssl/err.h>
 #include <openssl/evp.h>
 #include <openssl/conf.h>
@@ -30,6 +24,12 @@
 #endif
 
 #include "openssl_plugin.h"
+
+#include <library.h>
+#include <utils/debug.h>
+#include <threading/thread.h>
+#include <threading/mutex.h>
+#include <threading/thread_value.h>
 #include "openssl_util.h"
 #include "openssl_crypter.h"
 #include "openssl_hasher.h"
@@ -266,8 +266,6 @@ METHOD(plugin_t, get_features, int,
 	private_openssl_plugin_t *this, plugin_feature_t *features[])
 {
 	static plugin_feature_t f[] = {
-		/* we provide OpenSSL threading callbacks */
-		PLUGIN_PROVIDE(CUSTOM, "openssl-threading"),
 		/* crypters */
 		PLUGIN_REGISTER(CRYPTER, openssl_crypter_create),
 #ifndef OPENSSL_NO_AES
@@ -524,14 +522,13 @@ plugin_t *openssl_plugin_create()
 	int fips_mode;
 
 	fips_mode = lib->settings->get_int(lib->settings,
-							"%s.plugins.openssl.fips_mode", FIPS_MODE, lib->ns);
+						"libstrongswan.plugins.openssl.fips_mode", FIPS_MODE);
 #ifdef OPENSSL_FIPS
 	if (fips_mode)
 	{
-		if (FIPS_mode() != fips_mode && !FIPS_mode_set(fips_mode))
+		if (!FIPS_mode_set(fips_mode))
 		{
-			DBG1(DBG_LIB, "unable to set openssl FIPS mode(%d) from (%d)",
-				 fips_mode, FIPS_mode());
+			DBG1(DBG_LIB, "unable to set openssl FIPS mode(%d)", fips_mode);
 			return NULL;
 		}
 	}
@@ -561,8 +558,8 @@ plugin_t *openssl_plugin_create()
 #ifdef OPENSSL_FIPS
 	/* we do this here as it may have been enabled via openssl.conf */
 	fips_mode = FIPS_mode();
-	dbg(DBG_LIB, strpfx(lib->ns, "charon") ? 1 : 2,
-		"openssl FIPS mode(%d) - %sabled ", fips_mode, fips_mode ? "en" : "dis");
+	DBG1(DBG_LIB, "openssl FIPS mode(%d) - %sabled ", fips_mode,
+		 fips_mode ? "en" : "dis");
 #endif /* OPENSSL_FIPS */
 
 #ifndef OPENSSL_NO_ENGINE

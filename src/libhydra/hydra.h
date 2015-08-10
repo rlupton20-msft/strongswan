@@ -16,6 +16,9 @@
 /**
  * @defgroup libhydra libhydra
  *
+ * @defgroup attributes attributes
+ * @ingroup libhydra
+ *
  * @defgroup hkernel kernel
  * @ingroup libhydra
  *
@@ -31,6 +34,7 @@
 
 typedef struct hydra_t hydra_t;
 
+#include <attributes/attribute_manager.h>
 #include <kernel/kernel_interface.h>
 
 #include <library.h>
@@ -41,9 +45,19 @@ typedef struct hydra_t hydra_t;
 struct hydra_t {
 
 	/**
+	 * manager for payload attributes
+	 */
+	attribute_manager_t *attributes;
+
+	/**
 	 * kernel interface to communicate with kernel
 	 */
 	kernel_interface_t *kernel_interface;
+
+	/**
+	 * name of the daemon that initialized the library
+	 */
+	const char *daemon;
 };
 
 /**
@@ -56,12 +70,15 @@ extern hydra_t *hydra;
 /**
  * Initialize libhydra.
  *
- * libhydra_init() may be called multiple times in a single process, but each
- * caller must call libhydra_deinit() for each call to libhydra_init().
+ * The daemon's name is used to load daemon-specific settings.
  *
+ * libhydra_init() may be called multiple times in a single process, but each
+ * caller should call libhydra_deinit() for each call to libhydra_init().
+ *
+ * @param daemon		name of the daemon that initializes the library
  * @return				FALSE if integrity check failed
  */
-bool libhydra_init();
+bool libhydra_init(const char *daemon);
 
 /**
  * Deinitialize libhydra.

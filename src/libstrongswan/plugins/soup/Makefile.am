@@ -3,7 +3,7 @@ AM_CPPFLAGS = \
 
 AM_CFLAGS = \
 	 ${soup_CFLAGS} \
-	$(PLUGIN_CFLAGS)
+	-rdynamic
 
 if MONOLITHIC
 noinst_LTLIBRARIES = libstrongswan-soup.la

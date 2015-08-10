@@ -74,6 +74,22 @@ typedef struct {
 static private_eap_radius_forward_t *singleton = NULL;
 
 /**
+ * Hashtable hash function
+ */
+static u_int hash(uintptr_t key)
+{
+	return key;
+}
+
+/**
+ * Hashtable equals function
+ */
+static bool equals(uintptr_t a, uintptr_t b)
+{
+	return a == b;
+}
+
+/**
  * Free a queue entry
  */
 static void free_attribute(chunk_t *chunk)
@@ -232,8 +248,8 @@ static void ike2queue(message_t *message, linked_list_t *queue,
 	enumerator = message->create_payload_enumerator(message);
 	while (enumerator->enumerate(enumerator, &payload))
 	{
-		if (payload->get_type(payload) == PLV2_NOTIFY ||
-			payload->get_type(payload) == PLV1_NOTIFY)
+		if (payload->get_type(payload) == NOTIFY ||
+			payload->get_type(payload) == NOTIFY_V1)
 		{
 			notify = (notify_payload_t*)payload;
 			if (notify->get_notify_type(notify) == RADIUS_ATTRIBUTE)
@@ -362,7 +378,8 @@ static linked_list_t* parse_selector(char *selector)
 			vendor = atoi(token);
 			token = pos;
 		}
-		if (!enum_from_name(radius_attribute_type_names, token, &type))
+		type = enum_from_name(radius_attribute_type_names, token);
+		if (type == -1)
 		{
 			type = atoi(token);
 		}
@@ -421,12 +438,14 @@ eap_radius_forward_t *eap_radius_forward_create()
 		},
 		.from_attr = parse_selector(lib->settings->get_str(lib->settings,
 							"%s.plugins.eap-radius.forward.ike_to_radius", "",
-							lib->ns)),
+							charon->name)),
 		.to_attr = parse_selector(lib->settings->get_str(lib->settings,
 							"%s.plugins.eap-radius.forward.radius_to_ike", "",
-							lib->ns)),
-		.from = hashtable_create(hashtable_hash_ptr, hashtable_equals_ptr, 8),
-		.to = hashtable_create(hashtable_hash_ptr, hashtable_equals_ptr, 8),
+							charon->name)),
+		.from = hashtable_create((hashtable_hash_t)hash,
+						(hashtable_equals_t)equals, 8),
+		.to = hashtable_create((hashtable_hash_t)hash,
+						(hashtable_equals_t)equals, 8),
 		.mutex = mutex_create(MUTEX_TYPE_DEFAULT),
 	);
 

@@ -30,9 +30,9 @@ struct private_inactivity_job_t {
 	inactivity_job_t public;
 
 	/**
-	 * Unique CHILD_SA identifier to check
+	 * Reqid of CHILD_SA to check
 	 */
-	u_int32_t id;
+	u_int32_t reqid;
 
 	/**
 	 * Inactivity timeout
@@ -57,8 +57,8 @@ METHOD(job_t, execute, job_requeue_t,
 	ike_sa_t *ike_sa;
 	u_int32_t reschedule = 0;
 
-	ike_sa = charon->child_sa_manager->checkout_by_id(charon->child_sa_manager,
-													  this->id, NULL);
+	ike_sa = charon->ike_sa_manager->checkout_by_id(charon->ike_sa_manager,
+													this->reqid, TRUE);
 	if (ike_sa)
 	{
 		enumerator_t *enumerator;
@@ -69,17 +69,16 @@ METHOD(job_t, execute, job_requeue_t,
 		status_t status = SUCCESS;
 
 		enumerator = ike_sa->create_child_sa_enumerator(ike_sa);
-		while (enumerator->enumerate(enumerator, &child_sa))
+		while (enumerator->enumerate(enumerator, (void**)&child_sa))
 		{
-			if (child_sa->get_unique_id(child_sa) == this->id)
+			if (child_sa->get_reqid(child_sa) == this->reqid)
 			{
-				time_t in, out, install, diff;
+				time_t in, out, diff;
 
 				child_sa->get_usestats(child_sa, TRUE, &in, NULL, NULL);
 				child_sa->get_usestats(child_sa, FALSE, &out, NULL, NULL);
-				install = child_sa->get_installtime(child_sa);
 
-				diff = time_monotonic(NULL) - max(max(in, out), install);
+				diff = time_monotonic(NULL) - max(in, out);
 
 				if (diff >= this->timeout)
 				{
@@ -136,7 +135,7 @@ METHOD(job_t, get_priority, job_priority_t,
 /**
  * See header
  */
-inactivity_job_t *inactivity_job_create(u_int32_t unique_id, u_int32_t timeout,
+inactivity_job_t *inactivity_job_create(u_int32_t reqid, u_int32_t timeout,
 										bool close_ike)
 {
 	private_inactivity_job_t *this;
@@ -149,7 +148,7 @@ inactivity_job_t *inactivity_job_create(u_int32_t unique_id, u_int32_t timeout,
 				.destroy = _destroy,
 			},
 		},
-		.id = unique_id,
+		.reqid = reqid,
 		.timeout = timeout,
 		.close_ike = close_ike,
 	);

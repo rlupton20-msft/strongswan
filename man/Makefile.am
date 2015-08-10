@@ -1,9 +1,6 @@
-man_MANS =
-
-if USE_FILE_CONFIG
-  man_MANS += \
+man_MANS = \
 	ipsec.conf.5 \
-	ipsec.secrets.5
-endif
+	ipsec.secrets.5 \
+	strongswan.conf.5
 
 CLEANFILES = $(man_MANS)

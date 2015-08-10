@@ -134,7 +134,7 @@ static void process_certreqs(private_isakmp_cert_pre_t *this, message_t *message
 	{
 		switch (payload->get_type(payload))
 		{
-			case PLV1_CERTREQ:
+			case CERTIFICATE_REQUEST_V1:
 			{
 				certificate_t *cert;
 
@@ -268,7 +268,7 @@ static void process_certs(private_isakmp_cert_pre_t *this, message_t *message)
 	enumerator = message->create_payload_enumerator(message);
 	while (enumerator->enumerate(enumerator, &payload))
 	{
-		if (payload->get_type(payload) == PLV1_CERTIFICATE)
+		if (payload->get_type(payload) == CERTIFICATE_V1)
 		{
 			cert_payload_t *cert_payload;
 			cert_encoding_t encoding;
@@ -377,7 +377,7 @@ static void build_certreqs(private_isakmp_cert_pre_t *this, message_t *message)
 		}
 		enumerator->destroy(enumerator);
 	}
-	if (!message->get_payload(message, PLV1_CERTREQ))
+	if (!message->get_payload(message, CERTIFICATE_REQUEST_V1))
 	{
 		/* otherwise add all trusted CA certificates */
 		enumerator = lib->credmgr->create_cert_enumerator(lib->credmgr,
@@ -402,7 +402,7 @@ static bool use_certs(private_isakmp_cert_pre_t *this, message_t *message)
 	enumerator = message->create_payload_enumerator(message);
 	while (enumerator->enumerate(enumerator, &payload))
 	{
-		if (payload->get_type(payload) == PLV1_SECURITY_ASSOCIATION)
+		if (payload->get_type(payload) == SECURITY_ASSOCIATION_V1)
 		{
 			sa_payload_t *sa_payload = (sa_payload_t*)payload;
 

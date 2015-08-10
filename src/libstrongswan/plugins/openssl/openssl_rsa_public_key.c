@@ -74,7 +74,7 @@ static bool verify_emsa_pkcs1_signature(private_openssl_rsa_public_key_t *this,
 								 RSA_PKCS1_PADDING);
 		if (len != -1)
 		{
-			valid = chunk_equals_const(data, chunk_create(buf, len));
+			valid = chunk_equals(data, chunk_create(buf, len));
 		}
 		free(buf);
 	}
@@ -222,21 +222,7 @@ bool openssl_rsa_fingerprint(RSA *rsa, cred_encoding_type_t type, chunk_t *fp)
 			i2d_RSA_PUBKEY(rsa, &p);
 			break;
 		default:
-		{
-			chunk_t n = chunk_empty, e = chunk_empty;
-			bool success = FALSE;
-
-			if (openssl_bn2chunk(rsa->n, &n) &&
-				openssl_bn2chunk(rsa->e, &e))
-			{
-				success = lib->encoding->encode(lib->encoding, type, rsa, fp,
-									CRED_PART_RSA_MODULUS, n,
-									CRED_PART_RSA_PUB_EXP, e, CRED_PART_END);
-			}
-			chunk_free(&n);
-			chunk_free(&e);
-			return success;
-		}
+			return FALSE;
 	}
 	hasher = lib->crypto->create_hasher(lib->crypto, HASH_SHA1);
 	if (!hasher || !hasher->allocate_hash(hasher, key, fp))

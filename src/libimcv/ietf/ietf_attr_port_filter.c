@@ -1,6 +1,5 @@
 /*
- * Copyright (C) 2011-2014 Andreas Steffen
- * HSR Hochschule fuer Technik Rapperswil
+ * Copyright (C) 2011 Andreas Steffen, HSR Hochschule fuer Technik Rapperswil
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -64,12 +63,7 @@ struct private_ietf_attr_port_filter_t {
 	pen_type_t type;
 
 	/**
-	 * Length of attribute value
-	 */
-	size_t length;
-
-	/**
-	 * Attribute value or segment
+	 * Attribute value
 	 */
 	chunk_t value;
 
@@ -137,7 +131,6 @@ METHOD(pa_tnc_attr_t, build, void,
 	enumerator->destroy(enumerator);
 
 	this->value = writer->extract_buf(writer);
-	this->length = this->value.len;
 	writer->destroy(writer);
 }
 
@@ -148,16 +141,11 @@ METHOD(pa_tnc_attr_t, process, status_t,
 	port_entry_t *entry;
 	u_int8_t blocked;
 
-	*offset = 0;
-
-	if (this->value.len < this->length)
-	{
-		return NEED_MORE;
-	}
 	if (this->value.len % PORT_FILTER_ENTRY_SIZE)
 	{
 		DBG1(DBG_TNC, "ietf port filter attribute value is not a multiple of %d",
 			 PORT_FILTER_ENTRY_SIZE);
+		*offset = 0;
 		return FAILED;
 	}
 	reader = bio_reader_create(this->value);
@@ -174,12 +162,6 @@ METHOD(pa_tnc_attr_t, process, status_t,
 	reader->destroy(reader);
 
 	return SUCCESS;
-}
-
-METHOD(pa_tnc_attr_t, add_segment, void,
-	private_ietf_attr_port_filter_t *this, chunk_t segment)
-{
-	this->value = chunk_cat("mc", this->value, segment);
 }
 
 METHOD(pa_tnc_attr_t, get_ref, pa_tnc_attr_t*,
@@ -249,7 +231,6 @@ pa_tnc_attr_t *ietf_attr_port_filter_create(void)
 				.set_noskip_flag = _set_noskip_flag,
 				.build = _build,
 				.process = _process,
-				.add_segment = _add_segment,
 				.get_ref = _get_ref,
 				.destroy = _destroy,
 			},
@@ -267,8 +248,7 @@ pa_tnc_attr_t *ietf_attr_port_filter_create(void)
 /**
  * Described in header.
  */
-pa_tnc_attr_t *ietf_attr_port_filter_create_from_data(size_t length,
-													  chunk_t data)
+pa_tnc_attr_t *ietf_attr_port_filter_create_from_data(chunk_t data)
 {
 	private_ietf_attr_port_filter_t *this;
 
@@ -281,7 +261,6 @@ pa_tnc_attr_t *ietf_attr_port_filter_create_from_data(size_t length,
 				.set_noskip_flag = _set_noskip_flag,
 				.build = _build,
 				.process = _process,
-				.add_segment = _add_segment,
 				.get_ref = _get_ref,
 				.destroy = _destroy,
 			},
@@ -289,7 +268,6 @@ pa_tnc_attr_t *ietf_attr_port_filter_create_from_data(size_t length,
 			.create_port_enumerator = _create_port_enumerator,
 		},
 		.type = {PEN_IETF, IETF_ATTR_PORT_FILTER },
-		.length = length,
 		.value = chunk_clone(data),
 		.ports = linked_list_create(),
 		.ref = 1,

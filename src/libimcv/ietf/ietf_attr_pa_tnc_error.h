@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2011-2014 Andreas Steffen
+ * Copyright (C) 2011-2012 Andreas Steffen
  * HSR Hochschule fuer Technik Rapperswil
  *
  * This program is free software; you can redistribute it and/or modify it
@@ -69,29 +69,25 @@ struct ietf_attr_pa_tnc_error_t {
 	chunk_t (*get_msg_info)(ietf_attr_pa_tnc_error_t *this);
 
 	/**
-	 * Get flags, vendor ID and type of unsupported PA-TNC attribute
+	 * Get first 8 bytes of unsupported PA-TNC attribute
 	 *
-	 * @param flags			PA-TNC attribute flags
-	 * @return				PA-TNC attribute vendor ID and type
+	 * @return				PA-TNC attribute info
 	 */
-	pen_type_t (*get_unsupported_attr)(ietf_attr_pa_tnc_error_t *this,
-									   uint8_t *flags);
+	chunk_t (*get_attr_info)(ietf_attr_pa_tnc_error_t *this);
 
 	/**
-	 * Set flags, vendor ID and type of unsupported PA-TNC attribute
+	 * Set first 8 bytes of unsupported PA-TNC attribute
 	 *
-	 * @param flags			PA-TNC attribute flags
-	 * @param attr_info		PA-TNC attribute vendor ID and type
+	 * @param attr_info		PA-TNC message info
 	 */
-	void (*set_unsupported_attr)(ietf_attr_pa_tnc_error_t *this, uint8_t flags,
-								 pen_type_t type);
+	void (*set_attr_info)(ietf_attr_pa_tnc_error_t *this, chunk_t attr_info);
 
 	/**
 	 * Get the PA-TNC error offset
 	 *
 	 * @return				PA-TNC error offset
 	 */
-	uint32_t (*get_offset)(ietf_attr_pa_tnc_error_t *this);
+	u_int32_t (*get_offset)(ietf_attr_pa_tnc_error_t *this);
 
 };
 
@@ -115,15 +111,13 @@ pa_tnc_attr_t* ietf_attr_pa_tnc_error_create(pen_type_t error_code,
  */
 pa_tnc_attr_t* ietf_attr_pa_tnc_error_create_with_offset(pen_type_t error_code,
 														 chunk_t header,
-														 uint32_t error_offset);
+														 u_int32_t error_offset);
 
 /**
  * Creates an ietf_attr_pa_tnc_error_t object from received data
  *
- * @param length			Total length of attribute value
- * @param value				Unparsed attribute value (might be a segment)
+ * @param value				unparsed attribute value
  */
-pa_tnc_attr_t* ietf_attr_pa_tnc_error_create_from_data(size_t length,
-													   chunk_t value);
+pa_tnc_attr_t* ietf_attr_pa_tnc_error_create_from_data(chunk_t value);
 
 #endif /** IETF_ATTR_PA_TNC_ERROR_H_ @}*/

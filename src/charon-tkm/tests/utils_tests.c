@@ -14,8 +14,7 @@
  * for more details.
  */
 
-#include <tests/test_suite.h>
-
+#include <check.h>
 #include <tkm/types.h>
 
 #include "tkm_utils.h"
@@ -54,17 +53,11 @@ START_TEST(test_chunk_to_sequence)
 }
 END_TEST
 
-Suite *make_utility_tests()
+TCase *make_utility_tests(void)
 {
-	Suite *s;
-	TCase *tc;
-
-	s = suite_create("utility tests");
-
-	tc = tcase_create("chunk<->sequence");
+	TCase *tc = tcase_create("Utility tests");
 	tcase_add_test(tc, test_sequence_to_chunk);
 	tcase_add_test(tc, test_chunk_to_sequence);
-	suite_add_tcase(s, tc);
 
-	return s;
+	return tc;
 }

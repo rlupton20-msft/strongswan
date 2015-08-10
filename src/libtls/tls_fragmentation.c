@@ -96,30 +96,7 @@ struct private_tls_fragmentation_t {
 	 * Upper layer application data protocol
 	 */
 	tls_application_t *application;
-
-	/**
-	 * Type of context this TLS instance runs in
-	 */
-	tls_purpose_t purpose;
 };
-
-/**
- * Check if we should send a close notify once the application finishes
- */
-static bool send_close_notify(private_tls_fragmentation_t *this)
-{
-	switch (this->purpose)
-	{
-		case TLS_PURPOSE_EAP_TLS:
-		case TLS_PURPOSE_EAP_TTLS:
-		case TLS_PURPOSE_EAP_PEAP:
-			/* not for TLS-in-EAP, as we indicate completion with EAP-SUCCCESS.
-			 * Windows does not like close notifies, and hangs/disconnects. */
-			return FALSE;
-		default:
-			return TRUE;
-	}
-}
 
 /**
  * Process a TLS alert
@@ -246,10 +223,6 @@ static status_t process_application(private_tls_fragmentation_t *this,
 				continue;
 			case SUCCESS:
 				this->application_finished = TRUE;
-				if (!send_close_notify(this))
-				{
-					return SUCCESS;
-				}
 				/* FALL */
 			case FAILED:
 			default:
@@ -395,10 +368,6 @@ static status_t build_application(private_tls_fragmentation_t *this)
 				break;
 			case SUCCESS:
 				this->application_finished = TRUE;
-				if (!send_close_notify(this))
-				{
-					break;
-				}
 				/* FALL */
 			case FAILED:
 			default:
@@ -494,8 +463,7 @@ METHOD(tls_fragmentation_t, destroy, void,
  * See header
  */
 tls_fragmentation_t *tls_fragmentation_create(tls_handshake_t *handshake,
-							tls_alert_t *alert, tls_application_t *application,
-							tls_purpose_t purpose)
+							tls_alert_t *alert, tls_application_t *application)
 {
 	private_tls_fragmentation_t *this;
 
@@ -510,7 +478,6 @@ tls_fragmentation_t *tls_fragmentation_create(tls_handshake_t *handshake,
 		.alert = alert,
 		.state = ALERT_NONE,
 		.application = application,
-		.purpose = purpose,
 	);
 
 	return &this->public;

@@ -69,7 +69,8 @@ METHOD(listener_t, message, bool,
 		order = enumerator_create_token(this->order, ", ", " ");
 		while (order->enumerate(order, &name))
 		{
-			if (enum_from_name(payload_type_short_names, name, &type))
+			type = enum_from_name(payload_type_short_names, name);
+			if (type != -1)
 			{
 				enumerator = list->create_enumerator(list);
 				while (enumerator->enumerate(enumerator, &payload))

@@ -47,7 +47,7 @@ struct private_pkcs11_dh_t {
 	/**
 	 * Diffie Hellman group number.
 	 */
-	diffie_hellman_group_t group;
+	u_int16_t group;
 
 	/**
 	 * Handle for own private value
@@ -81,7 +81,7 @@ struct private_pkcs11_dh_t {
  *
  * If this succeeds the shared secret is stored in this->secret.
  */
-static bool derive_secret(private_pkcs11_dh_t *this, chunk_t other)
+static void derive_secret(private_pkcs11_dh_t *this, chunk_t other)
 {
 	CK_OBJECT_CLASS klass = CKO_SECRET_KEY;
 	CK_KEY_TYPE type = CKK_GENERIC_SECRET;
@@ -102,25 +102,19 @@ static bool derive_secret(private_pkcs11_dh_t *this, chunk_t other)
 	if (rv != CKR_OK)
 	{
 		DBG1(DBG_CFG, "C_DeriveKey() error: %N", ck_rv_names, rv);
-		return FALSE;
+		return;
 	}
 	if (!this->lib->get_ck_attribute(this->lib, this->session, secret,
 									 CKA_VALUE, &this->secret))
 	{
 		chunk_free(&this->secret);
-		return FALSE;
+		return;
 	}
-	return TRUE;
 }
 
-METHOD(diffie_hellman_t, set_other_public_value, bool,
+METHOD(diffie_hellman_t, set_other_public_value, void,
 	private_pkcs11_dh_t *this, chunk_t value)
 {
-	if (!diffie_hellman_verify_value(this->group, value))
-	{
-		return FALSE;
-	}
-
 	switch (this->group)
 	{
 		case ECP_192_BIT:
@@ -141,9 +135,9 @@ METHOD(diffie_hellman_t, set_other_public_value, bool,
 			};
 
 			if (!lib->settings->get_bool(lib->settings,
-									"%s.ecp_x_coordinate_only", TRUE, lib->ns))
+								"libstrongswan.ecp_x_coordinate_only", TRUE))
 			{	/* we only get the x coordinate back */
-				return FALSE;
+				return;
 			}
 			value = chunk_from_thing(params);
 			break;
@@ -151,25 +145,24 @@ METHOD(diffie_hellman_t, set_other_public_value, bool,
 		default:
 			break;
 	}
-	return derive_secret(this, value);
+	derive_secret(this, value);
 }
 
-METHOD(diffie_hellman_t, get_my_public_value, bool,
+METHOD(diffie_hellman_t, get_my_public_value, void,
 	private_pkcs11_dh_t *this, chunk_t *value)
 {
 	*value = chunk_clone(this->pub_key);
-	return TRUE;
 }
 
-METHOD(diffie_hellman_t, get_shared_secret, bool,
+METHOD(diffie_hellman_t, get_shared_secret, status_t,
 	private_pkcs11_dh_t *this, chunk_t *secret)
 {
 	if (!this->secret.ptr)
 	{
-		return FALSE;
+		return FAILED;
 	}
 	*secret = chunk_clone(this->secret);
-	return TRUE;
+	return SUCCESS;
 }
 
 METHOD(diffie_hellman_t, get_dh_group, diffie_hellman_group_t,
@@ -450,3 +443,4 @@ pkcs11_dh_t *pkcs11_dh_create(diffie_hellman_group_t group,
 	}
 	return NULL;
 }
+

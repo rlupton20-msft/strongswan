@@ -19,12 +19,8 @@
 #include <stdio.h>
 #include <sys/types.h>
 #include <unistd.h>
-#include <time.h>
-#include <errno.h>
-
-#ifdef HAVE_SYSLOG
 #include <syslog.h>
-#endif
+#include <time.h>
 
 #include "daemon.h"
 
@@ -182,11 +178,10 @@ static bool logger_entry_match(logger_entry_t *this, char *target, bool *file)
  */
 static void handle_syslog_identifier(private_daemon_t *this)
 {
-#ifdef HAVE_SYSLOG
 	char *identifier;
 
 	identifier = lib->settings->get_str(lib->settings, "%s.syslog.identifier",
-										NULL, lib->ns);
+										NULL, charon->name);
 	if (identifier)
 	{	/* set identifier, which is prepended to each log line */
 		if (!this->syslog_identifier ||
@@ -202,7 +197,6 @@ static void handle_syslog_identifier(private_daemon_t *this)
 		closelog();
 		this->syslog_identifier = NULL;
 	}
-#endif /* HAVE_SYSLOG */
 }
 
 /**
@@ -211,7 +205,6 @@ static void handle_syslog_identifier(private_daemon_t *this)
  */
 static int get_syslog_facility(char *facility)
 {
-#ifdef HAVE_SYSLOG
 	if (streq(facility, "daemon"))
 	{
 		return LOG_DAEMON;
@@ -220,7 +213,6 @@ static int get_syslog_facility(char *facility)
 	{
 		return LOG_AUTHPRIV;
 	}
-#endif /* HAVE_SYSLOG */
 	return -1;
 }
 
@@ -244,12 +236,10 @@ static logger_entry_t *get_logger_entry(char *target, bool is_file_logger,
 		{
 			entry->logger.file = file_logger_create(target);
 		}
-#ifdef HAVE_SYSLOG
 		else
 		{
 			entry->logger.sys = sys_logger_create(get_syslog_facility(target));
 		}
-#endif /* HAVE_SYSLOG */
 	}
 	else
 	{
@@ -302,15 +292,15 @@ static void load_sys_logger(private_daemon_t *this, char *facility,
 	sys_logger = add_sys_logger(this, facility, current_loggers);
 	sys_logger->set_options(sys_logger,
 				lib->settings->get_bool(lib->settings, "%s.syslog.%s.ike_name",
-										FALSE, lib->ns, facility));
+										FALSE, charon->name, facility));
 
 	def = lib->settings->get_int(lib->settings, "%s.syslog.%s.default", 1,
-								 lib->ns, facility);
+								 charon->name, facility);
 	for (group = 0; group < DBG_MAX; group++)
 	{
 		sys_logger->set_level(sys_logger, group,
 				lib->settings->get_int(lib->settings, "%s.syslog.%s.%N", def,
-							lib->ns, facility, debug_lower_names, group));
+							charon->name, facility, debug_lower_names, group));
 	}
 	charon->bus->add_logger(charon->bus, &sys_logger->logger);
 }
@@ -328,25 +318,25 @@ static void load_file_logger(private_daemon_t *this, char *filename,
 	char *time_format;
 
 	time_format = lib->settings->get_str(lib->settings,
-						"%s.filelog.%s.time_format", NULL, lib->ns, filename);
+					"%s.filelog.%s.time_format", NULL, charon->name, filename);
 	ike_name = lib->settings->get_bool(lib->settings,
-						"%s.filelog.%s.ike_name", FALSE, lib->ns, filename);
+					"%s.filelog.%s.ike_name", FALSE, charon->name, filename);
 	flush_line = lib->settings->get_bool(lib->settings,
-						"%s.filelog.%s.flush_line", FALSE, lib->ns, filename);
+					"%s.filelog.%s.flush_line", FALSE, charon->name, filename);
 	append = lib->settings->get_bool(lib->settings,
-						"%s.filelog.%s.append", TRUE, lib->ns, filename);
+					"%s.filelog.%s.append", TRUE, charon->name, filename);
 
 	file_logger = add_file_logger(this, filename, current_loggers);
 	file_logger->set_options(file_logger, time_format, ike_name);
 	file_logger->open(file_logger, flush_line, append);
 
 	def = lib->settings->get_int(lib->settings, "%s.filelog.%s.default", 1,
-								 lib->ns, filename);
+								 charon->name, filename);
 	for (group = 0; group < DBG_MAX; group++)
 	{
 		file_logger->set_level(file_logger, group,
 				lib->settings->get_int(lib->settings, "%s.filelog.%s.%N", def,
-							lib->ns, filename, debug_lower_names, group));
+							charon->name, filename, debug_lower_names, group));
 	}
 	charon->bus->add_logger(charon->bus, &file_logger->logger);
 }
@@ -363,7 +353,7 @@ METHOD(daemon_t, load_loggers, void,
 	current_loggers = this->loggers;
 	this->loggers = linked_list_create();
 	enumerator = lib->settings->create_section_enumerator(lib->settings,
-														"%s.syslog", lib->ns);
+													"%s.syslog", charon->name);
 	while (enumerator->enumerate(enumerator, &target))
 	{
 		load_sys_logger(this, target, current_loggers);
@@ -371,7 +361,7 @@ METHOD(daemon_t, load_loggers, void,
 	enumerator->destroy(enumerator);
 
 	enumerator = lib->settings->create_section_enumerator(lib->settings,
-														"%s.filelog", lib->ns);
+													"%s.filelog", charon->name);
 	while (enumerator->enumerate(enumerator, &target))
 	{
 		load_file_logger(this, target, current_loggers);
@@ -390,27 +380,18 @@ METHOD(daemon_t, load_loggers, void,
 
 		for (group = 0; group < DBG_MAX; group++)
 		{
-			if (sys_logger)
-			{
-				sys_logger->set_level(sys_logger, group, levels[group]);
-			}
+			sys_logger->set_level(sys_logger, group, levels[group]);
 			if (to_stderr)
 			{
 				file_logger->set_level(file_logger, group, levels[group]);
 			}
 		}
-		if (sys_logger)
-		{
-			charon->bus->add_logger(charon->bus, &sys_logger->logger);
-		}
+		charon->bus->add_logger(charon->bus, &sys_logger->logger);
 		charon->bus->add_logger(charon->bus, &file_logger->logger);
 
 		sys_logger = add_sys_logger(this, "auth", current_loggers);
-		if (sys_logger)
-		{
-			sys_logger->set_level(sys_logger, DBG_ANY, LEVEL_AUDIT);
-			charon->bus->add_logger(charon->bus, &sys_logger->logger);
-		}
+		sys_logger->set_level(sys_logger, DBG_ANY, LEVEL_AUDIT);
+		charon->bus->add_logger(charon->bus, &sys_logger->logger);
 	}
 	/* unregister and destroy any unused remaining loggers */
 	current_loggers->destroy_function(current_loggers,
@@ -462,10 +443,6 @@ static void destroy(private_daemon_t *this)
 	{
 		this->public.traps->flush(this->public.traps);
 	}
-	if (this->public.shunts)
-	{
-		this->public.shunts->flush(this->public.shunts);
-	}
 	if (this->public.sender)
 	{
 		this->public.sender->flush(this->public.sender);
@@ -478,15 +455,12 @@ static void destroy(private_daemon_t *this)
 	DESTROY_IF(this->public.connect_manager);
 	DESTROY_IF(this->public.mediation_manager);
 #endif /* ME */
-	/* make sure the cache and scheduler are clear before unloading plugins */
+	/* make sure the cache is clear before unloading plugins */
 	lib->credmgr->flush_cache(lib->credmgr, CERT_ANY);
-	lib->scheduler->flush(lib->scheduler);
 	lib->plugins->unload(lib->plugins);
-	DESTROY_IF(this->public.attributes);
 	DESTROY_IF(this->kernel_handler);
 	DESTROY_IF(this->public.traps);
 	DESTROY_IF(this->public.shunts);
-	DESTROY_IF(this->public.child_sa_manager);
 	DESTROY_IF(this->public.ike_sa_manager);
 	DESTROY_IF(this->public.controller);
 	DESTROY_IF(this->public.eap);
@@ -499,54 +473,8 @@ static void destroy(private_daemon_t *this)
 	DESTROY_IF(this->public.bus);
 	this->loggers->destroy_function(this->loggers, (void*)logger_entry_destroy);
 	this->mutex->destroy(this->mutex);
+	free((void*)this->public.name);
 	free(this);
-}
-
-/**
- * Run a set of configured scripts
- */
-static void run_scripts(private_daemon_t *this, char *verb)
-{
-	enumerator_t *enumerator;
-	char *key, *value, *pos, buf[1024];
-	FILE *cmd;
-
-	enumerator = lib->settings->create_key_value_enumerator(lib->settings,
-												"%s.%s-scripts", lib->ns, verb);
-	while (enumerator->enumerate(enumerator, &key, &value))
-	{
-		DBG1(DBG_DMN, "executing %s script '%s' (%s):", verb, key, value);
-		cmd = popen(value, "r");
-		if (!cmd)
-		{
-			DBG1(DBG_DMN, "executing %s script '%s' (%s) failed: %s",
-				 verb, key, value, strerror(errno));
-			continue;
-		}
-		while (TRUE)
-		{
-			if (!fgets(buf, sizeof(buf), cmd))
-			{
-				if (ferror(cmd))
-				{
-					DBG1(DBG_DMN, "reading from %s script '%s' (%s) failed",
-						 verb, key, value);
-				}
-				break;
-			}
-			else
-			{
-				pos = buf + strlen(buf);
-				if (pos > buf && pos[-1] == '\n')
-				{
-					pos[-1] = '\0';
-				}
-				DBG1(DBG_DMN, "%s: %s", key, buf);
-			}
-		}
-		pclose(cmd);
-	}
-	enumerator->destroy(enumerator);
 }
 
 METHOD(daemon_t, start, void,
@@ -555,9 +483,7 @@ METHOD(daemon_t, start, void,
 	/* start the engine, go multithreaded */
 	lib->processor->set_threads(lib->processor,
 						lib->settings->get_int(lib->settings, "%s.threads",
-											   DEFAULT_THREADS, lib->ns));
-
-	run_scripts(this, "start");
+											   DEFAULT_THREADS, charon->name));
 }
 
 
@@ -599,8 +525,8 @@ METHOD(daemon_t, initialize, bool,
 				PLUGIN_DEPENDS(RNG, RNG_STRONG),
 				PLUGIN_DEPENDS(CUSTOM, "socket"),
 	};
-	lib->plugins->add_static_features(lib->plugins, lib->ns, features,
-									  countof(features), TRUE, NULL, NULL);
+	lib->plugins->add_static_features(lib->plugins, charon->name, features,
+									  countof(features), TRUE);
 
 	/* load plugins, further infrastructure may need it */
 	if (!lib->plugins->load(lib->plugins, plugins))
@@ -613,7 +539,6 @@ METHOD(daemon_t, initialize, bool,
 	{
 		return FALSE;
 	}
-	this->public.child_sa_manager = child_sa_manager_create();
 
 	/* Queue start_action job */
 	lib->processor->queue_job(lib->processor, (job_t*)start_action_job_create());
@@ -633,7 +558,7 @@ METHOD(daemon_t, initialize, bool,
 /**
  * Create the daemon.
  */
-private_daemon_t *daemon_create()
+private_daemon_t *daemon_create(const char *name)
 {
 	private_daemon_t *this;
 
@@ -644,13 +569,13 @@ private_daemon_t *daemon_create()
 			.load_loggers = _load_loggers,
 			.set_level = _set_level,
 			.bus = bus_create(),
+			.name = strdup(name ?: "libcharon"),
 		},
 		.loggers = linked_list_create(),
 		.mutex = mutex_create(MUTEX_TYPE_DEFAULT),
 		.ref = 1,
 	);
 	charon = &this->public;
-	this->public.attributes = attribute_manager_create();
 	this->public.controller = controller_create();
 	this->public.eap = eap_manager_create();
 	this->public.xauth = xauth_manager_create();
@@ -675,8 +600,6 @@ void libcharon_deinit()
 		return;
 	}
 
-	run_scripts(this, "stop");
-
 	destroy(this);
 	charon = NULL;
 }
@@ -684,7 +607,7 @@ void libcharon_deinit()
 /**
  * Described in header.
  */
-bool libcharon_init()
+bool libcharon_init(const char *name)
 {
 	private_daemon_t *this;
 
@@ -695,7 +618,7 @@ bool libcharon_init()
 		return !this->integrity_failed;
 	}
 
-	this = daemon_create();
+	this = daemon_create(name);
 
 	/* for uncritical pseudo random numbers */
 	srandom(time(NULL) + getpid());

@@ -103,8 +103,7 @@ METHOD(mac_t, set_key, bool,
 	if (key.len > this->b)
 	{
 		/* if key is too long, it will be hashed */
-		if (!this->h->reset(this->h) ||
-			!this->h->get_hash(this->h, key, buffer))
+		if (!this->h->get_hash(this->h, key, buffer))
 		{
 			return FALSE;
 		}

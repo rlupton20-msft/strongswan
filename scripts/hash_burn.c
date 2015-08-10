@@ -25,7 +25,7 @@ int main(int argc, char *argv[])
 	char buffer[1024];
 	int limit = 0, i = 0;
 
-	library_init(NULL, "hash_burn");
+	library_init(NULL);
 	lib->plugins->load(lib->plugins, PLUGINS);
 	atexit(library_deinit);
 
@@ -43,7 +43,8 @@ int main(int argc, char *argv[])
 		limit = atoi(argv[2]);
 	}
 
-	if (!enum_from_name(hash_algorithm_short_names, argv[1], &alg))
+	alg = enum_from_name(hash_algorithm_short_names, argv[1]);
+	if (alg == -1)
 	{
 		fprintf(stderr, "unknown hash algorthm: %s\n", argv[1]);
 		return 1;

@@ -120,7 +120,6 @@ METHOD(logger_t, get_level, level_t,
 METHOD(sql_logger_t, destroy, void,
 	private_sql_logger_t *this)
 {
-	this->recursive->destroy(this->recursive);
 	free(this);
 }
 
@@ -142,7 +141,7 @@ sql_logger_t *sql_logger_create(database_t *db)
 		.db = db,
 		.recursive = thread_value_create(NULL),
 		.level = lib->settings->get_int(lib->settings,
-										"%s.plugins.sql.loglevel", -1, lib->ns),
+								"%s.plugins.sql.loglevel", -1, charon->name),
 	);
 
 	return &this->public;

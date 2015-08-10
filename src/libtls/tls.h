@@ -107,8 +107,6 @@ enum tls_purpose_t {
 	TLS_PURPOSE_EAP_PEAP,
 	/** non-EAP TLS */
 	TLS_PURPOSE_GENERIC,
-	/** non-EAP TLS accepting NULL encryption */
-	TLS_PURPOSE_GENERIC_NULLOK,
 	/** EAP binding for TNC */
 	TLS_PURPOSE_EAP_TNC
 };
@@ -250,13 +248,6 @@ struct tls_t {
 	 * @return			MSK, internal data
 	 */
 	chunk_t (*get_eap_msk)(tls_t *this);
-
-	/**
-	 * Get the authentication details after completing the handshake.
-	 *
-	 * @return			authentication details, internal data
-	 */
-	auth_cfg_t* (*get_auth)(tls_t *this);
 
 	/**
 	 * Destroy a tls_t.

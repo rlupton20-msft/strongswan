@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2011-2015 Andreas Steffen
+ * Copyright (C) 2011-2013 Andreas Steffen
  * HSR Hochschule fuer Technik Rapperswil
  *
  * This program is free software; you can redistribute it and/or modify it
@@ -34,22 +34,12 @@ struct private_tnccs_dynamic_t {
 	/**
 	 * Server identity
 	 */
-	identification_t *server_id;
+	identification_t *server;
 
 	/**
 	 * Client identity
 	 */
-	identification_t *peer_id;
-
-	/**
-	 * Server IP address
-	 */
-	host_t *server_ip;
-
-	/**
-	 * Client IP address
-	 */
-	host_t *peer_ip;
+	identification_t *peer;
 
 	/**
 	 * Detected TNC IF-TNCCS stack
@@ -119,8 +109,8 @@ METHOD(tls_t, process, status_t,
 		DBG1(DBG_TNC, "%N protocol detected dynamically",
 					   tnccs_type_names, type);
 		tnccs = tnc->tnccs->create_instance(tnc->tnccs, type, TRUE,
-							this->server_id, this->peer_id, this->server_ip,
-							this->peer_ip, this->transport,	this->callback);
+							this->server, this->peer, this->transport,
+							this->callback);
 		if (!tnccs)
 		{
 			DBG1(DBG_TNC, "N% protocol not supported", tnccs_type_names, type);
@@ -147,14 +137,14 @@ METHOD(tls_t, is_server, bool,
 METHOD(tls_t, get_server_id, identification_t*,
 	private_tnccs_dynamic_t *this)
 {
-	return this->server_id;
+	return this->server;
 }
 
 METHOD(tls_t, set_peer_id, void,
 	private_tnccs_dynamic_t *this, identification_t *id)
 {
-	DESTROY_IF(this->peer_id);
-	this->peer_id = id->clone(id);
+	DESTROY_IF(this->peer);
+	this->peer = id->clone(id);
 	if (this->tls)
 	{
 		this->tls->set_peer_id(this->tls, id);
@@ -164,7 +154,7 @@ METHOD(tls_t, set_peer_id, void,
 METHOD(tls_t, get_peer_id, identification_t*,
 	private_tnccs_dynamic_t *this)
 {
-	return this->peer_id;
+	return this->peer;
 }
 
 METHOD(tls_t, get_purpose, tls_purpose_t,
@@ -191,24 +181,10 @@ METHOD(tls_t, destroy, void,
 	if (ref_put(&this->ref))
 	{
 		DESTROY_IF(this->tls);
-		this->server_id->destroy(this->server_id);
-		this->peer_id->destroy(this->peer_id);
-		this->server_ip->destroy(this->server_ip);
-		this->peer_ip->destroy(this->peer_ip);
+		this->server->destroy(this->server);
+		this->peer->destroy(this->peer);
 		free(this);
 	}
-}
-
-METHOD(tnccs_t, get_server_ip, host_t*,
-	private_tnccs_dynamic_t *this)
-{
-	return this->server_ip;
-}
-
-METHOD(tnccs_t, get_peer_ip, host_t*,
-	private_tnccs_dynamic_t *this)
-{
-	return this->peer_ip;
 }
 
 METHOD(tnccs_t, get_transport, tnc_ift_type_t,
@@ -253,10 +229,9 @@ METHOD(tnccs_t, get_ref, tnccs_t*,
 /**
  * See header
  */
-tnccs_t* tnccs_dynamic_create(bool is_server, identification_t *server_id,
-							  identification_t *peer_id, host_t *server_ip,
-							  host_t *peer_ip, tnc_ift_type_t transport,
-							  tnccs_cb_t cb)
+tnccs_t* tnccs_dynamic_create(bool is_server,
+							  identification_t *server, identification_t *peer,
+							  tnc_ift_type_t transport, tnccs_cb_t cb)
 {
 	private_tnccs_dynamic_t *this;
 
@@ -274,8 +249,6 @@ tnccs_t* tnccs_dynamic_create(bool is_server, identification_t *server_id,
 				.get_eap_msk = _get_eap_msk,
 				.destroy = _destroy,
 			},
-			.get_server_ip = _get_server_ip,
-			.get_peer_ip = _get_peer_ip,
 			.get_transport = _get_transport,
 			.set_transport = _set_transport,
 			.get_auth_type = _get_auth_type,
@@ -283,10 +256,8 @@ tnccs_t* tnccs_dynamic_create(bool is_server, identification_t *server_id,
 			.get_pdp_server = _get_pdp_server,
 			.get_ref = _get_ref,
 		},
-		.server_id = server_id->clone(server_id),
-		.peer_id = peer_id->clone(peer_id),
-		.server_ip = server_ip->clone(server_ip),
-		.peer_ip = peer_ip->clone(peer_ip),
+		.server = server->clone(server),
+		.peer = peer->clone(peer),
 		.transport = transport,
 		.callback = cb,
 		.ref = 1,

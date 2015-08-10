@@ -26,7 +26,6 @@
 typedef struct tls_protection_t tls_protection_t;
 
 #include "tls.h"
-#include "tls_aead.h"
 #include "tls_alert.h"
 #include "tls_compression.h"
 
@@ -63,12 +62,15 @@ struct tls_protection_t {
 					  tls_content_type_t *type, chunk_t *data);
 
 	/**
-	 * Set a new transforms to use at protection layer
+	 * Set a new cipher, including encryption and integrity algorithms.
 	 *
 	 * @param inbound	TRUE to use cipher for inbound data, FALSE for outbound
-	 * @param aead		new AEAD transform
+	 * @param signer	new signer to use, gets owned by protection layer
+	 * @param crypter	new crypter to use, gets owned by protection layer
+	 * @param iv		initial IV for crypter, gets owned by protection layer
 	 */
-	void (*set_cipher)(tls_protection_t *this, bool inbound, tls_aead_t *aead);
+	void (*set_cipher)(tls_protection_t *this, bool inbound, signer_t *signer,
+					   crypter_t *crypter, chunk_t iv);
 
 	/**
 	 * Set the TLS version negotiated, used for MAC calculation.

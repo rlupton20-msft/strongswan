@@ -26,8 +26,6 @@
 #include <sys/utsname.h>
 #include <unistd.h>
 #include <getopt.h>
-#include <fcntl.h>
-#include <errno.h>
 
 #include <hydra.h>
 #include <daemon.h>
@@ -124,7 +122,7 @@ static void run()
 			{
 				DBG1(DBG_DMN, "signal of type SIGHUP received. Reloading "
 					 "configuration");
-				if (lib->settings->load_files(lib->settings, lib->conf, FALSE))
+				if (lib->settings->load_files(lib->settings, NULL, FALSE))
 				{
 					charon->load_loggers(charon, levels, !use_syslog);
 					lib->plugins->reload(lib->plugins, NULL);
@@ -231,14 +229,6 @@ static bool check_pidfile()
 	pidfile = fopen(PID_FILE, "w");
 	if (pidfile)
 	{
-		int fd;
-
-		fd = fileno(pidfile);
-		if (fd == -1 || fcntl(fd, F_SETFD, FD_CLOEXEC) == -1)
-		{
-			DBG1(DBG_LIB, "setting FD_CLOEXEC for '"PID_FILE"' failed: %s",
-				 strerror(errno));
-		}
 		ignore_result(fchown(fileno(pidfile),
 							 lib->caps->get_uid(lib->caps),
 							 lib->caps->get_gid(lib->caps)));
@@ -299,7 +289,7 @@ int main(int argc, char *argv[])
 	dbg = dbg_stderr;
 
 	/* initialize library */
-	if (!library_init(NULL, "charon"))
+	if (!library_init(NULL))
 	{
 		library_deinit();
 		exit(SS_RC_LIBSTRONGSWAN_INTEGRITY);
@@ -313,7 +303,7 @@ int main(int argc, char *argv[])
 		exit(SS_RC_DAEMON_INTEGRITY);
 	}
 
-	if (!libhydra_init())
+	if (!libhydra_init("charon"))
 	{
 		dbg_stderr(DBG_DMN, 1, "initialization failed - aborting charon");
 		libhydra_deinit();
@@ -321,7 +311,7 @@ int main(int argc, char *argv[])
 		exit(SS_RC_INITIALIZATION_FAILED);
 	}
 
-	if (!libcharon_init())
+	if (!libcharon_init("charon"))
 	{
 		dbg_stderr(DBG_DMN, 1, "initialization failed - aborting charon");
 		goto deinit;
@@ -465,3 +455,4 @@ deinit:
 	library_deinit();
 	return status;
 }
+

@@ -1,5 +1,5 @@
 [Unit]
-Description=strongSwan IPsec IKEv1/IKEv2 daemon using ipsec.conf
+Description=strongSwan IPsec
 After=syslog.target
 
 [Service]

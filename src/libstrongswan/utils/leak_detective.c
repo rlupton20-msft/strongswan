@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2013-2014 Tobias Brunner
+ * Copyright (C) 2013 Tobias Brunner
  * Copyright (C) 2006-2013 Martin Willi
  * Hochschule fuer Technik Rapperswil
  *
@@ -19,11 +19,14 @@
 #include <string.h>
 #include <stdio.h>
 #include <signal.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
 #include <unistd.h>
+#include <syslog.h>
+#include <netdb.h>
 #include <locale.h>
-#ifdef HAVE_DLADDR
 #include <dlfcn.h>
-#endif
 #include <time.h>
 #include <errno.h>
 
@@ -39,7 +42,6 @@
 #include "leak_detective.h"
 
 #include <library.h>
-#include <utils/utils.h>
 #include <utils/debug.h>
 #include <utils/backtrace.h>
 #include <collections/hashtable.h>
@@ -57,21 +59,6 @@ struct private_leak_detective_t {
 	 * public functions
 	 */
 	leak_detective_t public;
-
-	/**
-	 * Registered report() function
-	 */
-	leak_detective_report_cb_t report_cb;
-
-	/**
-	 * Registered report() summary function
-	 */
-	leak_detective_summary_cb_t report_scb;
-
-	/**
-	 * Registered user data for callbacks
-	 */
-	void *report_data;
 };
 
 /**
@@ -331,15 +318,8 @@ HOOK(size_t, size, const void *ptr)
  */
 static bool register_hooks()
 {
-	static bool once = FALSE;
 	malloc_zone_t *zone;
 	void *page;
-
-	if (once)
-	{
-		return TRUE;
-	}
-	once = TRUE;
 
 	zone = malloc_default_zone();
 	if (zone->version != MALLOC_ZONE_VERSION)
@@ -481,7 +461,7 @@ static void* real_realloc(void *ptr, size_t size)
 static bool register_hooks()
 {
 	void *buf = real_malloc(8);
-	buf = real_realloc(buf, 16);
+	real_realloc(buf, 16);
 	real_free(buf);
 	return TRUE;
 }
@@ -497,7 +477,7 @@ static bool register_hooks()
 char *whitelist[] = {
 	/* backtraces, including own */
 	"backtrace_create",
-	"strerror_safe",
+	"safe_strerror",
 	/* pthread stuff */
 	"pthread_create",
 	"pthread_setspecific",
@@ -552,7 +532,6 @@ char *whitelist[] = {
 	/* ClearSilver */
 	"nerr_init",
 	/* libgcrypt */
-	"gcrypt_plugin_create",
 	"gcry_control",
 	"gcry_check_version",
 	"gcry_randomize",
@@ -562,8 +541,6 @@ char *whitelist[] = {
 	"ECDSA_do_sign_ex",
 	"ECDSA_verify",
 	"RSA_new_method",
-	/* OpenSSL libssl */
-	"SSL_COMP_get_compression_methods",
 	/* NSPR */
 	"PR_CallOnce",
 	/* libapr */
@@ -588,12 +565,7 @@ char *whitelist[] = {
  */
 static void init_static_allocations()
 {
-	struct tm tm;
-	time_t t = 0;
-
 	tzset();
-	gmtime_r(&t, &tm);
-	localtime_r(&t, &tm);
 }
 
 /**
@@ -627,8 +599,7 @@ static bool equals(backtrace_t *a, backtrace_t *b)
  * Summarize and print backtraces
  */
 static int print_traces(private_leak_detective_t *this,
-						leak_detective_report_cb_t cb, void *user,
-						int thresh, int thresh_count,
+						FILE *out, int thresh, int thresh_count,
 						bool detailed, int *whitelisted, size_t *sum)
 {
 	int leaks = 0;
@@ -681,20 +652,16 @@ static int print_traces(private_leak_detective_t *this,
 		leaks++;
 	}
 	lock->unlock(lock);
-
 	enumerator = entries->create_enumerator(entries);
 	while (enumerator->enumerate(enumerator, NULL, &entry))
 	{
-		if (cb)
+		if (out &&
+			(!thresh || entry->bytes >= thresh) &&
+			(!thresh_count || entry->count >= thresh_count))
 		{
-			if (!thresh || entry->bytes >= thresh)
-			{
-				if (!thresh_count || entry->count >= thresh_count)
-				{
-					cb(user, entry->count, entry->bytes, entry->backtrace,
-					   detailed);
-				}
-			}
+			fprintf(out, "%d bytes total, %d allocations, %d bytes average:\n",
+					entry->bytes, entry->count, entry->bytes / entry->count);
+			entry->backtrace->log(entry->backtrace, out, detailed);
 		}
 		entry->backtrace->destroy(entry->backtrace);
 		free(entry);
@@ -714,30 +681,38 @@ METHOD(leak_detective_t, report, void,
 		int leaks, whitelisted = 0;
 		size_t sum = 0;
 
-		leaks = print_traces(this, this->report_cb, this->report_data,
-							 0, 0, detailed, &whitelisted, &sum);
-		if (this->report_scb)
+		leaks = print_traces(this, stderr, 0, 0, detailed, &whitelisted, &sum);
+		switch (leaks)
 		{
-			this->report_scb(this->report_data, leaks, sum, whitelisted);
+			case 0:
+				fprintf(stderr, "No leaks detected");
+				break;
+			case 1:
+				fprintf(stderr, "One leak detected");
+				break;
+			default:
+				fprintf(stderr, "%d leaks detected, %zu bytes", leaks, sum);
+				break;
 		}
+		fprintf(stderr, ", %d suppressed by whitelist\n", whitelisted);
 	}
-}
-
-METHOD(leak_detective_t, set_report_cb, void,
-	private_leak_detective_t *this, leak_detective_report_cb_t cb,
-	leak_detective_summary_cb_t scb, void *user)
-{
-	this->report_cb = cb;
-	this->report_scb = scb;
-	this->report_data = user;
+	else
+	{
+		fprintf(stderr, "Leak detective disabled\n");
+	}
 }
 
 METHOD(leak_detective_t, leaks, int,
 	private_leak_detective_t *this)
 {
-	int whitelisted = 0;
+	if (lib->leak_detective)
+	{
+		int leaks, whitelisted = 0;
 
-	return print_traces(this, NULL, NULL, 0, 0, FALSE, &whitelisted, NULL);
+		leaks = print_traces(this, NULL, 0, 0, FALSE, &whitelisted, NULL);
+		return leaks;
+	}
+	return 0;
 }
 
 METHOD(leak_detective_t, set_state, bool,
@@ -747,26 +722,22 @@ METHOD(leak_detective_t, set_state, bool,
 }
 
 METHOD(leak_detective_t, usage, void,
-	private_leak_detective_t *this, leak_detective_report_cb_t cb,
-	leak_detective_summary_cb_t scb, void *user)
+	private_leak_detective_t *this, FILE *out)
 {
 	bool detailed;
-	int thresh, thresh_count, leaks, whitelisted = 0;
+	int thresh, thresh_count;
 	size_t sum = 0;
 
 	thresh = lib->settings->get_int(lib->settings,
-						"%s.leak_detective.usage_threshold", 10240, lib->ns);
+					"libstrongswan.leak_detective.usage_threshold", 10240);
 	thresh_count = lib->settings->get_int(lib->settings,
-						"%s.leak_detective.usage_threshold_count", 0, lib->ns);
+					"libstrongswan.leak_detective.usage_threshold_count", 0);
 	detailed = lib->settings->get_bool(lib->settings,
-						"%s.leak_detective.detailed", TRUE, lib->ns);
+					"libstrongswan.leak_detective.detailed", TRUE);
 
-	leaks = print_traces(this, cb, user, thresh, thresh_count,
-						 detailed, &whitelisted, &sum);
-	if (scb)
-	{
-		scb(user, leaks, sum, whitelisted);
-	}
+	print_traces(this, out, thresh, thresh_count, detailed, NULL, &sum);
+
+	fprintf(out, "Total memory usage: %zu\n", sum);
 }
 
 /**
@@ -953,7 +924,6 @@ METHOD(leak_detective_t, destroy, void,
 	lock->destroy(lock);
 	thread_disabled->destroy(thread_disabled);
 	free(this);
-	first_header.next = NULL;
 }
 
 /*
@@ -966,28 +936,24 @@ leak_detective_t *leak_detective_create()
 	INIT(this,
 		.public = {
 			.report = _report,
-			.set_report_cb = _set_report_cb,
-			.usage = _usage,
 			.leaks = _leaks,
+			.usage = _usage,
 			.set_state = _set_state,
 			.destroy = _destroy,
 		},
 	);
-
-	if (getenv("LEAK_DETECTIVE_DISABLE") != NULL)
-	{
-		free(this);
-		return NULL;
-	}
 
 	lock = spinlock_create();
 	thread_disabled = thread_value_create(NULL);
 
 	init_static_allocations();
 
-	if (register_hooks())
+	if (getenv("LEAK_DETECTIVE_DISABLE") == NULL)
 	{
-		enable_leak_detective();
+		if (register_hooks())
+		{
+			enable_leak_detective();
+		}
 	}
 	return &this->public;
 }

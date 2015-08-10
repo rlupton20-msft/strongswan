@@ -1,7 +1,6 @@
 /*
  * Copyright (C) 2009 Martin Willi
- * Copyright (C) 2015 Andreas Steffen
- * HSR Hochschule fuer Technik Rapperswil
+ * Hochschule fuer Technik Rapperswil
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -13,8 +12,6 @@
  * or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License
  * for more details.
  */
-
-#include <errno.h>
 
 #include "pki.h"
 
@@ -53,11 +50,6 @@ static int pub()
 				{
 					type = CRED_PRIVATE_KEY;
 					subtype = KEY_ECDSA;
-				}
-				else if (streq(arg, "bliss"))
-				{
-					type = CRED_PRIVATE_KEY;
-					subtype = KEY_BLISS;
 				}
 				else if (streq(arg, "pub"))
 				{
@@ -116,12 +108,7 @@ static int pub()
 	{
 		chunk_t chunk;
 
-		set_file_mode(stdin, CERT_ASN1_DER);
-		if (!chunk_from_fd(0, &chunk))
-		{
-			fprintf(stderr, "reading input failed: %s\n", strerror(errno));
-			return 1;
-		}
+		chunk = chunk_from_fd(0);
 		cred = lib->creds->create(lib->creds, type, subtype,
 								  BUILD_BLOB, chunk, BUILD_END);
 		free(chunk.ptr);
@@ -170,7 +157,6 @@ static int pub()
 		return 1;
 	}
 	public->destroy(public);
-	set_file_mode(stdout, form);
 	if (fwrite(encoding.ptr, encoding.len, 1, stdout) != 1)
 	{
 		fprintf(stderr, "writing public key failed\n");
@@ -189,7 +175,7 @@ static void __attribute__ ((constructor))reg()
 	command_register((command_t) {
 		pub, 'p', "pub",
 		"extract the public key from a private key/certificate",
-		{"[--in file|--keyid hex] [--type rsa|ecdsa|bliss|pub|pkcs10|x509]",
+		{"[--in file|--keyid hex] [--type rsa|ecdsa|pub|pkcs10|x509]",
 		 "[--outform der|pem|dnskey|sshkey]"},
 		{
 			{"help",	'h', 0, "show usage information"},
@@ -200,3 +186,4 @@ static void __attribute__ ((constructor))reg()
 		}
 	});
 }
+

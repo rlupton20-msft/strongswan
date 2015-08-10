@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2010-2015 Andreas Steffen
+ * Copyright (C) 2010-2013 Andreas Steffen
  * HSR Hochschule fuer Technik Rapperswil
  *
  * This program is free software; you can redistribute it and/or modify it
@@ -45,11 +45,6 @@ struct private_eap_tnc_t {
 	 * Public authenticator_t interface.
 	 */
 	eap_tnc_t public;
-
-	/**
-	 * Inner EAP authentication type
-	 */
-	eap_type_t type;
 
 	/**
 	 * Outer EAP authentication type
@@ -129,7 +124,7 @@ METHOD(eap_method_t, initiate, status_t,
 	private_eap_tnc_t *this, eap_payload_t **out)
 {
 	chunk_t data;
-	uint32_t auth_type;
+	u_int32_t auth_type;
 
 	/* Determine TNC Client Authentication Type */
 	switch (this->auth_type)
@@ -180,10 +175,10 @@ METHOD(eap_method_t, process, status_t,
 }
 
 METHOD(eap_method_t, get_type, eap_type_t,
-	private_eap_tnc_t *this, uint32_t *vendor)
+	private_eap_tnc_t *this, u_int32_t *vendor)
 {
 	*vendor = 0;
-	return this->type;
+	return EAP_TNC;
 }
 
 METHOD(eap_method_t, get_msk, status_t,
@@ -197,14 +192,14 @@ METHOD(eap_method_t, get_msk, status_t,
 	return FAILED;
 }
 
-METHOD(eap_method_t, get_identifier, uint8_t,
+METHOD(eap_method_t, get_identifier, u_int8_t,
 	private_eap_tnc_t *this)
 {
 	return this->tls_eap->get_identifier(this->tls_eap);
 }
 
 METHOD(eap_method_t, set_identifier, void,
-	private_eap_tnc_t *this, uint8_t identifier)
+	private_eap_tnc_t *this, u_int8_t identifier)
 {
 	this->tls_eap->set_identifier(this->tls_eap, identifier);
 }
@@ -219,7 +214,7 @@ METHOD(eap_method_t, destroy, void,
 	private_eap_tnc_t *this)
 {
 	chunk_t pdp_server;
-	uint16_t pdp_port;
+	u_int16_t pdp_port;
 	tls_t *tls;
 
 	pdp_server = this->tnccs->get_pdp_server(this->tnccs, &pdp_port);
@@ -250,16 +245,13 @@ METHOD(eap_inner_method_t, set_auth_type, void,
  * Generic private constructor
  */
 static eap_tnc_t *eap_tnc_create(identification_t *server,
-								 identification_t *peer, bool is_server,
-								 eap_type_t type)
+								 identification_t *peer, bool is_server)
 {
 	private_eap_tnc_t *this;
 	int max_msg_count;
 	char* protocol;
-	ike_sa_t *ike_sa;
-	host_t *server_ip, *peer_ip;
 	tnccs_t *tnccs;
-	tnccs_type_t tnccs_type;
+	tnccs_type_t type;
 
 	INIT(this,
 		.public = {
@@ -278,25 +270,24 @@ static eap_tnc_t *eap_tnc_create(identification_t *server,
 				.set_auth_type = _set_auth_type,
 			},
 		},
-		.type = type,
 	);
 
 	max_msg_count = lib->settings->get_int(lib->settings,
-						"%s.plugins.eap-tnc.max_message_count",
-						EAP_TNC_MAX_MESSAGE_COUNT, lib->ns);
+					"%s.plugins.eap-tnc.max_message_count",
+					EAP_TNC_MAX_MESSAGE_COUNT, charon->name);
 	protocol = lib->settings->get_str(lib->settings,
-						"%s.plugins.eap-tnc.protocol", "tnccs-2.0", lib->ns);
+					"%s.plugins.eap-tnc.protocol", "tnccs-1.1", charon->name);
 	if (strcaseeq(protocol, "tnccs-2.0"))
 	{
-		tnccs_type = TNCCS_2_0;
+		type = TNCCS_2_0;
 	}
 	else if (strcaseeq(protocol, "tnccs-1.1"))
 	{
-		tnccs_type = TNCCS_1_1;
+		type = TNCCS_1_1;
 	}
 	else if (strcaseeq(protocol, "tnccs-dynamic") && is_server)
 	{
-		tnccs_type = TNCCS_DYNAMIC;
+		type = TNCCS_DYNAMIC;
 	}
 	else
 	{
@@ -304,30 +295,8 @@ static eap_tnc_t *eap_tnc_create(identification_t *server,
 		free(this);
 		return NULL;
 	}
-
-	/* Determine IP addresses of server and peer */
-	ike_sa = charon->bus->get_sa(charon->bus);
-	if (!ike_sa)
-	{
-		DBG1(DBG_TNC, "%N constructor did not find IKE_SA",
-					   eap_type_names, type);
-		free(this);
-		return NULL;
-	}
-	if (is_server)
-	{
-		server_ip = ike_sa->get_my_host(ike_sa);
-		peer_ip = ike_sa->get_other_host(ike_sa);
-	}
-	else
-	{
-		peer_ip = ike_sa->get_my_host(ike_sa);
-		server_ip = ike_sa->get_other_host(ike_sa);
-	}
-
-	tnccs = tnc->tnccs->create_instance(tnc->tnccs, tnccs_type,
-						is_server, server, peer, server_ip, peer_ip,
-						(type == EAP_TNC) ? TNC_IFT_EAP_1_1 : TNC_IFT_EAP_2_0,
+	tnccs = tnc->tnccs->create_instance(tnc->tnccs, type,
+						is_server, server, peer, TNC_IFT_EAP_1_1,
 						is_server ? enforce_recommendation : NULL);
 	if (!tnccs)
 	{
@@ -336,7 +305,7 @@ static eap_tnc_t *eap_tnc_create(identification_t *server,
 		return NULL;
 	}
 	this->tnccs = tnccs->get_ref(tnccs);
-	this->tls_eap = tls_eap_create(type, &tnccs->tls,
+	this->tls_eap = tls_eap_create(EAP_TNC, &tnccs->tls,
 								   EAP_TNC_MAX_MESSAGE_LEN,
 								   max_msg_count, FALSE);
 	if (!this->tls_eap)
@@ -350,23 +319,11 @@ static eap_tnc_t *eap_tnc_create(identification_t *server,
 eap_tnc_t *eap_tnc_create_server(identification_t *server,
 								 identification_t *peer)
 {
-	return eap_tnc_create(server, peer, TRUE, EAP_TNC);
+	return eap_tnc_create(server, peer, TRUE);
 }
 
 eap_tnc_t *eap_tnc_create_peer(identification_t *server,
 							   identification_t *peer)
 {
-	return eap_tnc_create(server, peer, FALSE, EAP_TNC);
-}
-
-eap_tnc_t *eap_tnc_pt_create_server(identification_t *server,
-								 identification_t *peer)
-{
-	return eap_tnc_create(server, peer, TRUE, EAP_PT_EAP);
-}
-
-eap_tnc_t *eap_tnc_pt_create_peer(identification_t *server,
-							   identification_t *peer)
-{
-	return eap_tnc_create(server, peer, FALSE, EAP_PT_EAP);
+	return eap_tnc_create(server, peer, FALSE);
 }

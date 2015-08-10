@@ -48,15 +48,7 @@ bool mark_from_string(const char *value, mark_t *mark)
 	{
 		return FALSE;
 	}
-	if (strcasepfx(value, "%unique"))
-	{
-		mark->value = MARK_UNIQUE;
-		endptr = (char*)value + strlen("%unique");
-	}
-	else
-	{
-		mark->value = strtoul(value, &endptr, 0);
-	}
+	mark->value = strtoul(value, &endptr, 0);
 	if (*endptr)
 	{
 		if (*endptr != '/')

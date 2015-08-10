@@ -31,8 +31,7 @@ ENUM(cert_policy_names, CERT_ALWAYS_SEND, CERT_NEVER_SEND,
 	"CERT_NEVER_SEND",
 );
 
-ENUM(unique_policy_names, UNIQUE_NEVER, UNIQUE_KEEP,
-	"UNIQUE_NEVER",
+ENUM(unique_policy_names, UNIQUE_NO, UNIQUE_KEEP,
 	"UNIQUE_NO",
 	"UNIQUE_REPLACE",
 	"UNIQUE_KEEP",

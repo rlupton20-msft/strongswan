@@ -338,7 +338,7 @@ pkcs11_manager_t *pkcs11_manager_create(pkcs11_manager_token_event_t cb,
 	);
 
 	enumerator = lib->settings->create_section_enumerator(lib->settings,
-										"%s.plugins.pkcs11.modules", lib->ns);
+										"libstrongswan.plugins.pkcs11.modules");
 	while (enumerator->enumerate(enumerator, &module))
 	{
 		INIT(entry,
@@ -346,7 +346,7 @@ pkcs11_manager_t *pkcs11_manager_create(pkcs11_manager_token_event_t cb,
 		);
 
 		entry->path = lib->settings->get_str(lib->settings,
-				"%s.plugins.pkcs11.modules.%s.path", NULL, lib->ns, module);
+				"libstrongswan.plugins.pkcs11.modules.%s.path", NULL, module);
 		if (!entry->path)
 		{
 			DBG1(DBG_CFG, "PKCS11 module '%s' lacks library path", module);
@@ -355,8 +355,8 @@ pkcs11_manager_t *pkcs11_manager_create(pkcs11_manager_token_event_t cb,
 		}
 		entry->lib = pkcs11_library_create(module, entry->path,
 						lib->settings->get_bool(lib->settings,
-							"%s.plugins.pkcs11.modules.%s.os_locking",
-							FALSE, lib->ns, module));
+							"libstrongswan.plugins.pkcs11.modules.%s.os_locking",
+							FALSE, module));
 		if (!entry->lib)
 		{
 			free(entry);

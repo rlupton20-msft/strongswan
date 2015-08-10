@@ -16,190 +16,34 @@
 #include <stdio.h>
 #include <library.h>
 
-static int burn_crypter(const proposal_token_t *token, u_int limit, u_int len)
-{
-	chunk_t iv, key, data;
-	crypter_t *crypter;
-	int i = 0;
-	bool ok;
-
-	crypter = lib->crypto->create_crypter(lib->crypto, token->algorithm,
-										  token->keysize / 8);
-	if (!crypter)
-	{
-		fprintf(stderr, "%N-%zu not supported\n",
-				encryption_algorithm_names, token->algorithm, token->keysize);
-		return FALSE;
-	}
-
-	iv = chunk_alloc(crypter->get_iv_size(crypter));
-	memset(iv.ptr, 0xFF, iv.len);
-	data = chunk_alloc(round_up(len, crypter->get_block_size(crypter)));
-	memset(data.ptr, 0xDD, data.len);
-	key = chunk_alloc(crypter->get_key_size(crypter));
-	memset(key.ptr, 0xAA, key.len);
-
-	ok = crypter->set_key(crypter, key);
-	while (ok)
-	{
-		if (!crypter->encrypt(crypter, data, iv, NULL))
-		{
-			fprintf(stderr, "encryption failed!\n");
-			ok = FALSE;
-			break;
-		}
-		if (!crypter->decrypt(crypter, data, iv, NULL))
-		{
-			fprintf(stderr, "decryption failed!\n");
-			ok = FALSE;
-			break;
-		}
-		if (limit && ++i == limit)
-		{
-			break;
-		}
-	}
-	crypter->destroy(crypter);
-
-	free(iv.ptr);
-	free(data.ptr);
-	free(key.ptr);
-
-	return ok;
-}
-
-static bool burn_aead(const proposal_token_t *token, u_int limit, u_int len)
-{
-	chunk_t iv, key, data, dataicv, assoc;
-	aead_t *aead;
-	int i = 0;
-	bool ok;
-
-	aead = lib->crypto->create_aead(lib->crypto, token->algorithm,
-									token->keysize / 8, 0);
-	if (!aead)
-	{
-		fprintf(stderr, "%N-%zu not supported\n",
-				encryption_algorithm_names, token->algorithm, token->keysize);
-		return FALSE;
-	}
-
-	iv = chunk_alloc(aead->get_iv_size(aead));
-	memset(iv.ptr, 0xFF, iv.len);
-	dataicv = chunk_alloc(round_up(len, aead->get_block_size(aead)) +
-						  aead->get_icv_size(aead));
-	data = chunk_create(dataicv.ptr, dataicv.len - aead->get_icv_size(aead));
-	memset(data.ptr, 0xDD, data.len);
-	assoc = chunk_alloc(13);
-	memset(assoc.ptr, 0xCC, assoc.len);
-	key = chunk_alloc(aead->get_key_size(aead));
-	memset(key.ptr, 0xAA, key.len);
-
-	ok = aead->set_key(aead, key);
-	while (ok)
-	{
-		if (!aead->encrypt(aead, data, assoc, iv, NULL))
-		{
-			fprintf(stderr, "aead encryption failed!\n");
-			ok = FALSE;
-			break;
-		}
-		if (!aead->decrypt(aead, dataicv, assoc, iv, NULL))
-		{
-			fprintf(stderr, "aead integrity check failed!\n");
-			ok = FALSE;
-			break;
-		}
-		if (limit && ++i == limit)
-		{
-			break;
-		}
-	}
-	aead->destroy(aead);
-
-	free(iv.ptr);
-	free(data.ptr);
-	free(key.ptr);
-	free(assoc.ptr);
-
-	return ok;
-}
-
-static int burn_signer(const proposal_token_t *token, u_int limit, u_int len)
-{
-	chunk_t  key, data, sig;
-	signer_t *signer;
-	int i = 0;
-	bool ok;
-
-	signer = lib->crypto->create_signer(lib->crypto, token->algorithm);
-	if (!signer)
-	{
-		fprintf(stderr, "%N not supported\n",
-				integrity_algorithm_names, token->algorithm);
-		return FALSE;
-	}
-
-	data = chunk_alloc(len);
-	memset(data.ptr, 0xDD, data.len);
-	key = chunk_alloc(signer->get_key_size(signer));
-	memset(key.ptr, 0xAA, key.len);
-	sig = chunk_alloc(signer->get_block_size(signer));
-
-	ok = signer->set_key(signer, key);
-	while (ok)
-	{
-		if (!signer->get_signature(signer, data, sig.ptr))
-		{
-			fprintf(stderr, "creating signature failed!\n");
-			ok = FALSE;
-			break;
-		}
-		if (!signer->verify_signature(signer, data, sig))
-		{
-			fprintf(stderr, "verifying signature failed!\n");
-			ok = FALSE;
-			break;
-		}
-		if (limit && ++i == limit)
-		{
-			break;
-		}
-	}
-	signer->destroy(signer);
-
-	free(data.ptr);
-	free(key.ptr);
-	free(sig.ptr);
-
-	return ok;
-}
-
 int main(int argc, char *argv[])
 {
 	const proposal_token_t *token;
-	u_int limit = 0, len = 1024;
-	bool ok;
+	aead_t *aead;
+	crypter_t *crypter;
+	char buffer[1024], assoc[8], iv[32];
+	size_t bs;
+	int i = 0, limit = 0;
 
-	library_init(NULL, "crypt_burn");
-	lib->plugins->load(lib->plugins, getenv("PLUGINS") ?: PLUGINS);
+
+	library_init(NULL);
+	lib->plugins->load(lib->plugins, PLUGINS);
 	atexit(library_deinit);
 
-	fprintf(stderr, "loaded: %s\n", lib->plugins->loaded_plugins(lib->plugins));
+	printf("loaded: %s\n", PLUGINS);
+
+	memset(buffer, 0x12, sizeof(buffer));
+	memset(assoc, 0x34, sizeof(assoc));
+	memset(iv, 0x56, sizeof(iv));
 
 	if (argc < 2)
 	{
-		fprintf(stderr, "usage: %s <algorithm> [buflen=%u] [rounds=%u]\n",
-				argv[0], len, limit);
+		fprintf(stderr, "usage: %s <algorithm>!\n", argv[0]);
 		return 1;
 	}
 	if (argc > 2)
 	{
-		len = atoi(argv[2]);
-	}
-	if (argc > 3)
-	{
-		limit = atoi(argv[3]);
+		limit = atoi(argv[2]);
 	}
 
 	token = lib->proposal->get_token(lib->proposal, argv[1]);
@@ -208,26 +52,76 @@ int main(int argc, char *argv[])
 		fprintf(stderr, "algorithm '%s' unknown!\n", argv[1]);
 		return 1;
 	}
-
-	switch (token->type)
+	if (token->type != ENCRYPTION_ALGORITHM)
 	{
-		case ENCRYPTION_ALGORITHM:
-			if (encryption_algorithm_is_aead(token->algorithm))
-			{
-				ok = burn_aead(token, limit, len);
-			}
-			else
-			{
-				ok = burn_crypter(token, limit, len);
-			}
-			break;
-		case INTEGRITY_ALGORITHM:
-			ok = burn_signer(token, limit, len);
-			break;
-		default:
-			fprintf(stderr, "'%s' is not a crypter/aead algorithm!\n", argv[1]);
-			ok = FALSE;
-			break;
+		fprintf(stderr, "'%s' is not an encryption/aead algorithm!\n", argv[1]);
+		return 1;
 	}
-	return !ok;
+
+	if (encryption_algorithm_is_aead(token->algorithm))
+	{
+		aead = lib->crypto->create_aead(lib->crypto,
+										token->algorithm, token->keysize / 8);
+		if (!aead)
+		{
+			fprintf(stderr, "aead '%s' not supported!\n", argv[1]);
+			return 1;
+		}
+		while (TRUE)
+		{
+			if (!aead->encrypt(aead,
+				chunk_create(buffer, sizeof(buffer) - aead->get_icv_size(aead)),
+				chunk_from_thing(assoc),
+				chunk_create(iv, aead->get_iv_size(aead)), NULL))
+			{
+				fprintf(stderr, "aead encryption failed!\n");
+				return 1;
+			}
+			if (!aead->decrypt(aead, chunk_create(buffer, sizeof(buffer)),
+				chunk_from_thing(assoc),
+				chunk_create(iv, aead->get_iv_size(aead)), NULL))
+			{
+				fprintf(stderr, "aead integrity check failed!\n");
+				return 1;
+			}
+			if (limit && ++i == limit)
+			{
+				break;
+			}
+		}
+		aead->destroy(aead);
+	}
+	else
+	{
+		crypter = lib->crypto->create_crypter(lib->crypto,
+										token->algorithm, token->keysize / 8);
+		if (!crypter)
+		{
+			fprintf(stderr, "crypter '%s' not supported!\n", argv[1]);
+			return 1;
+		}
+		bs = crypter->get_block_size(crypter);
+
+		while (TRUE)
+		{
+			if (!crypter->encrypt(crypter,
+					chunk_create(buffer, sizeof(buffer) / bs * bs),
+					chunk_create(iv, crypter->get_iv_size(crypter)), NULL))
+			{
+				continue;
+			}
+			if (!crypter->decrypt(crypter,
+					chunk_create(buffer, sizeof(buffer) / bs * bs),
+					chunk_create(iv, crypter->get_iv_size(crypter)), NULL))
+			{
+				continue;
+			}
+			if (limit && ++i == limit)
+			{
+				break;
+			}
+		}
+		crypter->destroy(crypter);
+	}
+	return 0;
 }

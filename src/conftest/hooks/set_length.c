@@ -63,7 +63,8 @@ METHOD(listener_t, message, bool,
 		type = atoi(this->type);
 		if (!type)
 		{
-			if (!enum_from_name(payload_type_short_names, this->type, &type))
+			type = enum_from_name(payload_type_short_names, this->type);
+			if (type == -1)
 			{
 				DBG1(DBG_CFG, "unknown payload: '%s', skipped", this->type);
 				return TRUE;

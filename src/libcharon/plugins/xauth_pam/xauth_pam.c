@@ -43,11 +43,11 @@ METHOD(xauth_method_t, initiate, status_t,
 {
 	cp_payload_t *cp;
 
-	cp = cp_payload_create_type(PLV1_CONFIGURATION, CFG_REQUEST);
+	cp = cp_payload_create_type(CONFIGURATION_V1, CFG_REQUEST);
 	cp->add_attribute(cp, configuration_attribute_create_chunk(
-				PLV1_CONFIGURATION_ATTRIBUTE, XAUTH_USER_NAME, chunk_empty));
+				CONFIGURATION_ATTRIBUTE_V1, XAUTH_USER_NAME, chunk_empty));
 	cp->add_attribute(cp, configuration_attribute_create_chunk(
-				PLV1_CONFIGURATION_ATTRIBUTE, XAUTH_USER_PASSWORD, chunk_empty));
+				CONFIGURATION_ATTRIBUTE_V1, XAUTH_USER_PASSWORD, chunk_empty));
 	*out = cp;
 	return NEED_MORE;
 }
@@ -116,11 +116,7 @@ static void attr2string(char *buf, size_t len, chunk_t chunk)
 {
 	if (chunk.len && chunk.len < len)
 	{
-		chunk_t sane;
-
-		chunk_printable(chunk, &sane, '?');
-		snprintf(buf, len, "%.*s", (int)sane.len, sane.ptr);
-		chunk_clear(&sane);
+		snprintf(buf, len, "%.*s", (int)chunk.len, chunk.ptr);
 	}
 }
 
@@ -142,7 +138,7 @@ METHOD(xauth_method_t, process, status_t,
 				/* trim to username part if email address given */
 				if (lib->settings->get_bool(lib->settings,
 											"%s.plugins.xauth-pam.trim_email",
-											TRUE, lib->ns))
+											TRUE, charon->name))
 				{
 					pos = memchr(chunk.ptr, '@', chunk.len);
 					if (pos)
@@ -153,12 +149,7 @@ METHOD(xauth_method_t, process, status_t,
 				attr2string(user, sizeof(user), chunk);
 				break;
 			case XAUTH_USER_PASSWORD:
-				chunk = attr->get_chunk(attr);
-				if (chunk.len && chunk.ptr[chunk.len - 1] == 0)
-				{	/* fix null-terminated passwords (Android etc.) */
-					chunk.len -= 1;
-				}
-				attr2string(pass, sizeof(pass), chunk);
+				attr2string(pass, sizeof(pass), attr->get_chunk(attr));
 				break;
 			default:
 				break;
@@ -180,8 +171,9 @@ METHOD(xauth_method_t, process, status_t,
 	service = lib->settings->get_str(lib->settings,
 				"%s.plugins.xauth-pam.pam_service",
 					lib->settings->get_str(lib->settings,
-						"%s.plugins.eap-gtc.pam_service", "login", lib->ns),
-				lib->ns);
+						"%s.plugins.eap-gtc.pam_service",
+						"login", charon->name),
+				charon->name);
 
 	if (authenticate(service, user, pass))
 	{
