@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2008-2012 Tobias Brunner
+ * Copyright (C) 2008-2015 Tobias Brunner
  * Copyright (C) 2007-2009 Martin Willi
  * Hochschule fuer Technik Rapperswil
  *
@@ -31,7 +31,7 @@ ENUM(auth_class_names, AUTH_CLASS_ANY, AUTH_CLASS_XAUTH,
 	"XAuth",
 );
 
-ENUM(auth_rule_names, AUTH_RULE_IDENTITY, AUTH_HELPER_REVOCATION_CERT,
+ENUM(auth_rule_names, AUTH_RULE_IDENTITY, AUTH_HELPER_AC_CERT,
 	"RULE_IDENTITY",
 	"RULE_IDENTITY_LOOSE",
 	"RULE_AUTH_CLASS",
@@ -49,6 +49,7 @@ ENUM(auth_rule_names, AUTH_RULE_IDENTITY, AUTH_HELPER_REVOCATION_CERT,
 	"RULE_GROUP",
 	"RULE_RSA_STRENGTH",
 	"RULE_ECDSA_STRENGTH",
+	"RULE_BLISS_STRENGTH",
 	"RULE_SIGNATURE_SCHEME",
 	"RULE_CERT_POLICY",
 	"HELPER_IM_CERT",
@@ -56,6 +57,7 @@ ENUM(auth_rule_names, AUTH_RULE_IDENTITY, AUTH_HELPER_REVOCATION_CERT,
 	"HELPER_IM_HASH_URL",
 	"HELPER_SUBJECT_HASH_URL",
 	"HELPER_REVOCATION_CERT",
+	"HELPER_AC_CERT",
 );
 
 /**
@@ -70,6 +72,7 @@ static inline bool is_multi_value_rule(auth_rule_t type)
 		case AUTH_RULE_EAP_VENDOR:
 		case AUTH_RULE_RSA_STRENGTH:
 		case AUTH_RULE_ECDSA_STRENGTH:
+		case AUTH_RULE_BLISS_STRENGTH:
 		case AUTH_RULE_IDENTITY:
 		case AUTH_RULE_IDENTITY_LOOSE:
 		case AUTH_RULE_EAP_IDENTITY:
@@ -91,6 +94,7 @@ static inline bool is_multi_value_rule(auth_rule_t type)
 		case AUTH_HELPER_IM_CERT:
 		case AUTH_HELPER_IM_HASH_URL:
 		case AUTH_HELPER_REVOCATION_CERT:
+		case AUTH_HELPER_AC_CERT:
 			return TRUE;
 	}
 	return FALSE;
@@ -205,6 +209,7 @@ static void init_entry(entry_t *this, auth_rule_t type, va_list args)
 		case AUTH_RULE_OCSP_VALIDATION:
 		case AUTH_RULE_RSA_STRENGTH:
 		case AUTH_RULE_ECDSA_STRENGTH:
+		case AUTH_RULE_BLISS_STRENGTH:
 		case AUTH_RULE_SIGNATURE_SCHEME:
 			/* integer type */
 			this->value = (void*)(uintptr_t)va_arg(args, u_int);
@@ -224,6 +229,7 @@ static void init_entry(entry_t *this, auth_rule_t type, va_list args)
 		case AUTH_HELPER_IM_HASH_URL:
 		case AUTH_HELPER_SUBJECT_HASH_URL:
 		case AUTH_HELPER_REVOCATION_CERT:
+		case AUTH_HELPER_AC_CERT:
 			/* pointer type */
 			this->value = va_arg(args, void*);
 			break;
@@ -252,6 +258,7 @@ static bool entry_equals(entry_t *e1, entry_t *e2)
 		case AUTH_RULE_OCSP_VALIDATION:
 		case AUTH_RULE_RSA_STRENGTH:
 		case AUTH_RULE_ECDSA_STRENGTH:
+		case AUTH_RULE_BLISS_STRENGTH:
 		case AUTH_RULE_SIGNATURE_SCHEME:
 		{
 			return e1->value == e2->value;
@@ -262,6 +269,7 @@ static bool entry_equals(entry_t *e1, entry_t *e2)
 		case AUTH_HELPER_IM_CERT:
 		case AUTH_HELPER_SUBJECT_CERT:
 		case AUTH_HELPER_REVOCATION_CERT:
+		case AUTH_HELPER_AC_CERT:
 		{
 			certificate_t *c1, *c2;
 
@@ -319,6 +327,7 @@ static void destroy_entry_value(entry_t *entry)
 		case AUTH_HELPER_IM_CERT:
 		case AUTH_HELPER_SUBJECT_CERT:
 		case AUTH_HELPER_REVOCATION_CERT:
+		case AUTH_HELPER_AC_CERT:
 		{
 			certificate_t *cert = (certificate_t*)entry->value;
 			cert->destroy(cert);
@@ -340,6 +349,7 @@ static void destroy_entry_value(entry_t *entry)
 		case AUTH_RULE_OCSP_VALIDATION:
 		case AUTH_RULE_RSA_STRENGTH:
 		case AUTH_RULE_ECDSA_STRENGTH:
+		case AUTH_RULE_BLISS_STRENGTH:
 		case AUTH_RULE_SIGNATURE_SCHEME:
 		case AUTH_RULE_MAX:
 			break;
@@ -371,6 +381,7 @@ static void replace(private_auth_cfg_t *this, entry_enumerator_t *enumerator,
 			case AUTH_RULE_OCSP_VALIDATION:
 			case AUTH_RULE_RSA_STRENGTH:
 			case AUTH_RULE_ECDSA_STRENGTH:
+			case AUTH_RULE_BLISS_STRENGTH:
 			case AUTH_RULE_SIGNATURE_SCHEME:
 				/* integer type */
 				entry->value = (void*)(uintptr_t)va_arg(args, u_int);
@@ -390,6 +401,7 @@ static void replace(private_auth_cfg_t *this, entry_enumerator_t *enumerator,
 			case AUTH_HELPER_IM_HASH_URL:
 			case AUTH_HELPER_SUBJECT_HASH_URL:
 			case AUTH_HELPER_REVOCATION_CERT:
+			case AUTH_HELPER_AC_CERT:
 				/* pointer type */
 				entry->value = va_arg(args, void*);
 				break;
@@ -444,9 +456,10 @@ METHOD(auth_cfg_t, get, void*,
 		case AUTH_RULE_EAP_VENDOR:
 		case AUTH_RULE_RSA_STRENGTH:
 		case AUTH_RULE_ECDSA_STRENGTH:
+		case AUTH_RULE_BLISS_STRENGTH:
 			return (void*)0;
 		case AUTH_RULE_SIGNATURE_SCHEME:
-			return HASH_UNKNOWN;
+			return (void*)HASH_UNKNOWN;
 		case AUTH_RULE_CRL_VALIDATION:
 		case AUTH_RULE_OCSP_VALIDATION:
 			return (void*)VALIDATION_FAILED;
@@ -467,6 +480,7 @@ METHOD(auth_cfg_t, get, void*,
 		case AUTH_HELPER_IM_HASH_URL:
 		case AUTH_HELPER_SUBJECT_HASH_URL:
 		case AUTH_HELPER_REVOCATION_CERT:
+		case AUTH_HELPER_AC_CERT:
 		case AUTH_RULE_MAX:
 			break;
 	}
@@ -506,6 +520,7 @@ METHOD(auth_cfg_t, complies, bool,
 	signature_scheme_t scheme = SIGN_UNKNOWN;
 	u_int strength = 0;
 	auth_rule_t t1, t2;
+	char *key_type;
 	void *value;
 
 	e1 = constraints->create_enumerator(constraints);
@@ -696,6 +711,7 @@ METHOD(auth_cfg_t, complies, bool,
 			}
 			case AUTH_RULE_RSA_STRENGTH:
 			case AUTH_RULE_ECDSA_STRENGTH:
+			case AUTH_RULE_BLISS_STRENGTH:
 			{
 				strength = (uintptr_t)value;
 				break;
@@ -736,6 +752,7 @@ METHOD(auth_cfg_t, complies, bool,
 			case AUTH_HELPER_IM_HASH_URL:
 			case AUTH_HELPER_SUBJECT_HASH_URL:
 			case AUTH_HELPER_REVOCATION_CERT:
+			case AUTH_HELPER_AC_CERT:
 			case AUTH_RULE_MAX:
 				/* skip helpers */
 				continue;
@@ -789,30 +806,39 @@ METHOD(auth_cfg_t, complies, bool,
 		e2 = create_enumerator(this);
 		while (e2->enumerate(e2, &t2, &strength))
 		{
-			if (t2 == AUTH_RULE_RSA_STRENGTH ||
-				t2 == AUTH_RULE_ECDSA_STRENGTH)
+			switch (t2)
 			{
-				success = FALSE;
-				e1 = constraints->create_enumerator(constraints);
-				while (e1->enumerate(e1, &t1, &value))
+				default:
+					continue;
+				case AUTH_RULE_RSA_STRENGTH:
+					key_type = "RSA";
+					break;
+				case AUTH_RULE_ECDSA_STRENGTH:
+					key_type = "ECDSA";
+					break;
+				case AUTH_RULE_BLISS_STRENGTH:
+					key_type = "BLISS";
+					break;
+			}
+			success = FALSE;
+			e1 = constraints->create_enumerator(constraints);
+			while (e1->enumerate(e1, &t1, &value))
+			{
+				if (t1 == t2 && (uintptr_t)value <= strength)
 				{
-					if (t1 == t2 && (uintptr_t)value <= strength)
-					{
-						success = TRUE;
-						break;
-					}
-				}
-				e1->destroy(e1);
-				if (!success)
-				{
-					if (log_error)
-					{
-						DBG1(DBG_CFG, "%s-%d signatures not acceptable",
-							 t2 == AUTH_RULE_RSA_STRENGTH ? "RSA" : "ECDSA",
-							 strength);
-					}
+					success = TRUE;
 					break;
 				}
+			}
+			e1->destroy(e1);
+			if (!success)
+			{
+				if (log_error)
+				{
+					DBG1(DBG_CFG, "%s-%d signatures not acceptable",
+						 key_type, strength);
+				}
+				break;
 			}
 		}
 		e2->destroy(e2);
@@ -868,6 +894,7 @@ static void merge(private_auth_cfg_t *this, private_auth_cfg_t *other, bool copy
 				case AUTH_HELPER_IM_CERT:
 				case AUTH_HELPER_SUBJECT_CERT:
 				case AUTH_HELPER_REVOCATION_CERT:
+				case AUTH_HELPER_AC_CERT:
 				{
 					certificate_t *cert = (certificate_t*)value;
 
@@ -882,6 +909,7 @@ static void merge(private_auth_cfg_t *this, private_auth_cfg_t *other, bool copy
 				case AUTH_RULE_EAP_VENDOR:
 				case AUTH_RULE_RSA_STRENGTH:
 				case AUTH_RULE_ECDSA_STRENGTH:
+				case AUTH_RULE_BLISS_STRENGTH:
 				case AUTH_RULE_SIGNATURE_SCHEME:
 				{
 					add(this, type, (uintptr_t)value);
@@ -989,8 +1017,8 @@ METHOD(auth_cfg_t, purge, void,
 	{
 		if (!keep_ca || entry->type != AUTH_RULE_CA_CERT)
 		{
-			array_remove_at(this->entries, enumerator);
 			destroy_entry_value(entry);
+			array_remove_at(this->entries, enumerator);
 		}
 	}
 	enumerator->destroy(enumerator);
@@ -1029,6 +1057,7 @@ METHOD(auth_cfg_t, clone_, auth_cfg_t*,
 			case AUTH_HELPER_IM_CERT:
 			case AUTH_HELPER_SUBJECT_CERT:
 			case AUTH_HELPER_REVOCATION_CERT:
+			case AUTH_HELPER_AC_CERT:
 			{
 				certificate_t *cert = (certificate_t*)value;
 				clone->add(clone, type, cert->get_ref(cert));
@@ -1050,6 +1079,7 @@ METHOD(auth_cfg_t, clone_, auth_cfg_t*,
 			case AUTH_RULE_OCSP_VALIDATION:
 			case AUTH_RULE_RSA_STRENGTH:
 			case AUTH_RULE_ECDSA_STRENGTH:
+			case AUTH_RULE_BLISS_STRENGTH:
 			case AUTH_RULE_SIGNATURE_SCHEME:
 				clone->add(clone, type, (uintptr_t)value);
 				break;

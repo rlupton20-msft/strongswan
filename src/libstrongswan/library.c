@@ -22,11 +22,16 @@
 #include <threading/thread.h>
 #include <utils/identification.h>
 #include <networking/host.h>
+#include <collections/array.h>
 #include <collections/hashtable.h>
 #include <utils/backtrace.h>
 #include <selectors/traffic_selector.h>
 
 #define CHECKSUM_LIBRARY IPSEC_LIB_DIR"/libchecksum.so"
+
+#ifndef STRONGSWAN_CONF
+#define STRONGSWAN_CONF NULL
+#endif
 
 typedef struct private_library_t private_library_t;
 
@@ -61,6 +66,39 @@ struct private_library_t {
  */
 library_t *lib = NULL;
 
+#ifdef LEAK_DETECTIVE
+/**
+ * Default leak report callback
+ */
+static void report_leaks(void *user, int count, size_t bytes,
+						 backtrace_t *bt, bool detailed)
+{
+	fprintf(stderr, "%zu bytes total, %d allocations, %zu bytes average:\n",
+			bytes, count, bytes / count);
+	bt->log(bt, stderr, detailed);
+}
+
+/**
+ * Default leak report summary callback
+ */
+static void sum_leaks(void* user, int count, size_t bytes, int whitelisted)
+{
+	switch (count)
+	{
+		case 0:
+			fprintf(stderr, "No leaks detected");
+			break;
+		case 1:
+			fprintf(stderr, "One leak detected");
+			break;
+		default:
+			fprintf(stderr, "%d leaks detected, %zu bytes", count, bytes);
+			break;
+	}
+	fprintf(stderr, ", %d suppressed by whitelist\n", whitelisted);
+}
+#endif /* LEAK_DETECTIVE */
+
 /**
  * Deinitialize library
  */
@@ -75,7 +113,7 @@ void library_deinit()
 	}
 
 	detailed = lib->settings->get_bool(lib->settings,
-								"libstrongswan.leak_detective.detailed", TRUE);
+								"%s.leak_detective.detailed", TRUE, lib->ns);
 
 	/* make sure the cache is clear before unloading plugins */
 	lib->credmgr->flush_cache(lib->credmgr, CERT_ANY);
@@ -107,11 +145,16 @@ void library_deinit()
 	{
 		lib->leak_detective->report(lib->leak_detective, detailed);
 		lib->leak_detective->destroy(lib->leak_detective);
+		lib->leak_detective = NULL;
 	}
 
-	threads_deinit();
 	backtrace_deinit();
+	arrays_deinit();
+	utils_deinit();
+	threads_deinit();
 
+	free(this->public.conf);
+	free((void*)this->public.ns);
 	free(this);
 	lib = NULL;
 }
@@ -201,7 +244,7 @@ static bool check_memwipe()
 /*
  * see header file
  */
-bool library_init(char *settings)
+bool library_init(char *settings, const char *namespace)
 {
 	private_library_t *this;
 	printf_hook_t *pfh;
@@ -213,20 +256,31 @@ bool library_init(char *settings)
 		return !this->integrity_failed;
 	}
 
+	chunk_hash_seed();
+
 	INIT(this,
 		.public = {
 			.get = _get,
 			.set = _set,
+			.ns = strdup(namespace ?: "libstrongswan"),
+			.conf = strdupnull(settings ?: (getenv("STRONGSWAN_CONF") ?: STRONGSWAN_CONF)),
 		},
 		.ref = 1,
 	);
 	lib = &this->public;
 
-	backtrace_init();
 	threads_init();
+	utils_init();
+	arrays_init();
+	backtrace_init();
 
 #ifdef LEAK_DETECTIVE
 	lib->leak_detective = leak_detective_create();
+	if (lib->leak_detective)
+	{
+		lib->leak_detective->set_report_cb(lib->leak_detective,
+										   report_leaks, sum_leaks, NULL);
+	}
 #endif /* LEAK_DETECTIVE */
 
 	pfh = printf_hook_create();
@@ -255,7 +309,11 @@ bool library_init(char *settings)
 
 	this->objects = hashtable_create((hashtable_hash_t)hash,
 									 (hashtable_equals_t)equals, 4);
-	this->public.settings = settings_create(settings);
+
+	this->public.settings = settings_create(this->public.conf);
+	/* all namespace settings may fall back to libstrongswan */
+	lib->settings->add_fallback(lib->settings, lib->ns, "libstrongswan");
+
 	this->public.hosts = host_resolver_create();
 	this->public.proposal = proposal_keywords_create();
 	this->public.caps = capabilities_create();
@@ -278,7 +336,7 @@ bool library_init(char *settings)
 	}
 
 	if (lib->settings->get_bool(lib->settings,
-								"libstrongswan.integrity_test", FALSE))
+								"%s.integrity_test", FALSE, lib->ns))
 	{
 #ifdef INTEGRITY_TEST
 		this->public.integrity = integrity_checker_create(CHECKSUM_LIBRARY);
@@ -292,6 +350,8 @@ bool library_init(char *settings)
 		this->integrity_failed = TRUE;
 #endif /* INTEGRITY_TEST */
 	}
+
+	diffie_hellman_init();
 
 	return !this->integrity_failed;
 }

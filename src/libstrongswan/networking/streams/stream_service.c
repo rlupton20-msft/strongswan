@@ -19,10 +19,10 @@
 #include <threading/condvar.h>
 #include <processing/jobs/callback_job.h>
 
+#include "stream_service.h"
+
 #include <errno.h>
 #include <unistd.h>
-#include <sys/socket.h>
-#include <sys/un.h>
 #include <sys/stat.h>
 
 typedef struct private_stream_service_t private_stream_service_t;
@@ -68,6 +68,11 @@ struct private_stream_service_t {
 	u_int active;
 
 	/**
+	 * Currently running jobs
+	 */
+	u_int running;
+
+	/**
 	 * mutex to lock active counter
 	 */
 	mutex_t *mutex;
@@ -76,7 +81,28 @@ struct private_stream_service_t {
 	 * Condvar to wait for callback termination
 	 */
 	condvar_t *condvar;
+
+	/**
+	 * TRUE when the service is terminated
+	 */
+	bool terminated;
+
+	/**
+	 * Reference counter
+	 */
+	refcount_t ref;
 };
+
+static void destroy_service(private_stream_service_t *this)
+{
+	if (ref_put(&this->ref))
+	{
+		close(this->fd);
+		this->mutex->destroy(this->mutex);
+		this->condvar->destroy(this->condvar);
+		free(this);
+	}
+}
 
 /**
  * Data to pass to async accept job
@@ -93,6 +119,11 @@ typedef struct {
 } async_data_t;
 
 /**
+ * Forward declaration
+ */
+static bool watch(private_stream_service_t *this, int fd, watcher_event_t event);
+
+/**
  * Clean up accept data
  */
 static void destroy_async_data(async_data_t *data)
@@ -100,14 +131,15 @@ static void destroy_async_data(async_data_t *data)
 	private_stream_service_t *this = data->this;
 
 	this->mutex->lock(this->mutex);
-	if (this->active-- == this->cncrncy)
+	if (this->active-- == this->cncrncy && !this->terminated)
 	{
 		/* leaving concurrency limit, restart accept()ing. */
-		this->public.on_accept(&this->public, this->cb, this->data,
-							   this->prio, this->cncrncy);
+		lib->watcher->add(lib->watcher, this->fd,
+						  WATCHER_READ, (watcher_cb_t)watch, this);
 	}
 	this->condvar->signal(this->condvar);
 	this->mutex->unlock(this->mutex);
+	destroy_service(this);
 
 	if (data->fd != -1)
 	{
@@ -117,19 +149,45 @@ static void destroy_async_data(async_data_t *data)
 }
 
 /**
+ * Reduce running counter
+ */
+CALLBACK(reduce_running, void,
+	async_data_t *data)
+{
+	private_stream_service_t *this = data->this;
+
+	this->mutex->lock(this->mutex);
+	this->running--;
+	this->condvar->signal(this->condvar);
+	this->mutex->unlock(this->mutex);
+}
+
+/**
  * Async processing of accepted connection
  */
 static job_requeue_t accept_async(async_data_t *data)
 {
+	private_stream_service_t *this = data->this;
 	stream_t *stream;
+
+	this->mutex->lock(this->mutex);
+	if (this->terminated)
+	{
+		this->mutex->unlock(this->mutex);
+		return JOB_REQUEUE_NONE;
+	}
+	this->running++;
+	this->mutex->unlock(this->mutex);
 
 	stream = stream_create_from_fd(data->fd);
 	if (stream)
 	{
 		/* FD is now owned by stream, don't close it during cleanup */
 		data->fd = -1;
+		thread_cleanup_push(reduce_running, data);
 		thread_cleanup_push((void*)stream->destroy, stream);
 		thread_cleanup_pop(!data->cb(data->data, stream));
+		thread_cleanup_pop(TRUE);
 	}
 	return JOB_REQUEUE_NONE;
 }
@@ -149,7 +207,7 @@ static bool watch(private_stream_service_t *this, int fd, watcher_event_t event)
 		.this = this,
 	);
 
-	if (data->fd != -1)
+	if (data->fd != -1 && !this->terminated)
 	{
 		this->mutex->lock(this->mutex);
 		if (++this->active == this->cncrncy)
@@ -158,6 +216,7 @@ static bool watch(private_stream_service_t *this, int fd, watcher_event_t event)
 			keep = FALSE;
 		}
 		this->mutex->unlock(this->mutex);
+		ref_get(&this->ref);
 
 		lib->processor->queue_job(lib->processor,
 			(job_t*)callback_job_create_with_prio((void*)accept_async, data,
@@ -176,6 +235,12 @@ METHOD(stream_service_t, on_accept, void,
 	job_priority_t prio, u_int cncrncy)
 {
 	this->mutex->lock(this->mutex);
+
+	if (this->terminated)
+	{
+		this->mutex->unlock(this->mutex);
+		return;
+	}
 
 	/* wait for all callbacks to return */
 	while (this->active)
@@ -208,11 +273,15 @@ METHOD(stream_service_t, on_accept, void,
 METHOD(stream_service_t, destroy, void,
 	private_stream_service_t *this)
 {
-	on_accept(this, NULL, NULL, this->prio, this->cncrncy);
-	close(this->fd);
-	this->mutex->destroy(this->mutex);
-	this->condvar->destroy(this->condvar);
-	free(this);
+	this->mutex->lock(this->mutex);
+	lib->watcher->remove(lib->watcher, this->fd);
+	this->terminated = TRUE;
+	while (this->running)
+	{
+		this->condvar->wait(this->condvar, this->mutex);
+	}
+	this->mutex->unlock(this->mutex);
+	destroy_service(this);
 }
 
 /**
@@ -231,102 +300,8 @@ stream_service_t *stream_service_create_from_fd(int fd)
 		.prio = JOB_PRIO_MEDIUM,
 		.mutex = mutex_create(MUTEX_TYPE_RECURSIVE),
 		.condvar = condvar_create(CONDVAR_TYPE_DEFAULT),
+		.ref = 1,
 	);
 
 	return &this->public;
-}
-
-/**
- * See header
- */
-stream_service_t *stream_service_create_unix(char *uri, int backlog)
-{
-	struct sockaddr_un addr;
-	mode_t old;
-	int fd, len;
-
-	len = stream_parse_uri_unix(uri, &addr);
-	if (len == -1)
-	{
-		DBG1(DBG_NET, "invalid stream URI: '%s'", uri);
-		return NULL;
-	}
-	if (!lib->caps->check(lib->caps, CAP_CHOWN))
-	{	/* required to chown(2) service socket */
-		DBG1(DBG_NET, "socket '%s' requires CAP_CHOWN capability", uri);
-		return NULL;
-	}
-	fd = socket(AF_UNIX, SOCK_STREAM, 0);
-	if (fd == -1)
-	{
-		DBG1(DBG_NET, "opening socket '%s' failed: %s", uri, strerror(errno));
-		return NULL;
-	}
-	unlink(addr.sun_path);
-
-	old = umask(S_IRWXO);
-	if (bind(fd, (struct sockaddr*)&addr, len) < 0)
-	{
-		DBG1(DBG_NET, "binding socket '%s' failed: %s", uri, strerror(errno));
-		close(fd);
-		return NULL;
-	}
-	umask(old);
-	if (chown(addr.sun_path, lib->caps->get_uid(lib->caps),
-			  lib->caps->get_gid(lib->caps)) != 0)
-	{
-		DBG1(DBG_NET, "changing socket permissions for '%s' failed: %s",
-			 uri, strerror(errno));
-	}
-	if (listen(fd, backlog) < 0)
-	{
-		DBG1(DBG_NET, "listen on socket '%s' failed: %s", uri, strerror(errno));
-		unlink(addr.sun_path);
-		close(fd);
-		return NULL;
-	}
-	return stream_service_create_from_fd(fd);
-}
-
-/**
- * See header
- */
-stream_service_t *stream_service_create_tcp(char *uri, int backlog)
-{
-	union {
-		struct sockaddr_in in;
-		struct sockaddr_in6 in6;
-		struct sockaddr sa;
-	} addr;
-	int fd, len, on = 1;
-
-	len = stream_parse_uri_tcp(uri, &addr.sa);
-	if (len == -1)
-	{
-		DBG1(DBG_NET, "invalid stream URI: '%s'", uri);
-		return NULL;
-	}
-	fd = socket(addr.sa.sa_family, SOCK_STREAM, 0);
-	if (fd < 0)
-	{
-		DBG1(DBG_NET, "opening socket '%s' failed: %s", uri, strerror(errno));
-		return NULL;
-	}
-	if (setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &on, sizeof(on)) != 0)
-	{
-		DBG1(DBG_NET, "SO_REUSADDR on '%s' failed: %s", uri, strerror(errno));
-	}
-	if (bind(fd, &addr.sa, len) < 0)
-	{
-		DBG1(DBG_NET, "binding socket '%s' failed: %s", uri, strerror(errno));
-		close(fd);
-		return NULL;
-	}
-	if (listen(fd, backlog) < 0)
-	{
-		DBG1(DBG_NET, "listen on socket '%s' failed: %s", uri, strerror(errno));
-		close(fd);
-		return NULL;
-	}
-	return stream_service_create_from_fd(fd);
 }

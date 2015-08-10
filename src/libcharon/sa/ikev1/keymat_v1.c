@@ -425,7 +425,7 @@ METHOD(keymat_v1_t, derive_ike_keys, bool,
 		return FALSE;
 	}
 
-	if (dh->get_shared_secret(dh, &g_xy) != SUCCESS)
+	if (!dh->get_shared_secret(dh, &g_xy))
 	{
 		return FALSE;
 	}
@@ -560,7 +560,10 @@ METHOD(keymat_v1_t, derive_ike_keys, bool,
 		return FALSE;
 	}
 
-	dh->get_my_public_value(dh, &dh_me);
+	if (!dh->get_my_public_value(dh, &dh_me))
+	{
+		return FALSE;
+	}
 	g_xi = this->initiator ? dh_me : dh_other;
 	g_xr = this->initiator ? dh_other : dh_me;
 
@@ -661,7 +664,7 @@ METHOD(keymat_v1_t, derive_child_keys, bool,
 	protocol = proposal->get_protocol(proposal);
 	if (dh)
 	{
-		if (dh->get_shared_secret(dh, &secret) != SUCCESS)
+		if (!dh->get_shared_secret(dh, &secret))
 		{
 			return FALSE;
 		}
@@ -791,7 +794,7 @@ METHOD(keymat_v1_t, get_hash, bool,
 static bool get_nonce(message_t *message, chunk_t *n)
 {
 	nonce_payload_t *nonce;
-	nonce = (nonce_payload_t*)message->get_payload(message, NONCE_V1);
+	nonce = (nonce_payload_t*)message->get_payload(message, PLV1_NONCE);
 	if (nonce)
 	{
 		*n = nonce->get_nonce(nonce);
@@ -815,7 +818,7 @@ static chunk_t get_message_data(message_t *message, generator_t *generator)
 		enumerator = message->create_payload_enumerator(message);
 		while (enumerator->enumerate(enumerator, &payload))
 		{
-			if (payload->get_type(payload) == HASH_V1)
+			if (payload->get_type(payload) == PLV1_HASH)
 			{
 				continue;
 			}
@@ -835,7 +838,7 @@ static chunk_t get_message_data(message_t *message, generator_t *generator)
 				generator->generate_payload(generator, payload);
 				payload = next;
 			}
-			payload->set_next_type(payload, NO_PAYLOAD);
+			payload->set_next_type(payload, PL_NONE);
 			generator->generate_payload(generator, payload);
 		}
 		enumerator->destroy(enumerator);

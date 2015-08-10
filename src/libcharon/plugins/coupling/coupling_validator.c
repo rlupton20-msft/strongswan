@@ -202,6 +202,7 @@ METHOD(coupling_validator_t, destroy, void,
 coupling_validator_t *coupling_validator_create()
 {
 	private_coupling_validator_t *this;
+	hash_algorithm_t alg;
 	char *path, *hash;
 
 	INIT(this,
@@ -214,14 +215,18 @@ coupling_validator_t *coupling_validator_create()
 		.mutex = mutex_create(MUTEX_TYPE_DEFAULT),
 		.max_couplings = lib->settings->get_int(lib->settings,
 												"%s.plugins.coupling.max", 1,
-												charon->name),
+												lib->ns),
 	);
 
 	hash = lib->settings->get_str(lib->settings,
-								  "%s.plugins.coupling.hash", "sha1",
-								  charon->name);
-	this->hasher = lib->crypto->create_hasher(lib->crypto,
-							enum_from_name(hash_algorithm_short_names, hash));
+								  "%s.plugins.coupling.hash", "sha1", lib->ns);
+	if (!enum_from_name(hash_algorithm_short_names, hash, &alg))
+	{
+		DBG1(DBG_CFG, "unknown coupling hash algorithm: %s", hash);
+		destroy(this);
+		return NULL;
+	}
+	this->hasher = lib->crypto->create_hasher(lib->crypto, alg);
 	if (!this->hasher)
 	{
 		DBG1(DBG_CFG, "unsupported coupling hash algorithm: %s", hash);
@@ -230,8 +235,7 @@ coupling_validator_t *coupling_validator_create()
 	}
 
 	path = lib->settings->get_str(lib->settings,
-								  "%s.plugins.coupling.file", NULL,
-								  charon->name);
+								  "%s.plugins.coupling.file", NULL, lib->ns);
 	if (!path)
 	{
 		DBG1(DBG_CFG, "coupling file path unspecified");

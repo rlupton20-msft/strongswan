@@ -105,7 +105,7 @@ static bool delete_child(private_quick_delete_t *this, protocol_id_t protocol,
 		this->spi = spi = child_sa->get_spi(child_sa, TRUE);
 	}
 
-	rekeyed = child_sa->get_state(child_sa) == CHILD_REKEYING;
+	rekeyed = child_sa->get_state(child_sa) == CHILD_REKEYED;
 	child_sa->set_state(child_sa, CHILD_DELETING);
 
 	my_ts = linked_list_create_from_enumerator(
@@ -116,7 +116,7 @@ static bool delete_child(private_quick_delete_t *this, protocol_id_t protocol,
 	{
 		DBG0(DBG_IKE, "closing expired CHILD_SA %s{%d} "
 			 "with SPIs %.8x_i %.8x_o and TS %#R=== %#R",
-			 child_sa->get_name(child_sa), child_sa->get_reqid(child_sa),
+			 child_sa->get_name(child_sa), child_sa->get_unique_id(child_sa),
 			 ntohl(child_sa->get_spi(child_sa, TRUE)),
 			 ntohl(child_sa->get_spi(child_sa, FALSE)), my_ts, other_ts);
 	}
@@ -127,7 +127,7 @@ static bool delete_child(private_quick_delete_t *this, protocol_id_t protocol,
 
 		DBG0(DBG_IKE, "closing CHILD_SA %s{%d} with SPIs "
 			 "%.8x_i (%llu bytes) %.8x_o (%llu bytes) and TS %#R=== %#R",
-			 child_sa->get_name(child_sa), child_sa->get_reqid(child_sa),
+			 child_sa->get_name(child_sa), child_sa->get_unique_id(child_sa),
 			 ntohl(child_sa->get_spi(child_sa, TRUE)), bytes_in,
 			 ntohl(child_sa->get_spi(child_sa, FALSE)), bytes_out,
 			 my_ts, other_ts);
@@ -177,7 +177,7 @@ METHOD(task_t, build_i, status_t,
 		DBG1(DBG_IKE, "sending DELETE for %N CHILD_SA with SPI %.8x",
 			 protocol_id_names, this->protocol, ntohl(this->spi));
 
-		delete_payload = delete_payload_create(DELETE_V1, this->protocol);
+		delete_payload = delete_payload_create(PLV1_DELETE, this->protocol);
 		delete_payload->add_spi(delete_payload, this->spi);
 		message->add_payload(message, &delete_payload->payload_interface);
 
@@ -205,7 +205,7 @@ METHOD(task_t, process_r, status_t,
 	payloads = message->create_payload_enumerator(message);
 	while (payloads->enumerate(payloads, &payload))
 	{
-		if (payload->get_type(payload) == DELETE_V1)
+		if (payload->get_type(payload) == PLV1_DELETE)
 		{
 			delete_payload = (delete_payload_t*)payload;
 			protocol = delete_payload->get_protocol_id(delete_payload);

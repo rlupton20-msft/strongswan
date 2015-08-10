@@ -133,7 +133,7 @@ static bool has_notify_errors(private_aggressive_mode_t *this, message_t *messag
 	enumerator = message->create_payload_enumerator(message);
 	while (enumerator->enumerate(enumerator, &payload))
 	{
-		if (payload->get_type(payload) == NOTIFY_V1)
+		if (payload->get_type(payload) == PLV1_NOTIFY)
 		{
 			notify_payload_t *notify;
 			notify_type_t type;
@@ -167,7 +167,7 @@ static status_t send_notify(private_aggressive_mode_t *this, notify_type_t type)
 	u_int64_t spi_i, spi_r;
 	chunk_t spi;
 
-	notify = notify_payload_create_from_protocol_and_type(NOTIFY_V1,
+	notify = notify_payload_create_from_protocol_and_type(PLV1_NOTIFY,
 														  PROTO_IKE, type);
 	ike_sa_id = this->ike_sa->get_id(this->ike_sa);
 	spi_i = ike_sa_id->get_initiator_spi(ike_sa_id);
@@ -276,7 +276,7 @@ METHOD(task_t, build_i, status_t,
 				return FAILED;
 			}
 			this->ike_sa->set_my_id(this->ike_sa, id->clone(id));
-			id_payload = id_payload_create_from_identification(ID_V1, id);
+			id_payload = id_payload_create_from_identification(PLV1_ID, id);
 			this->id_data = id_payload->get_encoded(id_payload);
 			message->add_payload(message, &id_payload->payload_interface);
 
@@ -389,7 +389,7 @@ METHOD(task_t, process_r, status_t,
 									   message->get_source(message), TRUE);
 
 			sa_payload = (sa_payload_t*)message->get_payload(message,
-													SECURITY_ASSOCIATION_V1);
+													PLV1_SECURITY_ASSOCIATION);
 			if (!sa_payload)
 			{
 				DBG1(DBG_IKE, "SA payload missing");
@@ -421,7 +421,7 @@ METHOD(task_t, process_r, status_t,
 				case AUTH_PSK:
 					if (!lib->settings->get_bool(lib->settings, "%s.i_dont_care"
 						"_about_security_and_use_aggressive_mode_psk",
-						FALSE, charon->name))
+						FALSE, lib->ns))
 					{
 						DBG1(DBG_IKE, "Aggressive Mode PSK disabled for "
 							 "security reasons");
@@ -448,7 +448,7 @@ METHOD(task_t, process_r, status_t,
 				return send_notify(this, INVALID_PAYLOAD_TYPE);
 			}
 
-			id_payload = (id_payload_t*)message->get_payload(message, ID_V1);
+			id_payload = (id_payload_t*)message->get_payload(message, PLV1_ID);
 			if (!id_payload)
 			{
 				DBG1(DBG_IKE, "IDii payload missing");
@@ -475,10 +475,13 @@ METHOD(task_t, process_r, status_t,
 		}
 		case AM_AUTH:
 		{
+			adopt_children_job_t *job = NULL;
+			xauth_t *xauth = NULL;
+
 			while (TRUE)
 			{
 				if (this->ph1->verify_auth(this->ph1, this->method, message,
-										   this->id_data))
+										   chunk_clone(this->id_data)))
 				{
 					break;
 				}
@@ -487,12 +490,10 @@ METHOD(task_t, process_r, status_t,
 													this->method, TRUE, NULL);
 				if (!this->peer_cfg)
 				{
-					this->id_data = chunk_empty;
 					return send_delete(this);
 				}
 				this->ike_sa->set_peer_cfg(this->ike_sa, this->peer_cfg);
 			}
-			this->id_data = chunk_empty;
 
 			if (!charon->bus->authorize(charon->bus, FALSE))
 			{
@@ -506,8 +507,8 @@ METHOD(task_t, process_r, status_t,
 				case AUTH_XAUTH_INIT_PSK:
 				case AUTH_XAUTH_INIT_RSA:
 				case AUTH_HYBRID_INIT_RSA:
-					this->ike_sa->queue_task(this->ike_sa,
-									(task_t*)xauth_create(this->ike_sa, TRUE));
+					xauth = xauth_create(this->ike_sa, TRUE);
+					this->ike_sa->queue_task(this->ike_sa, (task_t*)xauth);
 					break;
 				case AUTH_XAUTH_RESP_PSK:
 				case AUTH_XAUTH_RESP_RSA:
@@ -526,9 +527,8 @@ METHOD(task_t, process_r, status_t,
 					{
 						return send_delete(this);
 					}
-					lib->processor->queue_job(lib->processor, (job_t*)
-									adopt_children_job_create(
-										this->ike_sa->get_id(this->ike_sa)));
+					job = adopt_children_job_create(
+											this->ike_sa->get_id(this->ike_sa));
 					break;
 			}
 			/* check for and prepare mode config push/pull */
@@ -544,9 +544,25 @@ METHOD(task_t, process_r, status_t,
 			{
 				if (!this->peer_cfg->use_pull_mode(this->peer_cfg))
 				{
-					this->ike_sa->queue_task(this->ike_sa,
-						(task_t*)mode_config_create(this->ike_sa, TRUE, FALSE));
+					if (job)
+					{
+						job->queue_task(job, (task_t*)
+								mode_config_create(this->ike_sa, TRUE, FALSE));
+					}
+					else if (xauth)
+					{
+						xauth->queue_mode_config_push(xauth);
+					}
+					else
+					{
+						this->ike_sa->queue_task(this->ike_sa, (task_t*)
+								mode_config_create(this->ike_sa, TRUE, FALSE));
+					}
 				}
+			}
+			if (job)
+			{
+				lib->processor->queue_job(lib->processor, (job_t*)job);
 			}
 			return SUCCESS;
 		}
@@ -590,7 +606,7 @@ METHOD(task_t, build_r, status_t,
 		}
 		this->ike_sa->set_my_id(this->ike_sa, id->clone(id));
 
-		id_payload = id_payload_create_from_identification(ID_V1, id);
+		id_payload = id_payload_create_from_identification(PLV1_ID, id);
 		message->add_payload(message, &id_payload->payload_interface);
 
 		if (!this->ph1->build_auth(this->ph1, this->method, message,
@@ -616,7 +632,7 @@ METHOD(task_t, process_i, status_t,
 		u_int32_t lifetime;
 
 		sa_payload = (sa_payload_t*)message->get_payload(message,
-												SECURITY_ASSOCIATION_V1);
+												PLV1_SECURITY_ASSOCIATION);
 		if (!sa_payload)
 		{
 			DBG1(DBG_IKE, "SA payload missing");
@@ -656,7 +672,7 @@ METHOD(task_t, process_i, status_t,
 			return send_notify(this, NO_PROPOSAL_CHOSEN);
 		}
 
-		id_payload = (id_payload_t*)message->get_payload(message, ID_V1);
+		id_payload = (id_payload_t*)message->get_payload(message, PLV1_ID);
 		if (!id_payload)
 		{
 			DBG1(DBG_IKE, "IDir payload missing");

@@ -256,7 +256,7 @@ static bool verify_icv(private_ccm_aead_t *this, chunk_t plain, chunk_t assoc,
 	char buf[this->icv_size];
 
 	return create_icv(this, plain, assoc, iv, buf) &&
-		   memeq(buf, icv, this->icv_size);
+		   memeq_const(buf, icv, this->icv_size);
 }
 
 METHOD(aead_t, encrypt, bool,
@@ -343,7 +343,8 @@ METHOD(aead_t, destroy, void,
 /**
  * See header
  */
-ccm_aead_t *ccm_aead_create(encryption_algorithm_t algo, size_t key_size)
+ccm_aead_t *ccm_aead_create(encryption_algorithm_t algo,
+							size_t key_size, size_t salt_size)
 {
 	private_ccm_aead_t *this;
 	size_t icv_size;
@@ -359,6 +360,11 @@ ccm_aead_t *ccm_aead_create(encryption_algorithm_t algo, size_t key_size)
 			break;
 		default:
 			return NULL;
+	}
+	if (salt_size && salt_size != SALT_SIZE)
+	{
+		/* currently not supported */
+		return NULL;
 	}
 	switch (algo)
 	{

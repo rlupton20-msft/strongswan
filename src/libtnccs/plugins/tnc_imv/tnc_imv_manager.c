@@ -21,7 +21,6 @@
 
 #include <sys/types.h>
 #include <sys/stat.h>
-#include <sys/mman.h>
 #include <unistd.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -433,7 +432,7 @@ METHOD(imv_manager_t, destroy, void,
 imv_manager_t* tnc_imv_manager_create(void)
 {
 	private_tnc_imv_manager_t *this;
-	recommendation_policy_t policy;
+	char *polname;
 
 	INIT(this,
 		.public = {
@@ -459,10 +458,12 @@ imv_manager_t* tnc_imv_manager_create(void)
 		.next_imv_id = 1,
 	);
 
-	policy = enum_from_name(recommendation_policy_names,
-				lib->settings->get_str(lib->settings,
-					"libtnccs.plugins.tnc-imv.recommendation_policy", "default"));
-	this->policy = (policy != -1) ? policy : RECOMMENDATION_POLICY_DEFAULT;
+	polname = lib->settings->get_str(lib->settings,
+				"%s.plugins.tnc-imv.recommendation_policy", "default", lib->ns);
+	if (!enum_from_name(recommendation_policy_names, polname, &this->policy))
+	{
+		this->policy = RECOMMENDATION_POLICY_DEFAULT;
+	}
 	DBG1(DBG_TNC, "TNC recommendation policy is '%N'",
 				   recommendation_policy_names, this->policy);
 

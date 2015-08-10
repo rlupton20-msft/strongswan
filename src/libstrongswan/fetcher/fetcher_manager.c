@@ -43,7 +43,7 @@ struct private_fetcher_manager_t {
 };
 
 typedef struct {
-	/** assocaited fetcher construction function */
+	/** associated fetcher construction function */
 	fetcher_constructor_t create;
 	/** URL this fetcher support */
 	char *url;
@@ -112,6 +112,10 @@ METHOD(fetcher_manager_t, fetch, status_t,
 				case FETCH_CALLBACK:
 					good = fetcher->set_option(fetcher, opt,
 											va_arg(args, fetcher_callback_t));
+					continue;
+				case FETCH_RESPONSE_CODE:
+					good = fetcher->set_option(fetcher, opt,
+											va_arg(args, u_int*));
 					continue;
 				case FETCH_SOURCEIP:
 					host = va_arg(args, host_t*);

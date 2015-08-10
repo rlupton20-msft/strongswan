@@ -27,6 +27,12 @@
  * @defgroup libimcv_plugins plugins
  * @ingroup libimcv
  *
+ * @defgroup libimcv_seg seg
+ * @ingroup libimcv
+ *
+ * @defgroup libimcv_swid swid
+ * @ingroup libimcv
+ *
  * @addtogroup libimcv
  * @{
  */
@@ -36,6 +42,8 @@
 
 #include "pa_tnc/pa_tnc_attr_manager.h"
 #include "imv/imv_database.h"
+#include "imv/imv_session_manager.h"
+#include "pts/components/pts_component_manager.h"
 
 #include <library.h>
 
@@ -61,5 +69,15 @@ extern pa_tnc_attr_manager_t* imcv_pa_tnc_attributes;
  * Global IMV database object
  */
 extern imv_database_t* imcv_db;
+
+/**
+ * Global IMV session manager
+ */
+extern imv_session_manager_t* imcv_sessions;
+
+/**
+ * PTS Functional Component manager
+ */
+extern pts_component_manager_t* imcv_pts_components;
 
 #endif /** IMCV_H_ @}*/

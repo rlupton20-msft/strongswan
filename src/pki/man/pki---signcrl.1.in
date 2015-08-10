@@ -10,6 +10,8 @@ pki \-\-signcrl \- Issue a Certificate Revocation List (CRL) using a CA certific
 .BI \-\-cakey\~ file |\-\-cakeyid\~ hex
 .BI \-\-cacert\~ file
 .OP \-\-lifetime days
+.OP \-\-this-update datetime
+.OP \-\-next-update datetime
 .OP \-\-lastcrl crl
 .OP \-\-basecrl crl
 .OP \-\-crluri uri
@@ -62,7 +64,28 @@ is required.
 CA certificate file. Required.
 .TP
 .BI "\-l, \-\-lifetime " days
-Days until the CRL gets a nextUpdate, default: 15.
+Days until the CRL gets a nextUpdate, default: 15. Ignored if both
+an absolute start and end time are given.
+.TP
+.BI "\-F, \-\-this-update " datetime
+Absolute time when the validity of the CRL begins. The datetime format is
+defined by the
+.B \-\-dateform
+option.
+.TP
+.BI "\-T, \-\-next-update " datetime
+Absolute time when the validity of the CRL end. The datetime format is
+defined by the
+.B \-\-dateform
+option.
+.TP
+.BI "\-D, \-\-dateform " form
+strptime(3) format for the
+.B \-\-this\-update
+and
+.B \-\-next\-update
+options, default:
+.B %d.%m.%y %T
 .TP
 .BI "\-a, \-\-lastcrl " crl
 CRL of lastUpdate to copy revocations from.
@@ -75,8 +98,8 @@ Freshest delta CRL URI to include in CRL. Can be used multiple times.
 .TP
 .BI "\-g, \-\-digest " digest
 Digest to use for signature creation. One of \fImd5\fR, \fIsha1\fR,
-\fIsha224\fR, \fIsha256\fR, \fIsha384\fR, or \fIsha512\fR. Defaults to
-\fIsha1\fR.
+\fIsha224\fR, \fIsha256\fR, \fIsha384\fR, or \fIsha512\fR.  The default is
+determined based on the type and size of the signature key.
 .TP
 .BI "\-f, \-\-outform " encoding
 Encoding of the created certificate file. Either \fIder\fR (ASN.1 DER) or

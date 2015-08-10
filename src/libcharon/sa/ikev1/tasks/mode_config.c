@@ -16,7 +16,6 @@
 #include "mode_config.h"
 
 #include <daemon.h>
-#include <hydra.h>
 #include <encoding/payloads/cp_payload.h>
 
 typedef struct private_mode_config_t private_mode_config_t;
@@ -107,7 +106,7 @@ static configuration_attribute_t *build_vip(host_t *vip)
 			chunk = chunk_cata("cc", chunk, prefix);
 		}
 	}
-	return configuration_attribute_create_chunk(CONFIGURATION_ATTRIBUTE_V1,
+	return configuration_attribute_create_chunk(PLV1_CONFIGURATION_ATTRIBUTE,
 												type, chunk);
 }
 
@@ -136,14 +135,10 @@ static void handle_attribute(private_mode_config_t *this,
 	enumerator->destroy(enumerator);
 
 	/* and pass it to the handle function */
-	handler = hydra->attributes->handle(hydra->attributes,
-							this->ike_sa->get_other_id(this->ike_sa), handler,
-							ca->get_type(ca), ca->get_chunk(ca));
-	if (handler)
-	{
-		this->ike_sa->add_configuration_attribute(this->ike_sa,
-				handler, ca->get_type(ca), ca->get_chunk(ca));
-	}
+	handler = charon->attributes->handle(charon->attributes,
+					this->ike_sa, handler, ca->get_type(ca), ca->get_chunk(ca));
+	this->ike_sa->add_configuration_attribute(this->ike_sa,
+							handler, ca->get_type(ca), ca->get_chunk(ca));
 }
 
 /**
@@ -222,7 +217,7 @@ static void process_payloads(private_mode_config_t *this, message_t *message)
 	enumerator = message->create_payload_enumerator(message);
 	while (enumerator->enumerate(enumerator, &payload))
 	{
-		if (payload->get_type(payload) == CONFIGURATION_V1)
+		if (payload->get_type(payload) == PLV1_CONFIGURATION)
 		{
 			cp_payload_t *cp = (cp_payload_t*)payload;
 			configuration_attribute_t *ca;
@@ -273,7 +268,7 @@ static void add_attribute(private_mode_config_t *this, cp_payload_t *cp,
 	entry_t *entry;
 
 	cp->add_attribute(cp,
-			configuration_attribute_create_chunk(CONFIGURATION_ATTRIBUTE_V1,
+			configuration_attribute_create_chunk(PLV1_CONFIGURATION_ATTRIBUTE,
 												 type, data));
 	INIT(entry,
 		.type = type,
@@ -296,7 +291,7 @@ static status_t build_request(private_mode_config_t *this, message_t *message)
 	linked_list_t *vips;
 	host_t *host;
 
-	cp = cp_payload_create_type(CONFIGURATION_V1, CFG_REQUEST);
+	cp = cp_payload_create_type(PLV1_CONFIGURATION, CFG_REQUEST);
 
 	vips = linked_list_create();
 
@@ -329,9 +324,8 @@ static status_t build_request(private_mode_config_t *this, message_t *message)
 		enumerator->destroy(enumerator);
 	}
 
-	enumerator = hydra->attributes->create_initiator_enumerator(
-								hydra->attributes,
-								this->ike_sa->get_other_id(this->ike_sa), vips);
+	enumerator = charon->attributes->create_initiator_enumerator(
+										charon->attributes, this->ike_sa, vips);
 	while (enumerator->enumerate(enumerator, &handler, &type, &data))
 	{
 		add_attribute(this, cp, type, data, handler);
@@ -356,51 +350,70 @@ static status_t build_set(private_mode_config_t *this, message_t *message)
 	cp_payload_t *cp;
 	peer_cfg_t *config;
 	identification_t *id;
-	linked_list_t *pools;
+	linked_list_t *pools, *migrated, *vips;
 	host_t *any4, *any6, *found;
 	char *name;
 
-	cp = cp_payload_create_type(CONFIGURATION_V1, CFG_SET);
+	cp = cp_payload_create_type(PLV1_CONFIGURATION, CFG_SET);
 
 	id = this->ike_sa->get_other_eap_id(this->ike_sa);
 	config = this->ike_sa->get_peer_cfg(this->ike_sa);
-	any4 = host_create_any(AF_INET);
-	any6 = host_create_any(AF_INET6);
 
+	/* if we migrated virtual IPs during reauthentication, reassign them */
+	migrated = linked_list_create_from_enumerator(
+						this->ike_sa->create_virtual_ip_enumerator(this->ike_sa,
+																   FALSE));
+	vips = migrated->clone_offset(migrated, offsetof(host_t, clone));
+	migrated->destroy(migrated);
 	this->ike_sa->clear_virtual_ips(this->ike_sa, FALSE);
 
 	/* in push mode, we ask each configured pool for an address */
-	enumerator = config->create_pool_enumerator(config);
-	while (enumerator->enumerate(enumerator, &name))
+	if (!vips->get_count(vips))
 	{
-		pools = linked_list_create_with_items(name, NULL);
-		/* try IPv4, then IPv6 */
-		found = hydra->attributes->acquire_address(hydra->attributes,
-												   pools, id, any4);
-		if (!found)
+		any4 = host_create_any(AF_INET);
+		any6 = host_create_any(AF_INET6);
+		enumerator = config->create_pool_enumerator(config);
+		while (enumerator->enumerate(enumerator, &name))
 		{
-			found = hydra->attributes->acquire_address(hydra->attributes,
-													   pools, id, any6);
+			pools = linked_list_create_with_items(name, NULL);
+			/* try IPv4, then IPv6 */
+			found = charon->attributes->acquire_address(charon->attributes,
+													pools, this->ike_sa, any4);
+			if (!found)
+			{
+				found = charon->attributes->acquire_address(charon->attributes,
+													pools, this->ike_sa, any6);
+			}
+			pools->destroy(pools);
+			if (found)
+			{
+				vips->insert_last(vips, found);
+			}
 		}
-		pools->destroy(pools);
-		if (found)
-		{
-			DBG1(DBG_IKE, "assigning virtual IP %H to peer '%Y'", found, id);
-			this->ike_sa->add_virtual_ip(this->ike_sa, FALSE, found);
-			cp->add_attribute(cp, build_vip(found));
-			this->vips->insert_last(this->vips, found);
-		}
+		enumerator->destroy(enumerator);
+		any4->destroy(any4);
+		any6->destroy(any6);
+	}
+
+	enumerator = vips->create_enumerator(vips);
+	while (enumerator->enumerate(enumerator, &found))
+	{
+		DBG1(DBG_IKE, "assigning virtual IP %H to peer '%Y'", found, id);
+		this->ike_sa->add_virtual_ip(this->ike_sa, FALSE, found);
+		cp->add_attribute(cp, build_vip(found));
+		this->vips->insert_last(this->vips, found);
+		vips->remove_at(vips, enumerator);
 	}
 	enumerator->destroy(enumerator);
+	vips->destroy(vips);
 
-	any4->destroy(any4);
-	any6->destroy(any6);
+	charon->bus->assign_vips(charon->bus, this->ike_sa, TRUE);
 
 	/* query registered providers for additional attributes to include */
 	pools = linked_list_create_from_enumerator(
 									config->create_pool_enumerator(config));
-	enumerator = hydra->attributes->create_responder_enumerator(
-									hydra->attributes, pools, id, this->vips);
+	enumerator = charon->attributes->create_responder_enumerator(
+						charon->attributes, pools, this->ike_sa, this->vips);
 	while (enumerator->enumerate(enumerator, &type, &value))
 	{
 		add_attribute(this, cp, type, value, NULL);
@@ -442,6 +455,8 @@ static void install_vips(private_mode_config_t *this)
 		}
 	}
 	enumerator->destroy(enumerator);
+
+	charon->bus->handle_vips(charon->bus, this->ike_sa, TRUE);
 }
 
 METHOD(task_t, process_r, status_t,
@@ -457,6 +472,28 @@ METHOD(task_t, process_r, status_t,
 }
 
 /**
+ * Assign a migrated virtual IP
+ */
+static host_t *assign_migrated_vip(linked_list_t *migrated, host_t *requested)
+{
+	enumerator_t *enumerator;
+	host_t *found = NULL, *vip;
+
+	enumerator = migrated->create_enumerator(migrated);
+	while (enumerator->enumerate(enumerator, &vip))
+	{
+		if (vip->ip_equals(vip, requested))
+		{
+			migrated->remove_at(migrated, enumerator);
+			found = vip;
+			break;
+		}
+	}
+	enumerator->destroy(enumerator);
+	return found;
+}
+
+/**
  * Build CFG_REPLY message after receiving CFG_REQUEST
  */
 static status_t build_reply(private_mode_config_t *this, message_t *message)
@@ -467,29 +504,35 @@ static status_t build_reply(private_mode_config_t *this, message_t *message)
 	cp_payload_t *cp;
 	peer_cfg_t *config;
 	identification_t *id;
-	linked_list_t *vips, *pools;
-	host_t *requested;
+	linked_list_t *vips, *pools, *migrated;
+	host_t *requested, *found;
 
-	cp = cp_payload_create_type(CONFIGURATION_V1, CFG_REPLY);
+	cp = cp_payload_create_type(PLV1_CONFIGURATION, CFG_REPLY);
 
 	id = this->ike_sa->get_other_eap_id(this->ike_sa);
 	config = this->ike_sa->get_peer_cfg(this->ike_sa);
-	vips = linked_list_create();
 	pools = linked_list_create_from_enumerator(
 									config->create_pool_enumerator(config));
-
+	/* if we migrated virtual IPs during reauthentication, reassign them */
+	vips = linked_list_create_from_enumerator(
+						this->ike_sa->create_virtual_ip_enumerator(this->ike_sa,
+																   FALSE));
+	migrated = vips->clone_offset(vips, offsetof(host_t, clone));
+	vips->destroy(vips);
 	this->ike_sa->clear_virtual_ips(this->ike_sa, FALSE);
 
+	vips = linked_list_create();
 	enumerator = this->vips->create_enumerator(this->vips);
 	while (enumerator->enumerate(enumerator, &requested))
 	{
-		host_t *found = NULL;
-
-		/* query all pools until we get an address */
 		DBG1(DBG_IKE, "peer requested virtual IP %H", requested);
 
-		found = hydra->attributes->acquire_address(hydra->attributes,
-												   pools, id, requested);
+		found = assign_migrated_vip(migrated, requested);
+		if (!found)
+		{
+			found = charon->attributes->acquire_address(charon->attributes,
+											pools, this->ike_sa, requested);
+		}
 		if (found)
 		{
 			DBG1(DBG_IKE, "assigning virtual IP %H to peer '%Y'", found, id);
@@ -505,16 +548,27 @@ static status_t build_reply(private_mode_config_t *this, message_t *message)
 	}
 	enumerator->destroy(enumerator);
 
+	charon->bus->assign_vips(charon->bus, this->ike_sa, TRUE);
+
 	/* query registered providers for additional attributes to include */
-	enumerator = hydra->attributes->create_responder_enumerator(
-											hydra->attributes, pools, id, vips);
+	enumerator = charon->attributes->create_responder_enumerator(
+								charon->attributes, pools, this->ike_sa, vips);
 	while (enumerator->enumerate(enumerator, &type, &value))
 	{
 		cp->add_attribute(cp,
-			configuration_attribute_create_chunk(CONFIGURATION_ATTRIBUTE_V1,
+			configuration_attribute_create_chunk(PLV1_CONFIGURATION_ATTRIBUTE,
 												 type, value));
 	}
 	enumerator->destroy(enumerator);
+	/* if a client did not re-request all adresses, release them */
+	enumerator = migrated->create_enumerator(migrated);
+	while (enumerator->enumerate(enumerator, &found))
+	{
+		charon->attributes->release_address(charon->attributes,
+											pools, found, this->ike_sa);
+	}
+	enumerator->destroy(enumerator);
+	migrated->destroy_offset(migrated, offsetof(host_t, destroy));
 	vips->destroy_offset(vips, offsetof(host_t, destroy));
 	pools->destroy(pools);
 
@@ -535,7 +589,7 @@ static status_t build_ack(private_mode_config_t *this, message_t *message)
 	configuration_attribute_type_t type;
 	entry_t *entry;
 
-	cp = cp_payload_create_type(CONFIGURATION_V1, CFG_ACK);
+	cp = cp_payload_create_type(PLV1_CONFIGURATION, CFG_ACK);
 
 	/* return empty attributes for installed IPs */
 
@@ -552,7 +606,7 @@ static status_t build_ack(private_mode_config_t *this, message_t *message)
 			type = INTERNAL_IP4_ADDRESS;
 		}
 		cp->add_attribute(cp, configuration_attribute_create_chunk(
-								CONFIGURATION_ATTRIBUTE_V1, type, chunk_empty));
+								PLV1_CONFIGURATION_ATTRIBUTE, type, chunk_empty));
 	}
 	enumerator->destroy(enumerator);
 
@@ -560,7 +614,7 @@ static status_t build_ack(private_mode_config_t *this, message_t *message)
 	while (enumerator->enumerate(enumerator, &entry))
 	{
 		cp->add_attribute(cp,
-			configuration_attribute_create_chunk(CONFIGURATION_ATTRIBUTE_V1,
+			configuration_attribute_create_chunk(PLV1_CONFIGURATION_ATTRIBUTE,
 												 entry->type, chunk_empty));
 	}
 	enumerator->destroy(enumerator);

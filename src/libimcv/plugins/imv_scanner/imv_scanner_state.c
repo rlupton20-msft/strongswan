@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2011-2013 Andreas Steffen
+ * Copyright (C) 2011-2014 Andreas Steffen
  * HSR Hochschule fuer Technik Rapperswil
  *
  * This program is free software; you can redistribute it and/or modify it
@@ -58,27 +58,22 @@ struct private_imv_scanner_state_t {
 	/**
 	 * Maximum PA-TNC message size for this TNCCS connection
 	 */
-	u_int32_t max_msg_len;
+	uint32_t max_msg_len;
 
 	/**
 	 * Flags set for completed actions
 	 */
-	u_int32_t action_flags;
-
-	/**
-	 * Access Requestor ID Type
-	 */
-	u_int32_t ar_id_type;
-
-	/**
-	 * Access Requestor ID Value
-	 */
-	chunk_t ar_id_value;
+	uint32_t action_flags;
 
 	/**
 	 * IMV database session associatied with TNCCS connection
 	 */
 	imv_session_t *session;
+
+	/**
+	 * PA-TNC attribute segmentation contracts associated with TNCCS connection
+	 */
+	seg_contract_manager_t *contracts;
 
 	/**
 	 * IMV action recommendation
@@ -186,44 +181,27 @@ METHOD(imv_state_t, set_flags, void,
 }
 
 METHOD(imv_state_t, set_max_msg_len, void,
-	private_imv_scanner_state_t *this, u_int32_t max_msg_len)
+	private_imv_scanner_state_t *this, uint32_t max_msg_len)
 {
 	this->max_msg_len = max_msg_len;
 }
 
-METHOD(imv_state_t, get_max_msg_len, u_int32_t,
+METHOD(imv_state_t, get_max_msg_len, uint32_t,
 	private_imv_scanner_state_t *this)
 {
 	return this->max_msg_len;
 }
 
 METHOD(imv_state_t, set_action_flags, void,
-	private_imv_scanner_state_t *this, u_int32_t flags)
+	private_imv_scanner_state_t *this, uint32_t flags)
 {
 	this->action_flags |= flags;
 }
 
-METHOD(imv_state_t, get_action_flags, u_int32_t,
+METHOD(imv_state_t, get_action_flags, uint32_t,
 	private_imv_scanner_state_t *this)
 {
 	return this->action_flags;
-}
-
-METHOD(imv_state_t, set_ar_id, void,
-	private_imv_scanner_state_t *this, u_int32_t id_type, chunk_t id_value)
-{
-	this->ar_id_type = id_type;
-	this->ar_id_value = chunk_clone(id_value);
-}
-
-METHOD(imv_state_t, get_ar_id, chunk_t,
-	private_imv_scanner_state_t *this, u_int32_t *id_type)
-{
-	if (id_type)
-	{
-		*id_type = this->ar_id_type;
-	}
-	return this->ar_id_value;
 }
 
 METHOD(imv_state_t, set_session, void,
@@ -236,6 +214,12 @@ METHOD(imv_state_t, get_session, imv_session_t*,
 	private_imv_scanner_state_t *this)
 {
 	return this->session;
+}
+
+METHOD(imv_state_t, get_contracts, seg_contract_manager_t*,
+	private_imv_scanner_state_t *this)
+{
+	return this->contracts;
 }
 
 METHOD(imv_state_t, change_state, void,
@@ -281,7 +265,7 @@ METHOD(imv_state_t, get_reason_string, bool,
 
 	/* Instantiate a TNC Reason String object */
 	DESTROY_IF(this->reason_string);
-	this->reason_string = imv_reason_string_create(*reason_language);
+	this->reason_string = imv_reason_string_create(*reason_language, "\n");
 	if (this->rec != TNC_IMV_ACTION_RECOMMENDATION_NO_RECOMMENDATION)
 	{
 		this->reason_string->add_reason(this->reason_string, reasons);
@@ -314,7 +298,7 @@ METHOD(imv_state_t, get_remediation_instructions, bool,
 									this->violating_ports);
 	*string = this->remediation_string->get_encoding(this->remediation_string);
 	*uri = lib->settings->get_str(lib->settings,
-				"libimcv.plugins.imv-scanner.remediation_uri", NULL);
+					"%s.plugins.imv-scanner.remediation_uri", NULL, lib->ns);
 
 	return TRUE;
 }
@@ -326,8 +310,8 @@ METHOD(imv_state_t, destroy, void,
 	DESTROY_IF(this->reason_string);
 	DESTROY_IF(this->remediation_string);
 	DESTROY_IF(&this->port_filter_attr->pa_tnc_attribute);
+	this->contracts->destroy(this->contracts);
 	this->violating_ports->destroy_function(this->violating_ports, free);
-	free(this->ar_id_value.ptr);
 	free(this);
 }
 
@@ -380,10 +364,9 @@ imv_state_t *imv_scanner_state_create(TNC_ConnectionID connection_id)
 				.get_max_msg_len = _get_max_msg_len,
 				.set_action_flags = _set_action_flags,
 				.get_action_flags = _get_action_flags,
-				.set_ar_id = _set_ar_id,
-				.get_ar_id = _get_ar_id,
 				.set_session = _set_session,
 				.get_session= _get_session,
+				.get_contracts = _get_contracts,
 				.change_state = _change_state,
 				.get_recommendation = _get_recommendation,
 				.set_recommendation = _set_recommendation,
@@ -402,6 +385,7 @@ imv_state_t *imv_scanner_state_create(TNC_ConnectionID connection_id)
 		.rec = TNC_IMV_ACTION_RECOMMENDATION_NO_RECOMMENDATION,
 		.eval = TNC_IMV_EVALUATION_RESULT_DONT_KNOW,
 		.connection_id = connection_id,
+		.contracts = seg_contract_manager_create(),
 		.violating_ports = linked_list_create(),
 	);
 

@@ -18,13 +18,8 @@
 #include "nm_creds.h"
 #include "nm_handler.h"
 
-#include <hydra.h>
 #include <daemon.h>
 #include <processing/jobs/callback_job.h>
-
-#ifndef CAP_DAC_OVERRIDE
-#define CAP_DAC_OVERRIDE 1
-#endif
 
 typedef struct nm_backend_t nm_backend_t;
 
@@ -101,7 +96,8 @@ static void nm_backend_deinit()
 		g_object_unref(this->plugin);
 	}
 	lib->credmgr->remove_set(lib->credmgr, &this->creds->set);
-	hydra->attributes->remove_handler(hydra->attributes, &this->handler->handler);
+	charon->attributes->remove_handler(charon->attributes,
+									   &this->handler->handler);
 	this->creds->destroy(this->creds);
 	this->handler->destroy(this->handler);
 	free(this);
@@ -134,19 +130,11 @@ static bool nm_backend_init()
 	this->plugin = nm_strongswan_plugin_new(this->creds, this->handler);
 	nm_backend = this;
 
-	hydra->attributes->add_handler(hydra->attributes, &this->handler->handler);
+	charon->attributes->add_handler(charon->attributes, &this->handler->handler);
 	lib->credmgr->add_set(lib->credmgr, &this->creds->set);
 	if (!this->plugin)
 	{
 		DBG1(DBG_CFG, "DBUS binding failed");
-		nm_backend_deinit();
-		return FALSE;
-	}
-
-	/* bypass file permissions to read from users ssh-agent */
-	if (!lib->caps->keep(lib->caps, CAP_DAC_OVERRIDE))
-	{
-		DBG1(DBG_CFG, "NM backend requires CAP_DAC_OVERRIDE capability");
 		nm_backend_deinit();
 		return FALSE;
 	}
@@ -186,5 +174,5 @@ void nm_backend_register()
 				PLUGIN_SDEPEND(CERT_DECODE, CERT_X509),
 	};
 	lib->plugins->add_static_features(lib->plugins, "nm-backend", features,
-									  countof(features), TRUE);
+									  countof(features), TRUE, NULL, NULL);
 }

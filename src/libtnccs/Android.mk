@@ -22,7 +22,7 @@ endif
 LOCAL_SRC_FILES += $(call add_plugin, tnc-tnccs)
 
 LOCAL_SRC_FILES += $(call add_plugin, tnccs-20)
-LOCAL_SRC_FILES += $(call add_plugin_subdirs, tnccs-20, batch messages messages/ietf messages/tcg state_machine)
+LOCAL_SRC_FILES += $(call add_plugin_subdirs, tnccs-20, batch messages messages/ietf messages/ita messages/tcg state_machine)
 ifneq ($(call plugin_enabled, tnccs-20),)
 LOCAL_C_INCLUDES += $(LOCAL_PATH)/plugins/tnccs_20/
 endif
@@ -35,7 +35,6 @@ endif
 # build libtncif ---------------------------------------------------------------
 
 LOCAL_C_INCLUDES += \
-	$(libvstr_PATH) \
 	$(strongswan_PATH)/src/libtls \
 	$(strongswan_PATH)/src/libtncif \
 	$(strongswan_PATH)/src/libstrongswan

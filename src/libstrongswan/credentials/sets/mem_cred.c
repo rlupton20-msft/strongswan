@@ -192,6 +192,24 @@ METHOD(mem_cred_t, add_cert_ref, certificate_t*,
 	return add_cert_internal(this, trusted, cert);
 }
 
+METHOD(mem_cred_t, get_cert_ref, certificate_t*,
+	private_mem_cred_t *this, certificate_t *cert)
+{
+	certificate_t *cached;
+
+	this->lock->write_lock(this->lock);
+	if (this->untrusted->find_first(this->untrusted,
+									(linked_list_match_t)certificate_equals,
+									(void**)&cached, cert) == SUCCESS)
+	{
+		cert->destroy(cert);
+		cert = cached->get_ref(cached);
+	}
+	this->lock->unlock(this->lock);
+
+	return cert;
+}
+
 METHOD(mem_cred_t, add_crl, bool,
 	private_mem_cred_t *this, crl_t *crl)
 {
@@ -307,8 +325,25 @@ METHOD(credential_set_t, create_private_enumerator, enumerator_t*,
 METHOD(mem_cred_t, add_key, void,
 	private_mem_cred_t *this, private_key_t *key)
 {
+	enumerator_t *enumerator;
+	private_key_t *current;
+
 	this->lock->write_lock(this->lock);
+
+	enumerator = this->keys->create_enumerator(this->keys);
+	while (enumerator->enumerate(enumerator, &current))
+	{
+		if (current->equals(current, key))
+		{
+			this->keys->remove_at(this->keys, enumerator);
+			current->destroy(current);
+			break;
+		}
+	}
+	enumerator->destroy(enumerator);
+
 	this->keys->insert_first(this->keys, key);
+
 	this->lock->unlock(this->lock);
 }
 
@@ -331,6 +366,44 @@ static void shared_entry_destroy(shared_entry_t *entry)
 								  offsetof(identification_t, destroy));
 	entry->shared->destroy(entry->shared);
 	free(entry);
+}
+
+/**
+ * Check if two shared key entries equal
+ */
+static bool shared_entry_equals(shared_entry_t *a, shared_entry_t *b)
+{
+	enumerator_t *e1, *e2;
+	identification_t *id1, *id2;
+	bool equals = TRUE;
+
+	if (a->shared->get_type(a->shared) != b->shared->get_type(b->shared))
+	{
+		return FALSE;
+	}
+	if (!chunk_equals(a->shared->get_key(a->shared),
+					  b->shared->get_key(b->shared)))
+	{
+		return FALSE;
+	}
+	if (a->owners->get_count(a->owners) != b->owners->get_count(b->owners))
+	{
+		return FALSE;
+	}
+	e1 = a->owners->create_enumerator(a->owners);
+	e2 = b->owners->create_enumerator(b->owners);
+	while (e1->enumerate(e1, &id1) && e2->enumerate(e2, &id2))
+	{
+		if (!id1->equals(id1, id2))
+		{
+			equals = FALSE;
+			break;
+		}
+	}
+	e1->destroy(e1);
+	e2->destroy(e2);
+
+	return equals;
 }
 
 /**
@@ -435,15 +508,30 @@ METHOD(credential_set_t, create_shared_enumerator, enumerator_t*,
 METHOD(mem_cred_t, add_shared_list, void,
 	private_mem_cred_t *this, shared_key_t *shared, linked_list_t* owners)
 {
-	shared_entry_t *entry;
+	shared_entry_t *current, *new;
+	enumerator_t *enumerator;
 
-	INIT(entry,
+	INIT(new,
 		.shared = shared,
 		.owners = owners,
 	);
 
 	this->lock->write_lock(this->lock);
-	this->shared->insert_first(this->shared, entry);
+
+	enumerator = this->shared->create_enumerator(this->shared);
+	while (enumerator->enumerate(enumerator, &current))
+	{
+		if (shared_entry_equals(current, new))
+		{
+			this->shared->remove_at(this->shared, enumerator);
+			shared_entry_destroy(current);
+			break;
+		}
+	}
+	enumerator->destroy(enumerator);
+
+	this->shared->insert_first(this->shared, new);
+
 	this->lock->unlock(this->lock);
 }
 
@@ -666,6 +754,7 @@ mem_cred_t *mem_cred_create()
 			},
 			.add_cert = _add_cert,
 			.add_cert_ref = _add_cert_ref,
+			.get_cert_ref = _get_cert_ref,
 			.add_crl = _add_crl,
 			.add_key = _add_key,
 			.add_shared = _add_shared,

@@ -1,11 +1,5 @@
-/**
- * @file stroke_msg.h
- *
- * @brief Definition of stroke_msg_t.
- *
- */
-
 /*
+ * Copyright (C) 2015 Tobias Brunner
  * Copyright (C) 2006 Martin Willi
  * Hochschule fuer Technik Rapperswil
  *
@@ -32,7 +26,10 @@
  */
 #define STROKE_SOCKET IPSEC_PIDDIR "/charon.ctl"
 
-#define STROKE_BUF_LEN		2048
+/**
+ * Number of bytes by which the buffer is increased as needed
+ */
+#define STROKE_BUF_LEN_INC     1024
 
 typedef enum list_flag_t list_flag_t;
 
@@ -304,6 +301,7 @@ struct stroke_msg_t {
 				u_int32_t mask;
 			} mark_in, mark_out;
 			stroke_end_t me, other;
+			u_int32_t replay_window;
 		} add_conn;
 
 		/* data for STR_ADD_CA */
@@ -370,7 +368,10 @@ struct stroke_msg_t {
 			char *name;
 		} counters;
 	};
-	char buffer[STROKE_BUF_LEN];
+	/* length of the string buffer */
+	u_int16_t buflen;
+	/* string buffer */
+	char buffer[];
 };
 
 #endif /* STROKE_MSG_H_ */

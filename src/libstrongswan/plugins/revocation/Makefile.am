@@ -2,7 +2,7 @@ AM_CPPFLAGS = \
 	-I$(top_srcdir)/src/libstrongswan
 
 AM_CFLAGS = \
-	-rdynamic
+	$(PLUGIN_CFLAGS)
 
 if MONOLITHIC
 noinst_LTLIBRARIES = libstrongswan-revocation.la
@@ -14,5 +14,4 @@ libstrongswan_revocation_la_SOURCES = \
 	revocation_plugin.h revocation_plugin.c \
 	revocation_validator.h revocation_validator.c
 
-libstrongswan_revocation_la_LDFLAGS = -no-undefined -module -avoid-version
-libstrongswan_revocation_la_LIBADD = $(top_builddir)/src/libstrongswan/libstrongswan.la
+libstrongswan_revocation_la_LDFLAGS = -module -avoid-version

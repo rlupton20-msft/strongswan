@@ -14,12 +14,12 @@
  * for more details.
  */
 
-#include "ike_cfg.h"
-
+#define _GNU_SOURCE /* for stdndup() */
 #include <string.h>
 
-#include <daemon.h>
+#include "ike_cfg.h"
 
+#include <daemon.h>
 
 ENUM(ike_version_names, IKE_ANY, IKEV2,
 	"IKEv1/2",
@@ -281,7 +281,10 @@ METHOD(ike_cfg_t, get_dscp, u_int8_t,
 METHOD(ike_cfg_t, add_proposal, void,
 	private_ike_cfg_t *this, proposal_t *proposal)
 {
-	this->proposals->insert_last(this->proposals, proposal);
+	if (proposal)
+	{
+		this->proposals->insert_last(this->proposals, proposal);
+	}
 }
 
 METHOD(ike_cfg_t, get_proposals, linked_list_t*,
@@ -385,7 +388,7 @@ METHOD(ike_cfg_t, equals, bool,
 		return FALSE;
 	}
 	e1 = this->proposals->create_enumerator(this->proposals);
-	e2 = this->proposals->create_enumerator(this->proposals);
+	e2 = other->proposals->create_enumerator(other->proposals);
 	while (e1->enumerate(e1, &p1) && e2->enumerate(e2, &p2))
 	{
 		if (!p1->equals(p1, p2))
@@ -456,25 +459,10 @@ static traffic_selector_t* make_range(char *str)
 {
 	traffic_selector_t *ts;
 	ts_type_t type;
-	char *pos;
 	host_t *from, *to;
 
-	pos = strchr(str, '-');
-	if (!pos)
+	if (!host_create_from_range(str, &from, &to))
 	{
-		return NULL;
-	}
-	to = host_create_from_string(pos + 1, 0);
-	if (!to)
-	{
-		return NULL;
-	}
-	str = strndup(str, pos - str);
-	from = host_create_from_string_and_family(str, to->get_family(to), 0);
-	free(str);
-	if (!from)
-	{
-		to->destroy(to);
 		return NULL;
 	}
 	if (to->get_family(to) == AF_INET)

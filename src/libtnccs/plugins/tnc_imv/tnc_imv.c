@@ -15,7 +15,9 @@
 
 #include "tnc_imv.h"
 
+#ifndef WIN32
 #include <dlfcn.h>
+#endif
 
 #include <tncif_pa_subtypes.h>
 
@@ -298,7 +300,7 @@ METHOD(imv_t, destroy, void,
 	private_tnc_imv_t *this)
 {
 	if (this->handle && lib->settings->get_bool(lib->settings,
-				"libtnccs.plugins.tnc-imv.dlclose", TRUE))
+				"%s.plugins.tnc-imv.dlclose", TRUE, lib->ns))
 	{
 		dlclose(this->handle);
 	}

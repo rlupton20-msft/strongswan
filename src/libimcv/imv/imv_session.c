@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2013 Andreas Steffen
+ * Copyright (C) 2013-2015 Andreas Steffen
  * HSR Hochschule fuer Technik Rapperswil
  *
  * This program is free software; you can redistribute it and/or modify it
@@ -14,6 +14,8 @@
  */
 
 #include "imv_session.h"
+
+#include <tncif_identity.h>
 
 #include <utils/debug.h>
 
@@ -35,9 +37,44 @@ struct private_imv_session_t {
 	int session_id;
 
 	/**
+	 * Unique Product ID
+	 */
+	int pid;
+
+	/**
+	 * Unique Device ID
+	 */
+	int did;
+
+	/**
 	 * TNCCS connection ID
 	 */
 	TNC_ConnectionID conn_id;
+
+	/**
+	 * Session creation time
+	 */
+	time_t created;
+
+	/**
+	 * List of Access Requestor identities
+	 */
+	linked_list_t *ar_identities;
+
+	/**
+	 * OS information
+	 */
+	imv_os_info_t *os_info;
+
+	/**
+	 * Device ID
+	 */
+	chunk_t device_id;
+
+	/**
+	 * Is Device ID trusted?
+	 */
+	bool trusted;
 
 	/**
 	 * Have the workitems been generated?
@@ -56,9 +93,25 @@ struct private_imv_session_t {
 
 };
 
-METHOD(imv_session_t, get_session_id, int,
-	private_imv_session_t *this)
+METHOD(imv_session_t, set_session_id, void,
+	private_imv_session_t *this, int session_id, int pid, int did)
 {
+	this->session_id = session_id;
+	this->pid = pid;
+	this->did = did;
+}
+
+METHOD(imv_session_t, get_session_id, int,
+	private_imv_session_t *this, int *pid, int *did)
+{
+	if (pid)
+	{
+		*pid = this->pid;
+	}
+	if (did)
+	{
+		*did = this->did;
+	}
 	return this->session_id;
 }
 
@@ -66,6 +119,68 @@ METHOD(imv_session_t, get_connection_id, TNC_ConnectionID,
 	private_imv_session_t *this)
 {
 	return this->conn_id;
+}
+
+METHOD(imv_session_t, get_creation_time, time_t,
+	private_imv_session_t *this)
+{
+	return this->created;
+}
+
+METHOD(imv_session_t, create_ar_identities_enumerator, enumerator_t*,
+	private_imv_session_t *this)
+{
+	return this->ar_identities->create_enumerator(this->ar_identities);
+}
+
+METHOD(imv_session_t, get_os_info, imv_os_info_t*,
+	private_imv_session_t *this)
+{
+	return this->os_info;
+}
+
+METHOD(imv_session_t, set_device_id, void,
+	private_imv_session_t *this, chunk_t device_id)
+{
+	if (device_id.len == 0)
+	{
+		device_id = chunk_from_str("unknown");
+	}
+	if (this->device_id.len)
+	{
+		if (chunk_equals(device_id, this->device_id))
+		{
+			return;
+		}
+		free(this->device_id.ptr);
+	}
+	this->device_id = chunk_clone(device_id);
+}
+
+METHOD(imv_session_t, get_device_id, bool,
+	private_imv_session_t *this, chunk_t *device_id)
+{
+	if (this->device_id.len == 0)
+	{
+		return FALSE;
+	}
+	if (device_id)
+	{
+		*device_id = this->device_id;
+	}
+	return TRUE;
+}
+
+METHOD(imv_session_t, set_device_trust, void,
+	private_imv_session_t *this, bool trusted)
+{
+	this->trusted = trusted;
+}
+
+METHOD(imv_session_t, get_device_trust, bool,
+	private_imv_session_t *this)
+{
+	return this->trusted;
 }
 
 METHOD(imv_session_t, set_policy_started, void,
@@ -95,10 +210,6 @@ METHOD(imv_session_t, remove_workitem, void,
 METHOD(imv_session_t, create_workitem_enumerator, enumerator_t*,
 	private_imv_session_t *this)
 {
-	if (!this->policy_started)
-	{
-		return NULL;
-	}
 	return this->workitems->create_enumerator(this->workitems);
 }
 
@@ -137,6 +248,10 @@ METHOD(imv_session_t, destroy, void,
 	{
 		this->workitems->destroy_offset(this->workitems,
 								 offsetof(imv_workitem_t, destroy));
+		this->os_info->destroy(this->os_info);
+		this->ar_identities->destroy_offset(this->ar_identities,
+									 offsetof(tncif_identity_t, destroy));
+		free(this->device_id.ptr);
 		free(this);
 	}
 }
@@ -144,14 +259,23 @@ METHOD(imv_session_t, destroy, void,
 /**
  * See header
  */
-imv_session_t *imv_session_create(int session_id, TNC_ConnectionID conn_id)
+imv_session_t *imv_session_create(TNC_ConnectionID conn_id, time_t created,
+								  linked_list_t *ar_identities)
 {
 	private_imv_session_t *this;
 
 	INIT(this,
 		.public = {
+			.set_session_id = _set_session_id,
 			.get_session_id = _get_session_id,
 			.get_connection_id = _get_connection_id,
+			.get_creation_time = _get_creation_time,
+			.create_ar_identities_enumerator = _create_ar_identities_enumerator,
+			.get_os_info = _get_os_info,
+			.set_device_id = _set_device_id,
+			.get_device_id = _get_device_id,
+			.set_device_trust = _set_device_trust,
+			.get_device_trust = _get_device_trust,
 			.set_policy_started = _set_policy_started,
 			.get_policy_started = _get_policy_started,
 			.insert_workitem = _insert_workitem,
@@ -161,8 +285,10 @@ imv_session_t *imv_session_create(int session_id, TNC_ConnectionID conn_id)
 			.get_ref = _get_ref,
 			.destroy = _destroy,
 		},
-		.session_id = session_id,
 		.conn_id = conn_id,
+		.created = created,
+		.ar_identities = ar_identities,
+		.os_info = imv_os_info_create(),
 		.workitems = linked_list_create(),
 		.ref = 1,
 	);

@@ -2,7 +2,7 @@ AM_CPPFLAGS = \
 	-I$(top_srcdir)/src/libstrongswan
 
 AM_CFLAGS = \
-	-rdynamic
+	$(PLUGIN_CFLAGS)
 
 if MONOLITHIC
 noinst_LTLIBRARIES = libstrongswan-x509.la
@@ -19,5 +19,4 @@ libstrongswan_x509_la_SOURCES = \
 	x509_ocsp_request.h x509_ocsp_request.c \
 	x509_ocsp_response.h x509_ocsp_response.c
 
-libstrongswan_x509_la_LDFLAGS = -no-undefined -module -avoid-version
-libstrongswan_x509_la_LIBADD = $(top_builddir)/src/libstrongswan/libstrongswan.la
+libstrongswan_x509_la_LDFLAGS = -module -avoid-version

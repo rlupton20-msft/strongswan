@@ -65,6 +65,11 @@ struct private_child_create_t {
 	chunk_t other_nonce;
 
 	/**
+	 * nonce generator
+	 */
+	nonce_gen_t *nonceg;
+
+	/**
 	 * config to create the CHILD_SA from
 	 */
 	child_cfg_t *config;
@@ -103,6 +108,11 @@ struct private_child_create_t {
 	 * optional diffie hellman exchange
 	 */
 	diffie_hellman_t *dh;
+
+	/**
+	 * Applying DH public value failed?
+	 */
+	bool dh_failed;
 
 	/**
 	 * group used for DH exchange
@@ -160,6 +170,16 @@ struct private_child_create_t {
 	u_int32_t reqid;
 
 	/**
+	 * Explicit inbound mark value
+	 */
+	u_int mark_in;
+
+	/**
+	 * Explicit outbound mark value
+	 */
+	u_int mark_out;
+
+	/**
 	 * CHILD_SA which gets established
 	 */
 	child_sa_t *child_sa;
@@ -187,7 +207,7 @@ static status_t get_nonce(message_t *message, chunk_t *nonce)
 {
 	nonce_payload_t *payload;
 
-	payload = (nonce_payload_t*)message->get_payload(message, NONCE);
+	payload = (nonce_payload_t*)message->get_payload(message, PLV2_NONCE);
 	if (payload == NULL)
 	{
 		return FAILED;
@@ -199,25 +219,21 @@ static status_t get_nonce(message_t *message, chunk_t *nonce)
 /**
  * generate a new nonce to include in a CREATE_CHILD_SA message
  */
-static status_t generate_nonce(private_child_create_t *this)
+static bool generate_nonce(private_child_create_t *this)
 {
-	nonce_gen_t *nonceg;
-
-	nonceg = this->keymat->keymat.create_nonce_gen(&this->keymat->keymat);
-	if (!nonceg)
+	this->nonceg = this->keymat->keymat.create_nonce_gen(&this->keymat->keymat);
+	if (!this->nonceg)
 	{
 		DBG1(DBG_IKE, "no nonce generator found to create nonce");
-		return FAILED;
+		return FALSE;
 	}
-	if (!nonceg->allocate_nonce(nonceg, NONCE_SIZE, &this->my_nonce))
+	if (!this->nonceg->allocate_nonce(this->nonceg, NONCE_SIZE,
+									  &this->my_nonce))
 	{
 		DBG1(DBG_IKE, "nonce allocation failed");
-		nonceg->destroy(nonceg);
-		return FAILED;
+		return FALSE;
 	}
-	nonceg->destroy(nonceg);
-
-	return SUCCESS;
+	return TRUE;
 }
 
 /**
@@ -286,17 +302,17 @@ static bool allocate_spi(private_child_create_t *this)
  */
 static void schedule_inactivity_timeout(private_child_create_t *this)
 {
-	u_int32_t timeout;
+	u_int32_t timeout, id;
 	bool close_ike;
 
 	timeout = this->config->get_inactivity(this->config);
 	if (timeout)
 	{
 		close_ike = lib->settings->get_bool(lib->settings,
-								"%s.inactivity_close_ike", FALSE, charon->name);
+									"%s.inactivity_close_ike", FALSE, lib->ns);
+		id = this->child_sa->get_unique_id(this->child_sa);
 		lib->scheduler->schedule_job(lib->scheduler, (job_t*)
-				inactivity_job_create(this->child_sa->get_reqid(this->child_sa),
-									  timeout, close_ike), timeout);
+						inactivity_job_create(id, timeout, close_ike), timeout);
 	}
 }
 
@@ -683,10 +699,7 @@ static status_t select_and_install(private_child_create_t *this,
 	this->ike_sa->add_child_sa(this->ike_sa, this->child_sa);
 	this->established = TRUE;
 
-	if (!this->rekey)
-	{	/* a rekeyed SA uses the same reqid, no need for a new job */
-		schedule_inactivity_timeout(this);
-	}
+	schedule_inactivity_timeout(this);
 
 	my_ts = linked_list_create_from_enumerator(
 				this->child_sa->create_ts_enumerator(this->child_sa, TRUE));
@@ -696,7 +709,7 @@ static status_t select_and_install(private_child_create_t *this,
 	DBG0(DBG_IKE, "CHILD_SA %s{%d} established "
 		 "with SPIs %.8x_i %.8x_o and TS %#R=== %#R",
 		 this->child_sa->get_name(this->child_sa),
-		 this->child_sa->get_reqid(this->child_sa),
+		 this->child_sa->get_unique_id(this->child_sa),
 		 ntohl(this->child_sa->get_spi(this->child_sa, TRUE)),
 		 ntohl(this->child_sa->get_spi(this->child_sa, FALSE)), my_ts, other_ts);
 
@@ -709,7 +722,7 @@ static status_t select_and_install(private_child_create_t *this,
 /**
  * build the payloads for the message
  */
-static void build_payloads(private_child_create_t *this, message_t *message)
+static bool build_payloads(private_child_create_t *this, message_t *message)
 {
 	sa_payload_t *sa_payload;
 	nonce_payload_t *nonce_payload;
@@ -731,7 +744,7 @@ static void build_payloads(private_child_create_t *this, message_t *message)
 	/* add nonce payload if not in IKE_AUTH */
 	if (message->get_exchange_type(message) == CREATE_CHILD_SA)
 	{
-		nonce_payload = nonce_payload_create(NONCE);
+		nonce_payload = nonce_payload_create(PLV2_NONCE);
 		nonce_payload->set_nonce(nonce_payload, this->my_nonce);
 		message->add_payload(message, (payload_t*)nonce_payload);
 	}
@@ -739,8 +752,13 @@ static void build_payloads(private_child_create_t *this, message_t *message)
 	/* diffie hellman exchange, if PFS enabled */
 	if (this->dh)
 	{
-		ke_payload = ke_payload_create_from_diffie_hellman(KEY_EXCHANGE,
+		ke_payload = ke_payload_create_from_diffie_hellman(PLV2_KEY_EXCHANGE,
 														   this->dh);
+		if (!ke_payload)
+		{
+			DBG1(DBG_IKE, "creating KE payload failed");
+			return FALSE;
+		}
 		message->add_payload(message, (payload_t*)ke_payload);
 	}
 
@@ -769,6 +787,7 @@ static void build_payloads(private_child_create_t *this, message_t *message)
 		message->add_notify(message, FALSE, ESP_TFC_PADDING_NOT_SUPPORTED,
 							chunk_empty);
 	}
+	return TRUE;
 }
 
 /**
@@ -866,11 +885,11 @@ static void process_payloads(private_child_create_t *this, message_t *message)
 	{
 		switch (payload->get_type(payload))
 		{
-			case SECURITY_ASSOCIATION:
+			case PLV2_SECURITY_ASSOCIATION:
 				sa_payload = (sa_payload_t*)payload;
 				this->proposals = sa_payload->get_proposals(sa_payload);
 				break;
-			case KEY_EXCHANGE:
+			case PLV2_KEY_EXCHANGE:
 				ke_payload = (ke_payload_t*)payload;
 				if (!this->initiator)
 				{
@@ -880,19 +899,19 @@ static void process_payloads(private_child_create_t *this, message_t *message)
 				}
 				if (this->dh)
 				{
-					this->dh->set_other_public_value(this->dh,
+					this->dh_failed = !this->dh->set_other_public_value(this->dh,
 								ke_payload->get_key_exchange_data(ke_payload));
 				}
 				break;
-			case TRAFFIC_SELECTOR_INITIATOR:
+			case PLV2_TS_INITIATOR:
 				ts_payload = (ts_payload_t*)payload;
 				this->tsi = ts_payload->get_traffic_selectors(ts_payload);
 				break;
-			case TRAFFIC_SELECTOR_RESPONDER:
+			case PLV2_TS_RESPONDER:
 				ts_payload = (ts_payload_t*)payload;
 				this->tsr = ts_payload->get_traffic_selectors(ts_payload);
 				break;
-			case NOTIFY:
+			case PLV2_NOTIFY:
 				handle_notify(this, (notify_payload_t*)payload);
 				break;
 			default:
@@ -915,9 +934,10 @@ METHOD(task_t, build_i, status_t,
 		case IKE_SA_INIT:
 			return get_nonce(message, &this->my_nonce);
 		case CREATE_CHILD_SA:
-			if (generate_nonce(this) != SUCCESS)
+			if (!generate_nonce(this))
 			{
-				message->add_notify(message, FALSE, NO_PROPOSAL_CHOSEN, chunk_empty);
+				message->add_notify(message, FALSE, NO_PROPOSAL_CHOSEN,
+									chunk_empty);
 				return SUCCESS;
 			}
 			if (!this->retry)
@@ -950,7 +970,7 @@ METHOD(task_t, build_i, status_t,
 	/* check if we want a virtual IP, but don't have one */
 	list = linked_list_create();
 	peer_cfg = this->ike_sa->get_peer_cfg(this->ike_sa);
-	if (!this->reqid)
+	if (!this->rekey)
 	{
 		enumerator = peer_cfg->create_virtual_ip_enumerator(peer_cfg);
 		while (enumerator->enumerate(enumerator, &vip))
@@ -996,7 +1016,8 @@ METHOD(task_t, build_i, status_t,
 
 	this->child_sa = child_sa_create(this->ike_sa->get_my_host(this->ike_sa),
 			this->ike_sa->get_other_host(this->ike_sa), this->config, this->reqid,
-			this->ike_sa->has_condition(this->ike_sa, COND_NAT_ANY));
+			this->ike_sa->has_condition(this->ike_sa, COND_NAT_ANY),
+			this->mark_in, this->mark_out);
 
 	if (!allocate_spi(this))
 	{
@@ -1027,7 +1048,10 @@ METHOD(task_t, build_i, status_t,
 							NARROW_INITIATOR_PRE_AUTH, this->tsi, this->tsr);
 	}
 
-	build_payloads(this, message);
+	if (!build_payloads(this, message))
+	{
+		return FAILED;
+	}
 
 	this->tsi->destroy_offset(this->tsi, offsetof(traffic_selector_t, destroy));
 	this->tsr->destroy_offset(this->tsr, offsetof(traffic_selector_t, destroy));
@@ -1070,9 +1094,12 @@ METHOD(task_t, process_r, status_t,
 static void handle_child_sa_failure(private_child_create_t *this,
 									message_t *message)
 {
-	if (message->get_exchange_type(message) == IKE_AUTH &&
+	bool is_first;
+
+	is_first = message->get_exchange_type(message) == IKE_AUTH;
+	if (is_first &&
 		lib->settings->get_bool(lib->settings,
-								"%s.close_ike_on_child_failure", FALSE, charon->name))
+								"%s.close_ike_on_child_failure", FALSE, lib->ns))
 	{
 		/* we delay the delete for 100ms, as the IKE_AUTH response must arrive
 		 * first */
@@ -1084,7 +1111,8 @@ static void handle_child_sa_failure(private_child_create_t *this,
 	else
 	{
 		DBG1(DBG_IKE, "failed to establish CHILD_SA, keeping IKE_SA");
-		charon->bus->alert(charon->bus, ALERT_KEEP_ON_CHILD_SA_FAILURE);
+		charon->bus->alert(charon->bus, ALERT_KEEP_ON_CHILD_SA_FAILURE,
+						   is_first);
 	}
 }
 
@@ -1168,8 +1196,15 @@ METHOD(task_t, build_r, status_t,
 		case IKE_SA_INIT:
 			return get_nonce(message, &this->my_nonce);
 		case CREATE_CHILD_SA:
-			if (generate_nonce(this) != SUCCESS)
+			if (!generate_nonce(this))
 			{
+				message->add_notify(message, FALSE, NO_PROPOSAL_CHOSEN,
+									chunk_empty);
+				return SUCCESS;
+			}
+			if (this->dh_failed)
+			{
+				DBG1(DBG_IKE, "applying DH public value failed");
 				message->add_notify(message, FALSE, NO_PROPOSAL_CHOSEN,
 									chunk_empty);
 				return SUCCESS;
@@ -1192,6 +1227,12 @@ METHOD(task_t, build_r, status_t,
 		message->add_notify(message, TRUE, NO_ADDITIONAL_SAS, chunk_empty);
 		return SUCCESS;
 	}
+	if (this->ike_sa->get_state(this->ike_sa) == IKE_DELETING)
+	{
+		DBG1(DBG_IKE, "unable to create CHILD_SA while deleting IKE_SA");
+		message->add_notify(message, TRUE, NO_ADDITIONAL_SAS, chunk_empty);
+		return SUCCESS;
+	}
 
 	if (this->config == NULL)
 	{
@@ -1211,7 +1252,7 @@ METHOD(task_t, build_r, status_t,
 	enumerator = message->create_payload_enumerator(message);
 	while (enumerator->enumerate(enumerator, &payload))
 	{
-		if (payload->get_type(payload) == NOTIFY)
+		if (payload->get_type(payload) == PLV2_NOTIFY)
 		{
 			notify_payload_t *notify = (notify_payload_t*)payload;
 
@@ -1235,7 +1276,8 @@ METHOD(task_t, build_r, status_t,
 
 	this->child_sa = child_sa_create(this->ike_sa->get_my_host(this->ike_sa),
 			this->ike_sa->get_other_host(this->ike_sa), this->config, this->reqid,
-			this->ike_sa->has_condition(this->ike_sa, COND_NAT_ANY));
+			this->ike_sa->has_condition(this->ike_sa, COND_NAT_ANY),
+			this->mark_in, this->mark_out);
 
 	if (this->ipcomp_received != IPCOMP_NONE)
 	{
@@ -1273,7 +1315,12 @@ METHOD(task_t, build_r, status_t,
 			return SUCCESS;
 	}
 
-	build_payloads(this, message);
+	if (!build_payloads(this, message))
+	{
+		message->add_notify(message, FALSE, NO_PROPOSAL_CHOSEN, chunk_empty);
+		handle_child_sa_failure(this, message);
+		return SUCCESS;
+	}
 
 	if (!this->rekey)
 	{	/* invoke the child_up() hook if we are not rekeying */
@@ -1313,7 +1360,7 @@ METHOD(task_t, build_i_delete, status_t,
 
 		proto = this->proposal->get_protocol(this->proposal);
 		spi = this->child_sa->get_spi(this->child_sa, TRUE);
-		del = delete_payload_create(DELETE, proto);
+		del = delete_payload_create(PLV2_DELETE, proto);
 		del->add_spi(del, spi);
 		message->add_payload(message, (payload_t*)del);
 
@@ -1362,7 +1409,7 @@ METHOD(task_t, process_i, status_t,
 	enumerator = message->create_payload_enumerator(message);
 	while (enumerator->enumerate(enumerator, &payload))
 	{
-		if (payload->get_type(payload) == NOTIFY)
+		if (payload->get_type(payload) == PLV2_NOTIFY)
 		{
 			notify_payload_t *notify = (notify_payload_t*)payload;
 			notify_type_t type = notify->get_notify_type(notify);
@@ -1402,6 +1449,7 @@ METHOD(task_t, process_i, status_t,
 						 this->dh_group, diffie_hellman_group_names, group);
 					this->retry = TRUE;
 					this->dh_group = group;
+					this->child_sa->set_state(this->child_sa, CHILD_RETRYING);
 					this->public.task.migrate(&this->public.task, this->ike_sa);
 					enumerator->destroy(enumerator);
 					return NEED_MORE;
@@ -1450,6 +1498,13 @@ METHOD(task_t, process_i, status_t,
 		return delete_failed_sa(this);
 	}
 
+	if (this->dh_failed)
+	{
+		DBG1(DBG_IKE, "applying DH public value failed");
+		handle_child_sa_failure(this, message);
+		return delete_failed_sa(this);
+	}
+
 	if (select_and_install(this, no_dh, ike_auth) == SUCCESS)
 	{
 		if (!this->rekey)
@@ -1469,6 +1524,13 @@ METHOD(child_create_t, use_reqid, void,
 	private_child_create_t *this, u_int32_t reqid)
 {
 	this->reqid = reqid;
+}
+
+METHOD(child_create_t, use_marks, void,
+	private_child_create_t *this, u_int in, u_int out)
+{
+	this->mark_in = in;
+	this->mark_out = out;
 }
 
 METHOD(child_create_t, get_child, child_sa_t*,
@@ -1519,7 +1581,9 @@ METHOD(task_t, migrate, void,
 	}
 	DESTROY_IF(this->child_sa);
 	DESTROY_IF(this->proposal);
+	DESTROY_IF(this->nonceg);
 	DESTROY_IF(this->dh);
+	this->dh_failed = FALSE;
 	if (this->proposals)
 	{
 		this->proposals->destroy_offset(this->proposals, offsetof(proposal_t, destroy));
@@ -1538,6 +1602,8 @@ METHOD(task_t, migrate, void,
 	this->ipcomp_received = IPCOMP_NONE;
 	this->other_cpi = 0;
 	this->reqid = 0;
+	this->mark_in = 0;
+	this->mark_out = 0;
 	this->established = FALSE;
 }
 
@@ -1568,6 +1634,7 @@ METHOD(task_t, destroy, void,
 	}
 
 	DESTROY_IF(this->config);
+	DESTROY_IF(this->nonceg);
 	free(this);
 }
 
@@ -1586,6 +1653,7 @@ child_create_t *child_create_create(ike_sa_t *ike_sa,
 			.set_config = _set_config,
 			.get_lower_nonce = _get_lower_nonce,
 			.use_reqid = _use_reqid,
+			.use_marks = _use_marks,
 			.task = {
 				.get_type = _get_type,
 				.migrate = _migrate,
@@ -1618,6 +1686,5 @@ child_create_t *child_create_create(ike_sa_t *ike_sa,
 		this->public.task.process = _process_r;
 		this->initiator = FALSE;
 	}
-
 	return &this->public;
 }

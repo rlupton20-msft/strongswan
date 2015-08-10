@@ -250,13 +250,13 @@ int main(int argc, char *argv[])
 	dbg = dbg_syslog;
 
 	/* initialize library */
-	if (!library_init(NULL))
+	if (!library_init(NULL, dmn_name))
 	{
 		library_deinit();
 		exit(status);
 	}
 
-	if (!libhydra_init(dmn_name))
+	if (!libhydra_init())
 	{
 		dbg_syslog(DBG_DMN, 1, "initialization failed - aborting %s", dmn_name);
 		libhydra_deinit();
@@ -264,7 +264,7 @@ int main(int argc, char *argv[])
 		exit(status);
 	}
 
-	if (!libcharon_init(dmn_name))
+	if (!libcharon_init())
 	{
 		dbg_syslog(DBG_DMN, 1, "initialization failed - aborting %s", dmn_name);
 		goto deinit;
@@ -275,6 +275,10 @@ int main(int argc, char *argv[])
 		dbg_syslog(DBG_DMN, 1, "invalid uid/gid - aborting %s", dmn_name);
 		goto deinit;
 	}
+
+	/* the authorize hook currently does not support RFC 7427 signature auth */
+	lib->settings->set_bool(lib->settings, "%s.signature_authentication", FALSE,
+							dmn_name);
 
 	/* make sure we log to the DAEMON facility by default */
 	lib->settings->set_int(lib->settings, "%s.syslog.daemon.default",
@@ -288,10 +292,6 @@ int main(int argc, char *argv[])
 	static plugin_feature_t features[] = {
 		PLUGIN_REGISTER(NONCE_GEN, tkm_nonceg_create),
 			PLUGIN_PROVIDE(NONCE_GEN),
-		PLUGIN_REGISTER(DH, tkm_diffie_hellman_create),
-			PLUGIN_PROVIDE(DH, MODP_2048_BIT),
-			PLUGIN_PROVIDE(DH, MODP_3072_BIT),
-			PLUGIN_PROVIDE(DH, MODP_4096_BIT),
 		PLUGIN_REGISTER(PUBKEY, tkm_public_key_load, TRUE),
 			PLUGIN_PROVIDE(PUBKEY, KEY_RSA),
 			PLUGIN_PROVIDE(PUBKEY_VERIFY, SIGN_RSA_EMSA_PKCS1_SHA1),
@@ -300,7 +300,13 @@ int main(int argc, char *argv[])
 			PLUGIN_PROVIDE(CUSTOM, "kernel-ipsec"),
 	};
 	lib->plugins->add_static_features(lib->plugins, "tkm-backend", features,
-			countof(features), TRUE);
+			countof(features), TRUE, NULL, NULL);
+
+	if (!register_dh_mapping())
+	{
+		DBG1(DBG_DMN, "no DH group mapping defined - aborting %s", dmn_name);
+		goto deinit;
+	}
 
 	/* register TKM keymat variant */
 	keymat_register_constructor(IKEV2, (keymat_constructor_t)tkm_keymat_create);
@@ -380,6 +386,7 @@ int main(int argc, char *argv[])
 	lib->encoding->remove_encoder(lib->encoding, tkm_encoder_encode);
 
 deinit:
+	destroy_dh_mapping();
 	libcharon_deinit();
 	libhydra_deinit();
 	library_deinit();

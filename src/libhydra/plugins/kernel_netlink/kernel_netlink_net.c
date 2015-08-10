@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2008-2013 Tobias Brunner
+ * Copyright (C) 2008-2014 Tobias Brunner
  * Copyright (C) 2005-2008 Martin Willi
  * Hochschule fuer Technik Rapperswil
  *
@@ -78,6 +78,27 @@
 #define ROUTING_TABLE_PRIO 0
 #endif
 
+ENUM(rt_msg_names, RTM_NEWLINK, RTM_GETRULE,
+	"RTM_NEWLINK",
+	"RTM_DELLINK",
+	"RTM_GETLINK",
+	"RTM_SETLINK",
+	"RTM_NEWADDR",
+	"RTM_DELADDR",
+	"RTM_GETADDR",
+	"31",
+	"RTM_NEWROUTE",
+	"RTM_DELROUTE",
+	"RTM_GETROUTE",
+	"35",
+	"RTM_NEWNEIGH",
+	"RTM_DELNEIGH",
+	"RTM_GETNEIGH",
+	"RTM_NEWRULE",
+	"RTM_DELRULE",
+	"RTM_GETRULE",
+);
+
 typedef struct addr_entry_t addr_entry_t;
 
 /**
@@ -87,6 +108,9 @@ struct addr_entry_t {
 
 	/** the ip address */
 	host_t *ip;
+
+	/** address flags */
+	u_char flags;
 
 	/** scope of the address */
 	u_char scope;
@@ -467,9 +491,24 @@ struct private_kernel_netlink_net_t {
 	bool rta_prefsrc_for_ipv6;
 
 	/**
+	 * whether to prefer temporary IPv6 addresses over public ones
+	 */
+	bool prefer_temporary_addrs;
+
+	/**
 	 * list with routing tables to be excluded from route lookup
 	 */
 	linked_list_t *rt_exclude;
+
+	/**
+	 * MTU to set on installed routes
+	 */
+	u_int32_t mtu;
+
+	/**
+	 * MSS to set on installed routes
+	 */
+	u_int32_t mss;
 };
 
 /**
@@ -653,20 +692,156 @@ static void addr_map_entry_remove(hashtable_t *map, addr_entry_t *addr,
 }
 
 /**
- * get the first non-virtual ip address on the given interface.
- * if a candidate address is given, we first search for that address and if not
- * found return the address as above.
- * returned host is a clone, has to be freed by caller.
+ * Determine the type or scope of the given unicast IP address.  This is not
+ * the same thing returned in rtm_scope/ifa_scope.
  *
- * this->lock must be held when calling this function
+ * We use return values as defined in RFC 6724 (referring to RFC 4291).
+ */
+static u_char get_scope(host_t *ip)
+{
+	chunk_t addr;
+
+	addr = ip->get_address(ip);
+	switch (addr.len)
+	{
+		case 4:
+			/* we use the mapping defined in RFC 6724, 3.2 */
+			if (addr.ptr[0] == 127)
+			{	/* link-local, same as the IPv6 loopback address */
+				return 2;
+			}
+			if (addr.ptr[0] == 169 && addr.ptr[1] == 254)
+			{	/* link-local */
+				return 2;
+			}
+			break;
+		case 16:
+			if (IN6_IS_ADDR_LOOPBACK((struct in6_addr*)addr.ptr))
+			{	/* link-local, according to RFC 4291, 2.5.3 */
+				return 2;
+			}
+			if (IN6_IS_ADDR_LINKLOCAL((struct in6_addr*)addr.ptr))
+			{
+				return 2;
+			}
+			if (IN6_IS_ADDR_SITELOCAL((struct in6_addr*)addr.ptr))
+			{	/* deprecated, according to RFC 4291, 2.5.7 */
+				return 5;
+			}
+			break;
+		default:
+			break;
+	}
+	/* global */
+	return 14;
+}
+
+/**
+ * Returns the length of the common prefix in bits up to the length of a's
+ * prefix, defined by RFC 6724 as the portion of the address not including the
+ * interface ID, which is 64-bit for most unicast addresses (see RFC 4291).
+ */
+static u_char common_prefix(host_t *a, host_t *b)
+{
+	chunk_t aa, ba;
+	u_char byte, bits = 0, match;
+
+	aa = a->get_address(a);
+	ba = b->get_address(b);
+	for (byte = 0; byte < 8; byte++)
+	{
+		if (aa.ptr[byte] != ba.ptr[byte])
+		{
+			match = aa.ptr[byte] ^ ba.ptr[byte];
+			for (bits = 8; match; match >>= 1)
+			{
+				bits--;
+			}
+			break;
+		}
+	}
+	return byte * 8 + bits;
+}
+
+/**
+ * Compare two IP addresses and return TRUE if the second address is the better
+ * choice of the two to reach the destination.
+ * For IPv6 we approximately follow RFC 6724.
+ */
+static bool is_address_better(private_kernel_netlink_net_t *this,
+							  addr_entry_t *a, addr_entry_t *b, host_t *d)
+{
+	u_char sa, sb, sd, pa, pb;
+
+	/* rule 2: prefer appropriate scope */
+	if (d)
+	{
+		sa = get_scope(a->ip);
+		sb = get_scope(b->ip);
+		sd = get_scope(d);
+		if (sa < sb)
+		{
+			return sa < sd;
+		}
+		else if (sb < sa)
+		{
+			return sb >= sd;
+		}
+	}
+	if (a->ip->get_family(a->ip) == AF_INET)
+	{	/* stop here for IPv4, default to addresses found earlier */
+		return FALSE;
+	}
+	/* rule 3: avoid deprecated addresses (RFC 4862) */
+	if ((a->flags & IFA_F_DEPRECATED) != (b->flags & IFA_F_DEPRECATED))
+	{
+		return a->flags & IFA_F_DEPRECATED;
+	}
+	/* rule 4 is not applicable as we don't know if an address is a home or
+	 * care-of addresses.
+	 * rule 5 does not apply as we only compare addresses from one interface
+	 * rule 6 requires a policy table (optionally configurable) to match
+	 * configurable labels
+	 */
+	/* rule 7: prefer temporary addresses (WE REVERSE THIS BY DEFAULT!) */
+	if ((a->flags & IFA_F_TEMPORARY) != (b->flags & IFA_F_TEMPORARY))
+	{
+		if (this->prefer_temporary_addrs)
+		{
+			return b->flags & IFA_F_TEMPORARY;
+		}
+		return a->flags & IFA_F_TEMPORARY;
+	}
+	/* rule 8: use longest matching prefix */
+	if (d)
+	{
+		pa = common_prefix(a->ip, d);
+		pb = common_prefix(b->ip, d);
+		if (pa != pb)
+		{
+			return pb > pa;
+		}
+	}
+	/* default to addresses found earlier */
+	return FALSE;
+}
+
+/**
+ * Get a non-virtual IP address on the given interface.
+ *
+ * If a candidate address is given, we first search for that address and if not
+ * found return the address as above.
+ * Returned host is a clone, has to be freed by caller.
+ *
+ * this->lock must be held when calling this function.
  */
 static host_t *get_interface_address(private_kernel_netlink_net_t *this,
-									 int ifindex, int family, host_t *candidate)
+									 int ifindex, int family, host_t *dest,
+									 host_t *candidate)
 {
 	iface_entry_t *iface;
 	enumerator_t *addrs;
-	addr_entry_t *addr;
-	host_t *ip = NULL;
+	addr_entry_t *addr, *best = NULL;
 
 	if (this->ifaces->find_first(this->ifaces, (void*)iface_entry_by_index,
 								 (void**)&iface, &ifindex) == SUCCESS)
@@ -676,29 +851,25 @@ static host_t *get_interface_address(private_kernel_netlink_net_t *this,
 			addrs = iface->addrs->create_enumerator(iface->addrs);
 			while (addrs->enumerate(addrs, &addr))
 			{
-				if (addr->refcount)
-				{	/* ignore virtual IP addresses */
+				if (addr->refcount ||
+					addr->ip->get_family(addr->ip) != family)
+				{	/* ignore virtual IP addresses and ensure family matches */
 					continue;
 				}
-				if (addr->ip->get_family(addr->ip) == family)
+				if (candidate && candidate->ip_equals(candidate, addr->ip))
+				{	/* stop if we find the candidate */
+					best = addr;
+					break;
+				}
+				else if (!best || is_address_better(this, best, addr, dest))
 				{
-					if (!candidate || candidate->ip_equals(candidate, addr->ip))
-					{	/* stop at the first address if we don't search for a
-						 * candidate or if the candidate matches */
-						ip = addr->ip;
-						break;
-					}
-					else if (!ip)
-					{	/* store the first address as fallback if candidate is
-						 * not found */
-						ip = addr->ip;
-					}
+					best = addr;
 				}
 			}
 			addrs->destroy(addrs);
 		}
 	}
-	return ip ? ip->clone(ip) : NULL;
+	return best ? best->ip->clone(best->ip) : NULL;
 }
 
 /**
@@ -788,7 +959,7 @@ static void addr_entry_unregister(addr_entry_t *addr, iface_entry_t *iface,
 static void process_link(private_kernel_netlink_net_t *this,
 						 struct nlmsghdr *hdr, bool event)
 {
-	struct ifinfomsg* msg = (struct ifinfomsg*)(NLMSG_DATA(hdr));
+	struct ifinfomsg* msg = NLMSG_DATA(hdr);
 	struct rtattr *rta = IFLA_RTA(msg);
 	size_t rtasize = IFLA_PAYLOAD (hdr);
 	enumerator_t *enumerator;
@@ -890,7 +1061,7 @@ static void process_link(private_kernel_netlink_net_t *this,
 static void process_addr(private_kernel_netlink_net_t *this,
 						 struct nlmsghdr *hdr, bool event)
 {
-	struct ifaddrmsg* msg = (struct ifaddrmsg*)(NLMSG_DATA(hdr));
+	struct ifaddrmsg* msg = NLMSG_DATA(hdr);
 	struct rtattr *rta = IFA_RTA(msg);
 	size_t rtasize = IFA_PAYLOAD (hdr);
 	host_t *host = NULL;
@@ -989,6 +1160,7 @@ static void process_addr(private_kernel_netlink_net_t *this,
 				route_ifname = strdup(iface->ifname);
 				INIT(addr,
 					.ip = host->clone(host),
+					.flags = msg->ifa_flags,
 					.scope = msg->ifa_scope,
 				);
 				iface->addrs->insert_last(iface->addrs, addr);
@@ -1032,7 +1204,7 @@ static void process_addr(private_kernel_netlink_net_t *this,
  */
 static void process_route(private_kernel_netlink_net_t *this, struct nlmsghdr *hdr)
 {
-	struct rtmsg* msg = (struct rtmsg*)(NLMSG_DATA(hdr));
+	struct rtmsg* msg = NLMSG_DATA(hdr);
 	struct rtattr *rta = RTM_RTA(msg);
 	size_t rtasize = RTM_PAYLOAD(hdr);
 	u_int32_t rta_oif = 0;
@@ -1076,7 +1248,8 @@ static void process_route(private_kernel_netlink_net_t *this, struct nlmsghdr *h
 	}
 	if (!host && rta_oif)
 	{
-		host = get_interface_address(this, rta_oif, msg->rtm_family, NULL);
+		host = get_interface_address(this, rta_oif, msg->rtm_family,
+									 NULL, NULL);
 	}
 	if (!host || is_known_vip(this, host))
 	{	/* ignore routes added for virtual IPs */
@@ -1318,9 +1491,10 @@ static int get_interface_index(private_kernel_netlink_net_t *this, char* name)
 }
 
 /**
- * check if an address (chunk) addr is in subnet (net with net_len net bits)
+ * check if an address or net (addr with prefix net bits) is in
+ * subnet (net with net_len net bits)
  */
-static bool addr_in_subnet(chunk_t addr, chunk_t net, int net_len)
+static bool addr_in_subnet(chunk_t addr, int prefix, chunk_t net, int net_len)
 {
 	static const u_char mask[] = { 0x00, 0x80, 0xc0, 0xe0, 0xf0, 0xf8, 0xfc, 0xfe };
 	int byte = 0;
@@ -1329,7 +1503,7 @@ static bool addr_in_subnet(chunk_t addr, chunk_t net, int net_len)
 	{	/* any address matches a /0 network */
 		return TRUE;
 	}
-	if (addr.len != net.len || net_len > 8 * net.len )
+	if (addr.len != net.len || net_len > 8 * net.len || prefix < net_len)
 	{
 		return FALSE;
 	}
@@ -1364,6 +1538,7 @@ typedef struct {
 	u_int8_t dst_len;
 	u_int32_t table;
 	u_int32_t oif;
+	u_int32_t priority;
 } rt_entry_t;
 
 /**
@@ -1373,6 +1548,26 @@ static void rt_entry_destroy(rt_entry_t *this)
 {
 	DESTROY_IF(this->src_host);
 	free(this);
+}
+
+/**
+ * Check if the route received with RTM_NEWROUTE is usable based on its type.
+ */
+static bool route_usable(struct nlmsghdr *hdr)
+{
+	struct rtmsg *msg;
+
+	msg = NLMSG_DATA(hdr);
+	switch (msg->rtm_type)
+	{
+		case RTN_BLACKHOLE:
+		case RTN_UNREACHABLE:
+		case RTN_PROHIBIT:
+		case RTN_THROW:
+			return FALSE;
+		default:
+			return TRUE;
+	}
 }
 
 /**
@@ -1387,7 +1582,7 @@ static rt_entry_t *parse_route(struct nlmsghdr *hdr, rt_entry_t *route)
 	struct rtmsg *msg;
 	size_t rtasize;
 
-	msg = (struct rtmsg*)(NLMSG_DATA(hdr));
+	msg = NLMSG_DATA(hdr);
 	rta = RTM_RTA(msg);
 	rtasize = RTM_PAYLOAD(hdr);
 
@@ -1399,6 +1594,7 @@ static rt_entry_t *parse_route(struct nlmsghdr *hdr, rt_entry_t *route)
 		route->dst_len = msg->rtm_dst_len;
 		route->table = msg->rtm_table;
 		route->oif = 0;
+		route->priority = 0;
 	}
 	else
 	{
@@ -1427,6 +1623,12 @@ static rt_entry_t *parse_route(struct nlmsghdr *hdr, rt_entry_t *route)
 					route->oif = *(u_int32_t*)RTA_DATA(rta);
 				}
 				break;
+			case RTA_PRIORITY:
+				if (RTA_PAYLOAD(rta) == sizeof(route->priority))
+				{
+					route->priority = *(u_int32_t*)RTA_DATA(rta);
+				}
+				break;
 #ifdef HAVE_RTA_TABLE
 			case RTA_TABLE:
 				if (RTA_PAYLOAD(rta) == sizeof(route->table))
@@ -1445,7 +1647,8 @@ static rt_entry_t *parse_route(struct nlmsghdr *hdr, rt_entry_t *route)
  * Get a route: If "nexthop", the nexthop is returned. source addr otherwise.
  */
 static host_t *get_route(private_kernel_netlink_net_t *this, host_t *dest,
-						 bool nexthop, host_t *candidate, u_int recursion)
+						 int prefix, bool nexthop, host_t *candidate,
+						 u_int recursion)
 {
 	netlink_buf_t request;
 	struct nlmsghdr *hdr, *out, *current;
@@ -1456,18 +1659,25 @@ static host_t *get_route(private_kernel_netlink_net_t *this, host_t *dest,
 	rt_entry_t *route = NULL, *best = NULL;
 	enumerator_t *enumerator;
 	host_t *addr = NULL;
+	bool match_net;
+	int family;
 
 	if (recursion > MAX_ROUTE_RECURSION)
 	{
 		return NULL;
 	}
+	chunk = dest->get_address(dest);
+	len = chunk.len * 8;
+	prefix = prefix < 0 ? len : min(prefix, len);
+	match_net = prefix != len;
 
 	memset(&request, 0, sizeof(request));
 
-	hdr = (struct nlmsghdr*)request;
+	family = dest->get_family(dest);
+	hdr = &request.hdr;
 	hdr->nlmsg_flags = NLM_F_REQUEST;
-	if (dest->get_family(dest) == AF_INET || this->rta_prefsrc_for_ipv6 ||
-		this->routing_table)
+	if (family == AF_INET || this->rta_prefsrc_for_ipv6 ||
+		this->routing_table || match_net)
 	{	/* kernels prior to 3.0 do not support RTA_PREFSRC for IPv6 routes.
 		 * as we want to ignore routes with virtual IPs we cannot use DUMP
 		 * if these routes are not installed in a separate table */
@@ -1476,20 +1686,23 @@ static host_t *get_route(private_kernel_netlink_net_t *this, host_t *dest,
 	hdr->nlmsg_type = RTM_GETROUTE;
 	hdr->nlmsg_len = NLMSG_LENGTH(sizeof(struct rtmsg));
 
-	msg = (struct rtmsg*)NLMSG_DATA(hdr);
-	msg->rtm_family = dest->get_family(dest);
+	msg = NLMSG_DATA(hdr);
+	msg->rtm_family = family;
 	if (candidate)
 	{
 		chunk = candidate->get_address(candidate);
 		netlink_add_attribute(hdr, RTA_PREFSRC, chunk, sizeof(request));
 	}
-	chunk = dest->get_address(dest);
-	netlink_add_attribute(hdr, RTA_DST, chunk, sizeof(request));
+	if (!match_net)
+	{
+		chunk = dest->get_address(dest);
+		netlink_add_attribute(hdr, RTA_DST, chunk, sizeof(request));
+	}
 
 	if (this->socket->send(this->socket, hdr, &out, &len) != SUCCESS)
 	{
-		DBG2(DBG_KNL, "getting %s to reach %H failed",
-			 nexthop ? "nexthop" : "address", dest);
+		DBG2(DBG_KNL, "getting %s to reach %H/%d failed",
+			 nexthop ? "nexthop" : "address", dest, prefix);
 		return NULL;
 	}
 	routes = linked_list_create();
@@ -1507,6 +1720,10 @@ static host_t *get_route(private_kernel_netlink_net_t *this, host_t *dest,
 				rt_entry_t *other;
 				uintptr_t table;
 
+				if (!route_usable(current))
+				{
+					continue;
+				}
 				route = parse_route(current, route);
 
 				table = (uintptr_t)route->table;
@@ -1524,7 +1741,7 @@ static host_t *get_route(private_kernel_netlink_net_t *this, host_t *dest,
 				{	/* interface is down */
 					continue;
 				}
-				if (!addr_in_subnet(chunk, route->dst, route->dst_len))
+				if (!addr_in_subnet(chunk, prefix, route->dst, route->dst_len))
 				{	/* route destination does not contain dest */
 					continue;
 				}
@@ -1539,11 +1756,16 @@ static host_t *get_route(private_kernel_netlink_net_t *this, host_t *dest,
 					}
 					route->src_host = src;
 				}
-				/* insert route, sorted by decreasing network prefix */
+				/* insert route, sorted by priority and network prefix */
 				enumerator = routes->create_enumerator(routes);
 				while (enumerator->enumerate(enumerator, &other))
 				{
-					if (route->dst_len > other->dst_len)
+					if (route->priority < other->priority)
+					{
+						break;
+					}
+					if (route->priority == other->priority &&
+						route->dst_len > other->dst_len)
 					{
 						break;
 					}
@@ -1580,7 +1802,7 @@ static host_t *get_route(private_kernel_netlink_net_t *this, host_t *dest,
 			else if (route->oif)
 			{	/* no match yet, maybe it is assigned to the same interface */
 				host_t *src = get_interface_address(this, route->oif,
-													msg->rtm_family, candidate);
+											msg->rtm_family, dest, candidate);
 				if (src && src->ip_equals(src, candidate))
 				{
 					route->src_host->destroy(route->src_host);
@@ -1599,7 +1821,7 @@ static host_t *get_route(private_kernel_netlink_net_t *this, host_t *dest,
 		if (route->oif)
 		{	/* no src, but an interface - get address from it */
 			route->src_host = get_interface_address(this, route->oif,
-													msg->rtm_family, candidate);
+											msg->rtm_family, dest, candidate);
 			if (route->src_host)
 			{	/* we handle this address the same as the one above */
 				if (!candidate ||
@@ -1619,7 +1841,7 @@ static host_t *get_route(private_kernel_netlink_net_t *this, host_t *dest,
 			gtw = host_create_from_chunk(msg->rtm_family, route->gtw, 0);
 			if (gtw && !gtw->ip_equals(gtw, dest))
 			{
-				route->src_host = get_route(this, gtw, FALSE, candidate,
+				route->src_host = get_route(this, gtw, -1, FALSE, candidate,
 											recursion + 1);
 			}
 			DESTROY_IF(gtw);
@@ -1643,7 +1865,10 @@ static host_t *get_route(private_kernel_netlink_net_t *this, host_t *dest,
 		{
 			addr = host_create_from_chunk(msg->rtm_family, best->gtw, 0);
 		}
-		addr = addr ?: dest->clone(dest);
+		if (!addr && !match_net)
+		{	/* fallback to destination address */
+			addr = dest->clone(dest);
+		}
 	}
 	else
 	{
@@ -1658,13 +1883,13 @@ static host_t *get_route(private_kernel_netlink_net_t *this, host_t *dest,
 
 	if (addr)
 	{
-		DBG2(DBG_KNL, "using %H as %s to reach %H", addr,
-			 nexthop ? "nexthop" : "address", dest);
+		DBG2(DBG_KNL, "using %H as %s to reach %H/%d", addr,
+			 nexthop ? "nexthop" : "address", dest, prefix);
 	}
 	else if (!recursion)
 	{
-		DBG2(DBG_KNL, "no %s found to reach %H",
-			 nexthop ? "nexthop" : "address", dest);
+		DBG2(DBG_KNL, "no %s found to reach %H/%d",
+			 nexthop ? "nexthop" : "address", dest, prefix);
 	}
 	return addr;
 }
@@ -1672,13 +1897,13 @@ static host_t *get_route(private_kernel_netlink_net_t *this, host_t *dest,
 METHOD(kernel_net_t, get_source_addr, host_t*,
 	private_kernel_netlink_net_t *this, host_t *dest, host_t *src)
 {
-	return get_route(this, dest, FALSE, src, 0);
+	return get_route(this, dest, -1, FALSE, src, 0);
 }
 
 METHOD(kernel_net_t, get_nexthop, host_t*,
-	private_kernel_netlink_net_t *this, host_t *dest, host_t *src)
+	private_kernel_netlink_net_t *this, host_t *dest, int prefix, host_t *src)
 {
-	return get_route(this, dest, TRUE, src, 0);
+	return get_route(this, dest, prefix, TRUE, src, 0);
 }
 
 /**
@@ -1697,12 +1922,12 @@ static status_t manage_ipaddr(private_kernel_netlink_net_t *this, int nlmsg_type
 
 	chunk = ip->get_address(ip);
 
-	hdr = (struct nlmsghdr*)request;
+	hdr = &request.hdr;
 	hdr->nlmsg_flags = NLM_F_REQUEST | NLM_F_ACK | flags;
 	hdr->nlmsg_type = nlmsg_type;
 	hdr->nlmsg_len = NLMSG_LENGTH(sizeof(struct ifaddrmsg));
 
-	msg = (struct ifaddrmsg*)NLMSG_DATA(hdr);
+	msg = NLMSG_DATA(hdr);
 	msg->ifa_family = ip->get_family(ip);
 	msg->ifa_flags = 0;
 	msg->ifa_prefixlen = prefix < 0 ? chunk.len * 8 : prefix;
@@ -1711,6 +1936,17 @@ static status_t manage_ipaddr(private_kernel_netlink_net_t *this, int nlmsg_type
 
 	netlink_add_attribute(hdr, IFA_LOCAL, chunk, sizeof(request));
 
+	if (ip->get_family(ip) == AF_INET6 && this->rta_prefsrc_for_ipv6)
+	{	/* if source routes are possible we let the virtual IP get deprecated
+		 * immediately (but mark it as valid forever) so it gets only used if
+		 * forced by our route, and not by the default IPv6 address selection */
+		struct ifa_cacheinfo cache = {
+			.ifa_valid = 0xFFFFFFFF,
+			.ifa_prefered = 0,
+		};
+		netlink_add_attribute(hdr, IFA_CACHEINFO, chunk_from_thing(cache),
+							  sizeof(request));
+	}
 	return this->socket->send_ack(this->socket, hdr);
 }
 
@@ -1776,6 +2012,8 @@ METHOD(kernel_net_t, add_ip, status_t,
 	if (iface)
 	{
 		addr_entry_t *addr;
+		char *ifname;
+		int ifi;
 
 		INIT(addr,
 			.ip = virtual_ip->clone(virtual_ip),
@@ -1784,26 +2022,30 @@ METHOD(kernel_net_t, add_ip, status_t,
 		);
 		iface->addrs->insert_last(iface->addrs, addr);
 		addr_map_entry_add(this->vips, addr, iface);
+		ifi = iface->ifindex;
+		this->lock->unlock(this->lock);
 		if (manage_ipaddr(this, RTM_NEWADDR, NLM_F_CREATE | NLM_F_EXCL,
-						  iface->ifindex, virtual_ip, prefix) == SUCCESS)
+						  ifi, virtual_ip, prefix) == SUCCESS)
 		{
+			this->lock->write_lock(this->lock);
 			while (!is_vip_installed_or_gone(this, virtual_ip, &entry))
 			{	/* wait until address appears */
 				this->condvar->wait(this->condvar, this->lock);
 			}
 			if (entry)
 			{	/* we fail if the interface got deleted in the meantime */
-				DBG2(DBG_KNL, "virtual IP %H installed on %s", virtual_ip,
-					 entry->iface->ifname);
+				ifname = strdup(entry->iface->ifname);
 				this->lock->unlock(this->lock);
+				DBG2(DBG_KNL, "virtual IP %H installed on %s",
+					 virtual_ip, ifname);
 				/* during IKEv1 reauthentication, children get moved from
 				 * old the new SA before the virtual IP is available. This
 				 * kills the route for our virtual IP, reinstall. */
-				queue_route_reinstall(this, strdup(entry->iface->ifname));
+				queue_route_reinstall(this, ifname);
 				return SUCCESS;
 			}
+			this->lock->unlock(this->lock);
 		}
-		this->lock->unlock(this->lock);
 		DBG1(DBG_KNL, "adding virtual IP %H failed", virtual_ip);
 		return FAILED;
 	}
@@ -1849,20 +2091,23 @@ METHOD(kernel_net_t, del_ip, status_t,
 	if (entry->addr->refcount == 1)
 	{
 		status_t status;
+		int ifi;
 
 		/* we set this flag so that threads calling add_ip will block and wait
 		 * until the entry is gone, also so we can wait below */
 		entry->addr->installed = FALSE;
-		status = manage_ipaddr(this, RTM_DELADDR, 0, entry->iface->ifindex,
-							   virtual_ip, prefix);
+		ifi = entry->iface->ifindex;
+		this->lock->unlock(this->lock);
+		status = manage_ipaddr(this, RTM_DELADDR, 0, ifi, virtual_ip, prefix);
 		if (status == SUCCESS && wait)
 		{	/* wait until the address is really gone */
+			this->lock->write_lock(this->lock);
 			while (is_known_vip(this, virtual_ip))
 			{
 				this->condvar->wait(this->condvar, this->lock);
 			}
+			this->lock->unlock(this->lock);
 		}
-		this->lock->unlock(this->lock);
 		return status;
 	}
 	else
@@ -1887,6 +2132,7 @@ static status_t manage_srcroute(private_kernel_netlink_net_t *this,
 	netlink_buf_t request;
 	struct nlmsghdr *hdr;
 	struct rtmsg *msg;
+	struct rtattr *rta;
 	int ifindex;
 	chunk_t chunk;
 
@@ -1913,12 +2159,12 @@ static status_t manage_srcroute(private_kernel_netlink_net_t *this,
 
 	memset(&request, 0, sizeof(request));
 
-	hdr = (struct nlmsghdr*)request;
+	hdr = &request.hdr;
 	hdr->nlmsg_flags = NLM_F_REQUEST | NLM_F_ACK | flags;
 	hdr->nlmsg_type = nlmsg_type;
 	hdr->nlmsg_len = NLMSG_LENGTH(sizeof(struct rtmsg));
 
-	msg = (struct rtmsg*)NLMSG_DATA(hdr);
+	msg = NLMSG_DATA(hdr);
 	msg->rtm_family = src_ip->get_family(src_ip);
 	msg->rtm_dst_len = prefixlen;
 	msg->rtm_table = this->routing_table;
@@ -1938,6 +2184,30 @@ static status_t manage_srcroute(private_kernel_netlink_net_t *this,
 	chunk.ptr = (char*)&ifindex;
 	chunk.len = sizeof(ifindex);
 	netlink_add_attribute(hdr, RTA_OIF, chunk, sizeof(request));
+
+	if (this->mtu || this->mss)
+	{
+		chunk = chunk_alloca(RTA_LENGTH((sizeof(struct rtattr) +
+										 sizeof(u_int32_t)) * 2));
+		chunk.len = 0;
+		rta = (struct rtattr*)chunk.ptr;
+		if (this->mtu)
+		{
+			rta->rta_type = RTAX_MTU;
+			rta->rta_len = RTA_LENGTH(sizeof(u_int32_t));
+			memcpy(RTA_DATA(rta), &this->mtu, sizeof(u_int32_t));
+			chunk.len = rta->rta_len;
+		}
+		if (this->mss)
+		{
+			rta = (struct rtattr*)(chunk.ptr + RTA_ALIGN(chunk.len));
+			rta->rta_type = RTAX_ADVMSS;
+			rta->rta_len = RTA_LENGTH(sizeof(u_int32_t));
+			memcpy(RTA_DATA(rta), &this->mss, sizeof(u_int32_t));
+			chunk.len = RTA_ALIGN(chunk.len) + rta->rta_len;
+		}
+		netlink_add_attribute(hdr, RTA_METRICS, chunk, sizeof(request));
+	}
 
 	return this->socket->send_ack(this->socket, hdr);
 }
@@ -1962,10 +2232,13 @@ METHOD(kernel_net_t, add_route, status_t,
 		this->routes_lock->unlock(this->routes_lock);
 		return ALREADY_DONE;
 	}
-	found = route_entry_clone(&route);
-	this->routes->put(this->routes, found, found);
 	status = manage_srcroute(this, RTM_NEWROUTE, NLM_F_CREATE | NLM_F_EXCL,
 							 dst_net, prefixlen, gateway, src_ip, if_name);
+	if (status == SUCCESS)
+	{
+		found = route_entry_clone(&route);
+		this->routes->put(this->routes, found, found);
+	}
 	this->routes_lock->unlock(this->routes_lock);
 	return status;
 }
@@ -2015,10 +2288,10 @@ static status_t init_address_list(private_kernel_netlink_net_t *this)
 
 	memset(&request, 0, sizeof(request));
 
-	in = (struct nlmsghdr*)&request;
+	in = &request.hdr;
 	in->nlmsg_len = NLMSG_LENGTH(sizeof(struct rtgenmsg));
 	in->nlmsg_flags = NLM_F_REQUEST | NLM_F_MATCH | NLM_F_ROOT;
-	msg = (struct rtgenmsg*)NLMSG_DATA(in);
+	msg = NLMSG_DATA(in);
 	msg->rtgen_family = AF_UNSPEC;
 
 	/* get all links */
@@ -2102,7 +2375,7 @@ static status_t manage_rule(private_kernel_netlink_net_t *this, int nlmsg_type,
 	char *fwmark;
 
 	memset(&request, 0, sizeof(request));
-	hdr = (struct nlmsghdr*)request;
+	hdr = &request.hdr;
 	hdr->nlmsg_flags = NLM_F_REQUEST | NLM_F_ACK;
 	hdr->nlmsg_type = nlmsg_type;
 	if (nlmsg_type == RTM_NEWRULE)
@@ -2111,7 +2384,7 @@ static status_t manage_rule(private_kernel_netlink_net_t *this, int nlmsg_type,
 	}
 	hdr->nlmsg_len = NLMSG_LENGTH(sizeof(struct rtmsg));
 
-	msg = (struct rtmsg*)NLMSG_DATA(hdr);
+	msg = NLMSG_DATA(hdr);
 	msg->rtm_table = table;
 	msg->rtm_family = family;
 	msg->rtm_protocol = RTPROT_BOOT;
@@ -2122,7 +2395,7 @@ static status_t manage_rule(private_kernel_netlink_net_t *this, int nlmsg_type,
 	netlink_add_attribute(hdr, RTA_PRIORITY, chunk, sizeof(request));
 
 	fwmark = lib->settings->get_str(lib->settings,
-					"%s.plugins.kernel-netlink.fwmark", NULL, hydra->daemon);
+							"%s.plugins.kernel-netlink.fwmark", NULL, lib->ns);
 	if (fwmark)
 	{
 #ifdef HAVE_LINUX_FIB_RULES_H
@@ -2263,7 +2536,9 @@ kernel_netlink_net_t *kernel_netlink_net_create()
 				.destroy = _destroy,
 			},
 		},
-		.socket = netlink_socket_create(NETLINK_ROUTE),
+		.socket = netlink_socket_create(NETLINK_ROUTE, rt_msg_names,
+			lib->settings->get_bool(lib->settings,
+				"%s.plugins.kernel-netlink.parallel_route", FALSE, lib->ns)),
 		.rt_exclude = linked_list_create(),
 		.routes = hashtable_create((hashtable_hash_t)route_entry_hash,
 								   (hashtable_equals_t)route_entry_equals, 16),
@@ -2282,30 +2557,36 @@ kernel_netlink_net_t *kernel_netlink_net_create()
 		.condvar = rwlock_condvar_create(),
 		.roam_lock = spinlock_create(),
 		.routing_table = lib->settings->get_int(lib->settings,
-				"%s.routing_table", ROUTING_TABLE, hydra->daemon),
+						"%s.routing_table", ROUTING_TABLE, lib->ns),
 		.routing_table_prio = lib->settings->get_int(lib->settings,
-				"%s.routing_table_prio", ROUTING_TABLE_PRIO, hydra->daemon),
+						"%s.routing_table_prio", ROUTING_TABLE_PRIO, lib->ns),
 		.process_route = lib->settings->get_bool(lib->settings,
-				"%s.process_route", TRUE, hydra->daemon),
+						"%s.process_route", TRUE, lib->ns),
 		.install_virtual_ip = lib->settings->get_bool(lib->settings,
-				"%s.install_virtual_ip", TRUE, hydra->daemon),
+						"%s.install_virtual_ip", TRUE, lib->ns),
 		.install_virtual_ip_on = lib->settings->get_str(lib->settings,
-				"%s.install_virtual_ip_on", NULL, hydra->daemon),
+						"%s.install_virtual_ip_on", NULL, lib->ns),
+		.prefer_temporary_addrs = lib->settings->get_bool(lib->settings,
+						"%s.prefer_temporary_addrs", FALSE, lib->ns),
 		.roam_events = lib->settings->get_bool(lib->settings,
-				"%s.plugins.kernel-netlink.roam_events", TRUE, hydra->daemon),
+						"%s.plugins.kernel-netlink.roam_events", TRUE, lib->ns),
+		.mtu = lib->settings->get_int(lib->settings,
+						"%s.plugins.kernel-netlink.mtu", 0, lib->ns),
+		.mss = lib->settings->get_int(lib->settings,
+						"%s.plugins.kernel-netlink.mss", 0, lib->ns),
 	);
 	timerclear(&this->last_route_reinstall);
 	timerclear(&this->next_roam);
 
 	check_kernel_features(this);
 
-	if (streq(hydra->daemon, "starter"))
+	if (streq(lib->ns, "starter"))
 	{	/* starter has no threads, so we do not register for kernel events */
 		register_for_events = FALSE;
 	}
 
 	exclude = lib->settings->get_str(lib->settings,
-					"%s.ignore_routing_tables", NULL, hydra->daemon);
+									 "%s.ignore_routing_tables", NULL, lib->ns);
 	if (exclude)
 	{
 		char *token;

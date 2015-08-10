@@ -1,4 +1,7 @@
 /*
+ * Copyright (C) 2014 Tobias Brunner
+ * Hochschule fuer Technik Rapperswil
+ *
  * Copyright (C) 2012 Martin Willi
  * Copyright (C) 2012 revosec AG
  *
@@ -16,6 +19,8 @@
 #include "unity_narrow.h"
 
 #include <daemon.h>
+#include <encoding/payloads/id_payload.h>
+#include <collections/hashtable.h>
 
 typedef struct private_unity_narrow_t private_unity_narrow_t;
 
@@ -33,6 +38,11 @@ struct private_unity_narrow_t {
 	 * Unity attribute handler
 	 */
 	unity_handler_t *handler;
+
+	/**
+	 * IKE_SAs for which we received 0.0.0.0/0 as remote traffic selector
+	 */
+	hashtable_t *wildcard_ts;
 };
 
 /**
@@ -65,7 +75,7 @@ static void narrow_initiator(private_unity_narrow_t *this, ike_sa_t *ike_sa,
 	enumerator_t *enumerator;
 
 	enumerator = this->handler->create_include_enumerator(this->handler,
-											ike_sa->get_unique_id(ike_sa));
+											ike_sa->get_id(ike_sa));
 	while (enumerator->enumerate(enumerator, &current))
 	{
 		if (orig == NULL)
@@ -97,9 +107,9 @@ static void narrow_initiator(private_unity_narrow_t *this, ike_sa_t *ike_sa,
 }
 
 /**
- * As initiator, bump up TS to 0.0.0.0/0 for on-the-wire bits
+ * As initiator and responder, bump up TS to 0.0.0.0/0 for on-the-wire bits
  */
-static void narrow_initiator_pre(linked_list_t *list)
+static void narrow_pre(linked_list_t *list, char *side)
 {
 	traffic_selector_t *ts;
 
@@ -112,7 +122,7 @@ static void narrow_initiator_pre(linked_list_t *list)
 											 "255.255.255.255", 65535);
 	if (ts)
 	{
-		DBG2(DBG_CFG, "changing proposed traffic selectors for other:");
+		DBG2(DBG_CFG, "changing proposed traffic selectors for %s:", side);
 		DBG2(DBG_CFG, " %R", ts);
 		list->insert_last(list, ts);
 	}
@@ -139,6 +149,23 @@ static void narrow_responder_post(child_cfg_t *child_cfg, linked_list_t *local)
 	configured->destroy(configured);
 }
 
+/**
+ * Check if any Split-Include attributes are active on this IKE_SA
+ */
+static bool has_split_includes(private_unity_narrow_t *this, ike_sa_t *ike_sa)
+{
+	enumerator_t *enumerator;
+	traffic_selector_t *ts;
+	bool has;
+
+	enumerator = this->handler->create_include_enumerator(this->handler,
+												ike_sa->get_id(ike_sa));
+	has = enumerator->enumerate(enumerator, &ts);
+	enumerator->destroy(enumerator);
+
+	return has;
+}
+
 METHOD(listener_t, narrow, bool,
 	private_unity_narrow_t *this, ike_sa_t *ike_sa, child_sa_t *child_sa,
 	narrow_hook_t type, linked_list_t *local, linked_list_t *remote)
@@ -146,21 +173,111 @@ METHOD(listener_t, narrow, bool,
 	if (ike_sa->get_version(ike_sa) == IKEV1 &&
 		ike_sa->supports_extension(ike_sa, EXT_CISCO_UNITY))
 	{
-		switch (type)
+		/* depending on who initiates a rekeying the hooks will not match the
+		 * roles in the IKE_SA */
+		if (ike_sa->has_condition(ike_sa, COND_ORIGINAL_INITIATOR))
 		{
-			case NARROW_INITIATOR_PRE_AUTH:
-				narrow_initiator_pre(remote);
-				break;
-			case NARROW_INITIATOR_POST_AUTH:
-				narrow_initiator(this, ike_sa,
-								 child_sa->get_config(child_sa), remote);
-				break;
-			case NARROW_RESPONDER_POST:
-				narrow_responder_post(child_sa->get_config(child_sa), local);
-				break;
-			default:
-				break;
+			switch (type)
+			{
+				case NARROW_INITIATOR_PRE_AUTH:
+				case NARROW_RESPONDER:
+					if (has_split_includes(this, ike_sa))
+					{
+						narrow_pre(remote, "other");
+					}
+					break;
+				case NARROW_INITIATOR_POST_AUTH:
+				case NARROW_RESPONDER_POST:
+					narrow_initiator(this, ike_sa,
+									 child_sa->get_config(child_sa), remote);
+					break;
+				default:
+					break;
+			}
 		}
+		else
+		{
+			switch (type)
+			{
+				case NARROW_INITIATOR_PRE_AUTH:
+				case NARROW_RESPONDER:
+					if (this->wildcard_ts->get(this->wildcard_ts, ike_sa))
+					{
+						narrow_pre(local, "us");
+
+					}
+					break;
+				case NARROW_INITIATOR_POST_AUTH:
+				case NARROW_RESPONDER_POST:
+					if (this->wildcard_ts->get(this->wildcard_ts, ike_sa))
+					{
+						narrow_responder_post(child_sa->get_config(child_sa),
+											  local);
+					}
+					break;
+				default:
+					break;
+			}
+		}
+	}
+	return TRUE;
+}
+
+METHOD(listener_t, message, bool,
+	private_unity_narrow_t *this, ike_sa_t *ike_sa, message_t *message,
+	bool incoming, bool plain)
+{
+	traffic_selector_t *tsr = NULL, *wildcard;
+	enumerator_t *enumerator;
+	id_payload_t *id_payload;
+	payload_t *payload;
+	bool first = TRUE;
+
+	if (!incoming || !plain ||
+		message->get_exchange_type(message) != QUICK_MODE ||
+		!ike_sa || !ike_sa->supports_extension(ike_sa, EXT_CISCO_UNITY))
+	{
+		return TRUE;
+	}
+	enumerator = message->create_payload_enumerator(message);
+	while (enumerator->enumerate(enumerator, &payload))
+	{
+		if (payload->get_type(payload) == PLV1_ID)
+		{
+			if (!first)
+			{
+				id_payload = (id_payload_t*)payload;
+				tsr = id_payload->get_ts(id_payload);
+				break;
+			}
+			first = FALSE;
+		}
+	}
+	enumerator->destroy(enumerator);
+	if (!tsr)
+	{
+		return TRUE;
+	}
+	wildcard = traffic_selector_create_from_cidr("0.0.0.0/0", 0, 0, 65535);
+	if (tsr->equals(tsr, wildcard))
+	{
+		this->wildcard_ts->put(this->wildcard_ts, ike_sa, ike_sa);
+	}
+	else
+	{
+		this->wildcard_ts->remove(this->wildcard_ts, ike_sa);
+	}
+	wildcard->destroy(wildcard);
+	tsr->destroy(tsr);
+	return TRUE;
+}
+
+METHOD(listener_t, ike_updown, bool,
+	private_unity_narrow_t *this, ike_sa_t *ike_sa, bool up)
+{
+	if (!up)
+	{
+		this->wildcard_ts->remove(this->wildcard_ts, ike_sa);
 	}
 	return TRUE;
 }
@@ -168,6 +285,7 @@ METHOD(listener_t, narrow, bool,
 METHOD(unity_narrow_t, destroy, void,
 	private_unity_narrow_t *this)
 {
+	this->wildcard_ts->destroy(this->wildcard_ts);
 	free(this);
 }
 
@@ -182,10 +300,14 @@ unity_narrow_t *unity_narrow_create(unity_handler_t *handler)
 		.public = {
 			.listener = {
 				.narrow = _narrow,
+				.message = _message,
+				.ike_updown = _ike_updown,
 			},
 			.destroy = _destroy,
 		},
 		.handler = handler,
+		.wildcard_ts = hashtable_create(hashtable_hash_ptr,
+										hashtable_equals_ptr, 4),
 	);
 
 	return &this->public;

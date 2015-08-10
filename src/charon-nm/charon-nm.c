@@ -160,8 +160,11 @@ int main(int argc, char *argv[])
 	/* logging for library during initialization, as we have no bus yet */
 	dbg = dbg_syslog;
 
+	/* LD causes a crash probably due to Glib */
+	setenv("LEAK_DETECTIVE_DISABLE", "1", 1);
+
 	/* initialize library */
-	if (!library_init(NULL))
+	if (!library_init(NULL, "charon-nm"))
 	{
 		library_deinit();
 		exit(SS_RC_LIBSTRONGSWAN_INTEGRITY);
@@ -175,7 +178,7 @@ int main(int argc, char *argv[])
 		exit(SS_RC_DAEMON_INTEGRITY);
 	}
 
-	if (!libhydra_init("charon-nm"))
+	if (!libhydra_init())
 	{
 		dbg_syslog(DBG_DMN, 1, "initialization failed - aborting charon-nm");
 		libhydra_deinit();
@@ -183,7 +186,7 @@ int main(int argc, char *argv[])
 		exit(SS_RC_INITIALIZATION_FAILED);
 	}
 
-	if (!libcharon_init("charon-nm"))
+	if (!libcharon_init())
 	{
 		dbg_syslog(DBG_DMN, 1, "initialization failed - aborting charon-nm");
 		goto deinit;

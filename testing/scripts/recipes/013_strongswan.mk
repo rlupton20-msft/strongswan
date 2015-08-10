@@ -5,6 +5,15 @@ PKG = strongswan-$(PV)
 TAR = $(PKG).tar.bz2
 SRC = http://download.strongswan.org/$(TAR)
 
+# can be passed to load sources from a directory instead of a tarball
+ifneq ($(origin SRCDIR), undefined)
+DIR = $(SRCDIR)
+BUILDDIR ?= $(SRCDIR)
+endif
+DIR ?= .
+# can be passed if not building in the source directory
+BUILDDIR ?= $(PKG)
+
 NUM_CPUS := $(shell getconf _NPROCESSORS_ONLN)
 
 CONFIG_OPTS = \
@@ -61,6 +70,8 @@ CONFIG_OPTS = \
 	--enable-socket-dynamic \
 	--enable-dhcp \
 	--enable-farp \
+	--enable-connmark \
+	--enable-forecast \
 	--enable-addrblock \
 	--enable-ctr \
 	--enable-ccm \
@@ -76,10 +87,15 @@ CONFIG_OPTS = \
 	--enable-unbound \
 	--enable-ipseckey \
 	--enable-dnscert \
+	--enable-acert \
 	--enable-cmd \
 	--enable-libipsec \
 	--enable-kernel-libipsec \
-	--enable-tkm
+	--enable-tkm \
+	--enable-ntru \
+	--enable-lookip \
+	--enable-swanctl \
+	--enable-bliss
 
 export ADA_PROJECT_PATH=/usr/local/ada/lib/gnat
 
@@ -91,11 +107,11 @@ $(TAR):
 $(PKG): $(TAR)
 	tar xfj $(TAR)
 
-configure: $(PKG)
-	cd $(PKG) && ./configure $(CONFIG_OPTS)
+configure: $(BUILDDIR)
+	cd $(BUILDDIR) && $(DIR)/configure $(CONFIG_OPTS)
 
 build: configure
-	cd $(PKG) && make -j $(NUM_CPUS)
+	cd $(BUILDDIR) && make -j $(NUM_CPUS)
 
 install: build
-	cd $(PKG) && make install
+	cd $(BUILDDIR) && make -j install

@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2010-2013 Tobias Brunner
+ * Copyright (C) 2010-2014 Tobias Brunner
  * Copyright (C) 2007 Martin Willi
  * Hochschule fuer Technik Rapperswil
  *
@@ -21,13 +21,16 @@
 #include <sys/stat.h>
 #include <unistd.h>
 #include <string.h>
+#ifdef HAVE_DLADDR
 #include <dlfcn.h>
+#endif
 #include <limits.h>
 #include <stdio.h>
 
 #include <utils/debug.h>
 #include <library.h>
 #include <collections/hashtable.h>
+#include <collections/array.h>
 #include <collections/linked_list.h>
 #include <plugins/plugin.h>
 #include <utils/integrity_checker.h>
@@ -215,6 +218,16 @@ typedef struct {
 	char *name;
 
 	/**
+	 * Optional reload function for features
+	 */
+	bool (*reload)(void *data);
+
+	/**
+	 * User data to pass to reload function
+	 */
+	void *reload_data;
+
+	/**
 	 * Static plugin features
 	 */
 	plugin_feature_t *features;
@@ -239,6 +252,16 @@ METHOD(plugin_t, get_static_features, int,
 	return this->count;
 }
 
+METHOD(plugin_t, static_reload, bool,
+	static_features_t *this)
+{
+	if (this->reload)
+	{
+		return this->reload(this->reload_data);
+	}
+	return FALSE;
+}
+
 METHOD(plugin_t, static_destroy, void,
 	static_features_t *this)
 {
@@ -251,7 +274,8 @@ METHOD(plugin_t, static_destroy, void,
  * Create a wrapper around static plugin features.
  */
 static plugin_t *static_features_create(const char *name,
-										plugin_feature_t features[], int count)
+										plugin_feature_t features[], int count,
+										bool (*reload)(void*), void *reload_data)
 {
 	static_features_t *this;
 
@@ -259,9 +283,12 @@ static plugin_t *static_features_create(const char *name,
 		.public = {
 			.get_name = _get_static_name,
 			.get_features = _get_static_features,
+			.reload = _static_reload,
 			.destroy = _static_destroy,
 		},
 		.name = strdup(name),
+		.reload = reload,
+		.reload_data = reload_data,
 		.features = calloc(count, sizeof(plugin_feature_t)),
 		.count = count,
 	);
@@ -353,7 +380,15 @@ static plugin_entry_t *load_plugin(private_plugin_loader_t *this, char *name,
 			return NULL;
 		}
 	}
-	handle = dlopen(file, RTLD_NOW|RTLD_GLOBAL);
+	handle = dlopen(file, RTLD_LAZY
+#ifdef RTLD_NODELETE
+	/* if supported, do not unload library when unloading a plugin. It really
+	 * doesn't matter in productive systems, but causes many (dependency)
+	 * library reloads during unit tests. Some libraries can't handle that,
+	 * GnuTLS leaks file descriptors in its library load/unload functions. */
+					| RTLD_NODELETE
+#endif
+					);
 	if (handle == NULL)
 	{
 		DBG1(DBG_LIB, "plugin '%s' failed to load: %s", name, dlerror());
@@ -901,12 +936,13 @@ static void purge_plugins(private_plugin_loader_t *this)
 
 METHOD(plugin_loader_t, add_static_features, void,
 	private_plugin_loader_t *this, const char *name,
-	plugin_feature_t features[], int count, bool critical)
+	plugin_feature_t features[], int count, bool critical,
+	bool (*reload)(void*), void *reload_data)
 {
 	plugin_entry_t *entry;
 	plugin_t *plugin;
 
-	plugin = static_features_create(name, features, count);
+	plugin = static_features_create(name, features, count, reload, reload_data);
 
 	INIT(entry,
 		.plugin = plugin,
@@ -936,18 +972,147 @@ static bool find_plugin(char *path, char *name, char *buf, char **file)
 	return FALSE;
 }
 
+/**
+ * Used to sort plugins by priority
+ */
+typedef struct {
+	/* name of the plugin */
+	char *name;
+	/* the plugins priority */
+	int prio;
+	/* default priority */
+	int def;
+} plugin_priority_t;
+
+static void plugin_priority_free(const plugin_priority_t *this, int idx,
+								 void *user)
+{
+	free(this->name);
+}
+
+/**
+ * Sort plugins and their priority by name
+ */
+static int plugin_priority_cmp_name(const plugin_priority_t *a,
+								    const plugin_priority_t *b)
+{
+	return strcmp(a->name, b->name);
+}
+
+/**
+ * Sort plugins by decreasing priority or default priority then by name
+ */
+static int plugin_priority_cmp(const plugin_priority_t *a,
+							   const plugin_priority_t *b, void *user)
+{
+	int diff;
+
+	diff = b->prio - a->prio;
+	if (!diff)
+	{	/* the same priority, use default order */
+		diff = b->def - a->def;
+		if (!diff)
+		{	/* same default priority (i.e. both were not found in that list) */
+			return strcmp(a->name, b->name);
+		}
+	}
+	return diff;
+}
+
+
+/**
+ * Determine the list of plugins to load via load option in each plugin's
+ * config section.
+ */
+static char *modular_pluginlist(char *list)
+{
+	enumerator_t *enumerator;
+	array_t *given, *final;
+	plugin_priority_t item, *current, found;
+	char *plugin, *plugins = NULL;
+	int i = 0, max_prio;
+
+	if (!lib->settings->get_bool(lib->settings, "%s.load_modular", FALSE,
+								 lib->ns))
+	{
+		return list;
+	}
+
+	given = array_create(sizeof(plugin_priority_t), 0);
+	final = array_create(sizeof(plugin_priority_t), 0);
+
+	enumerator = enumerator_create_token(list, " ", " ");
+	while (enumerator->enumerate(enumerator, &plugin))
+	{
+		item.name = strdup(plugin);
+		item.prio = i++;
+		array_insert(given, ARRAY_TAIL, &item);
+	}
+	enumerator->destroy(enumerator);
+	array_sort(given, (void*)plugin_priority_cmp_name, NULL);
+	/* the maximum priority used for plugins not found in this list */
+	max_prio = i + 1;
+
+	enumerator = lib->settings->create_section_enumerator(lib->settings,
+														"%s.plugins", lib->ns);
+	while (enumerator->enumerate(enumerator, &plugin))
+	{
+		item.prio = lib->settings->get_int(lib->settings,
+								"%s.plugins.%s.load", 0, lib->ns, plugin);
+		if (!item.prio)
+		{
+			if (!lib->settings->get_bool(lib->settings,
+								"%s.plugins.%s.load", FALSE, lib->ns, plugin))
+			{
+				continue;
+			}
+			item.prio = 1;
+		}
+		item.name = plugin;
+		item.def = max_prio;
+		if (array_bsearch(given, &item, (void*)plugin_priority_cmp_name,
+						  &found) != -1)
+		{
+			item.def = max_prio - found.prio;
+		}
+		array_insert(final, ARRAY_TAIL, &item);
+	}
+	enumerator->destroy(enumerator);
+	array_destroy_function(given, (void*)plugin_priority_free, NULL);
+
+	array_sort(final, (void*)plugin_priority_cmp, NULL);
+
+	plugins = strdup("");
+	enumerator = array_create_enumerator(final);
+	while (enumerator->enumerate(enumerator, &current))
+	{
+		char *prev = plugins;
+		if (asprintf(&plugins, "%s %s", plugins ?: "", current->name) < 0)
+		{
+			plugins = prev;
+			break;
+		}
+		free(prev);
+	}
+	enumerator->destroy(enumerator);
+	array_destroy(final);
+	return plugins;
+}
+
 METHOD(plugin_loader_t, load_plugins, bool,
 	private_plugin_loader_t *this, char *list)
 {
 	enumerator_t *enumerator;
-	char *default_path = NULL, *token;
+	char *default_path = NULL, *plugins, *token;
 	bool critical_failed = FALSE;
 
 #ifdef PLUGINDIR
 	default_path = PLUGINDIR;
 #endif /* PLUGINDIR */
 
-	enumerator = enumerator_create_token(list, " ", " ");
+	plugins = modular_pluginlist(list);
+
+	enumerator = enumerator_create_token(plugins, " ", " ");
 	while (!critical_failed && enumerator->enumerate(enumerator, &token))
 	{
 		plugin_entry_t *entry;
@@ -1005,6 +1170,10 @@ METHOD(plugin_loader_t, load_plugins, bool,
 	{
 		free(this->loaded_plugins);
 		this->loaded_plugins = loaded_plugins_list(this);
+	}
+	if (plugins != list)
+	{
+		free(plugins);
 	}
 	return !critical_failed;
 }
@@ -1122,9 +1291,9 @@ METHOD(plugin_loader_t, status, void,
 
 		if (this->stats.failed)
 		{
-			dbg(DBG_LIB, level, "unable to load %d plugin feature%s (%d due to "
-				"unmet dependencies)", this->stats.failed,
-				this->stats.failed == 1 ? "" : "s", this->stats.depends);
+			DBG2(DBG_LIB, "unable to load %d plugin feature%s (%d due to unmet "
+				 "dependencies)", this->stats.failed,
+				 this->stats.failed == 1 ? "" : "s", this->stats.depends);
 		}
 	}
 }
@@ -1169,4 +1338,23 @@ plugin_loader_t *plugin_loader_create()
 	);
 
 	return &this->public;
+}
+
+/*
+ * See header
+ */
+void plugin_loader_add_plugindirs(char *basedir, char *plugins)
+{
+	enumerator_t *enumerator;
+	char *name, path[PATH_MAX], dir[64];
+
+	enumerator = enumerator_create_token(plugins, " ", "");
+	while (enumerator->enumerate(enumerator, &name))
+	{
+		snprintf(dir, sizeof(dir), "%s", name);
+		translate(dir, "-", "_");
+		snprintf(path, sizeof(path), "%s/%s/.libs", basedir, dir);
+		lib->plugins->add_path(lib->plugins, path);
+	}
+	enumerator->destroy(enumerator);
 }

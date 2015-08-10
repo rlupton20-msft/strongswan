@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2012-2013 Tobias Brunner
+ * Copyright (C) 2012-2014 Tobias Brunner
  * Copyright (C) 2007 Martin Willi
  * Hochschule fuer Technik Rapperswil
  *
@@ -44,6 +44,9 @@ struct plugin_loader_t {
 	 * If critical is TRUE load() will fail if any of the added features could
 	 * not be loaded.
 	 *
+	 * If a reload callback function is given, it gets invoked for the
+	 * registered feature set when reload() is invoked on the plugin_loader.
+	 *
 	 * @note The name should be unique otherwise a plugin with the same name is
 	 * not loaded.
 	 *
@@ -51,10 +54,13 @@ struct plugin_loader_t {
 	 * @param features		array of plugin features
 	 * @param count			number of features in the array
 	 * @param critical		TRUE if the features are critical
+	 * @param reload		feature reload callback, or NULL
+	 * @param reload_data	user data to pass to reload callback
 	 */
 	void (*add_static_features) (plugin_loader_t *this, const char *name,
 								 struct plugin_feature_t *features, int count,
-								 bool critical);
+								 bool critical, bool (*reload)(void*),
+								 void *reload_data);
 
 	/**
 	 * Load a list of plugins.
@@ -66,6 +72,13 @@ struct plugin_loader_t {
 	 * Additional paths can be added with add_path(), these will be searched
 	 * for the plugins first, in the order they were added, then the default
 	 * path follows.
+	 *
+	 * If \<ns>.load_modular is enabled (where \<ns> is lib->ns) the plugins to
+	 * load are determined via a load option in their respective plugin config
+	 * section e.g. \<ns>.plugins.\<plugin>.load = <priority|bool>.
+	 * The oder is determined by the configured priority.  If two plugins have
+	 * the same priority the order as seen in list is preserved.  Plugins not
+	 * found in list are loaded first, in alphabetical order.
 	 *
 	 * @note Even though this method could be called multiple times this is
 	 * currently not really supported in regards to plugin features and their
@@ -145,5 +158,14 @@ struct plugin_loader_t {
  * @return			plugin loader instance
  */
 plugin_loader_t *plugin_loader_create();
+
+/**
+ * Convenience function to add plugin directories for the given plugins within
+ * the given base directory according to the conventions in the src/build tree.
+ *
+ * @param basedir	base directory
+ * @param plugins	space separated list of plugins
+ */
+void plugin_loader_add_plugindirs(char *basedir, char *plugins);
 
 #endif /** PLUGIN_LOADER_H_ @}*/

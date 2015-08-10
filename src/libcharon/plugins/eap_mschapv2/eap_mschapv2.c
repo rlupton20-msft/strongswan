@@ -792,12 +792,14 @@ static status_t process_peer_success(private_eap_mschapv2_t *this,
 					 "invalid auth string");
 				goto error;
 			}
+			chunk_free(&auth_string);
 			hex = chunk_create(token, AUTH_RESPONSE_LEN - 2);
 			auth_string = chunk_from_hex(hex, NULL);
 		}
 		else if (strpfx(token, "M="))
 		{
 			token += 2;
+			free(msg);
 			msg = strdup(token);
 		}
 	}
@@ -810,7 +812,7 @@ static status_t process_peer_success(private_eap_mschapv2_t *this,
 		goto error;
 	}
 
-	if (!chunk_equals(this->auth_response, auth_string))
+	if (!chunk_equals_const(this->auth_response, auth_string))
 	{
 		DBG1(DBG_IKE, "EAP-MS-CHAPv2 verification failed");
 		goto error;
@@ -883,6 +885,7 @@ static status_t process_peer_failure(private_eap_mschapv2_t *this,
 					 "invalid challenge");
 				goto error;
 			}
+			chunk_free(&challenge);
 			hex = chunk_create(token, 2 * CHALLENGE_LEN);
 			challenge = chunk_from_hex(hex, NULL);
 		}
@@ -893,6 +896,7 @@ static status_t process_peer_failure(private_eap_mschapv2_t *this,
 		else if (strpfx(token, "M="))
 		{
 			token += 2;
+			free(msg);
 			msg = strdup(token);
 		}
 	}
@@ -1083,8 +1087,8 @@ static status_t process_server_response(private_eap_mschapv2_t *this,
 	userid->destroy(userid);
 	chunk_clear(&nt_hash);
 
-	if (memeq(res->response.nt_response, this->nt_response.ptr,
-			  this->nt_response.len))
+	if (memeq_const(res->response.nt_response, this->nt_response.ptr,
+					this->nt_response.len))
 	{
 		chunk_t hex;
 		char msg[AUTH_RESPONSE_LEN + sizeof(SUCCESS_MESSAGE)];
@@ -1263,4 +1267,3 @@ eap_mschapv2_t *eap_mschapv2_create_peer(identification_t *server, identificatio
 
 	return &this->public;
 }
-

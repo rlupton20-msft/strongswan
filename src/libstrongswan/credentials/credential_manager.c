@@ -698,6 +698,9 @@ static void get_key_strength(certificate_t *cert, auth_cfg_t *auth)
 			case KEY_ECDSA:
 				auth->add(auth, AUTH_RULE_ECDSA_STRENGTH, strength);
 				break;
+			case KEY_BLISS:
+				auth->add(auth, AUTH_RULE_BLISS_STRENGTH, strength);
+				break;
 			default:
 				break;
 		}
@@ -1279,7 +1282,7 @@ METHOD(credential_manager_t, add_validator, void,
 	private_credential_manager_t *this, cert_validator_t *vdtr)
 {
 	this->lock->write_lock(this->lock);
-	this->sets->insert_last(this->validators, vdtr);
+	this->validators->insert_last(this->validators, vdtr);
 	this->lock->unlock(this->lock);
 }
 
@@ -1349,7 +1352,7 @@ credential_manager_t *credential_manager_create()
 
 	this->local_sets = thread_value_create((thread_cleanup_t)this->sets->destroy);
 	this->exclusive_local_sets = thread_value_create((thread_cleanup_t)this->sets->destroy);
-	if (lib->settings->get_bool(lib->settings, "libstrongswan.cert_cache", TRUE))
+	if (lib->settings->get_bool(lib->settings, "%s.cert_cache", TRUE, lib->ns))
 	{
 		this->cache = cert_cache_create();
 		this->sets->insert_first(this->sets, this->cache);

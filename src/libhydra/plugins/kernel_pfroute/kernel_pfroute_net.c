@@ -830,6 +830,15 @@ static void process_link(private_kernel_pfroute_net_t *this,
 					DBG1(DBG_KNL, "interface %s deactivated", iface->ifname);
 				}
 			}
+#ifdef __APPLE__
+			/* There seems to be a race condition on 10.10, where we get
+			 * the RTM_IFINFO, but getifaddrs() does not return the virtual
+			 * IP installed on a tun device, but we also don't get a
+			 * RTM_NEWADDR. We therefore could miss the new address, letting
+			 * virtual IP installation fail. Delaying getifaddrs() helps,
+			 * but is obviously not a clean fix. */
+			usleep(50000);
+#endif
 			iface->flags = msg->ifm_flags;
 			repopulate_iface(this, iface);
 			found = TRUE;
@@ -875,6 +884,41 @@ static void process_link(private_kernel_pfroute_net_t *this,
 	}
 }
 
+#ifdef HAVE_RTM_IFANNOUNCE
+
+/**
+ * Process an RTM_IFANNOUNCE message from the kernel
+ */
+static void process_announce(private_kernel_pfroute_net_t *this,
+							 struct if_announcemsghdr *msg)
+{
+	enumerator_t *enumerator;
+	iface_entry_t *iface;
+
+	if (msg->ifan_what != IFAN_DEPARTURE)
+	{
+		/* we handle new interfaces in process_link() */
+		return;
+	}
+
+	this->lock->write_lock(this->lock);
+	enumerator = this->ifaces->create_enumerator(this->ifaces);
+	while (enumerator->enumerate(enumerator, &iface))
+	{
+		if (iface->ifindex == msg->ifan_index)
+		{
+			DBG1(DBG_KNL, "interface %s disappeared", iface->ifname);
+			this->ifaces->remove_at(this->ifaces, enumerator);
+			iface_entry_destroy(iface);
+			break;
+		}
+	}
+	enumerator->destroy(enumerator);
+	this->lock->unlock(this->lock);
+}
+
+#endif /* HAVE_RTM_IFANNOUNCE */
+
 /**
  * Process an RTM_*ROUTE message from the kernel
  */
@@ -895,6 +939,9 @@ static bool receive_events(private_kernel_pfroute_net_t *this, int fd,
 			struct rt_msghdr rtm;
 			struct if_msghdr ifm;
 			struct ifa_msghdr ifam;
+#ifdef HAVE_RTM_IFANNOUNCE
+			struct if_announcemsghdr ifanm;
+#endif
 		};
 		char buf[sizeof(struct sockaddr_storage) * RTAX_MAX];
 	} msg;
@@ -935,6 +982,11 @@ static bool receive_events(private_kernel_pfroute_net_t *this, int fd,
 		case RTM_IFINFO:
 			hdrlen = sizeof(msg.ifm);
 			break;
+#ifdef HAVE_RTM_IFANNOUNCE
+		case RTM_IFANNOUNCE:
+			hdrlen = sizeof(msg.ifanm);
+			break;
+#endif /* HAVE_RTM_IFANNOUNCE */
 		case RTM_ADD:
 		case RTM_DELETE:
 		case RTM_GET:
@@ -957,6 +1009,11 @@ static bool receive_events(private_kernel_pfroute_net_t *this, int fd,
 		case RTM_IFINFO:
 			process_link(this, &msg.ifm);
 			break;
+#ifdef HAVE_RTM_IFANNOUNCE
+		case RTM_IFANNOUNCE:
+			process_announce(this, &msg.ifanm);
+			break;
+#endif /* HAVE_RTM_IFANNOUNCE */
 		case RTM_ADD:
 		case RTM_DELETE:
 			process_route(this, &msg.rtm);
@@ -1420,9 +1477,12 @@ METHOD(kernel_net_t, add_route, status_t,
 		this->routes_lock->unlock(this->routes_lock);
 		return ALREADY_DONE;
 	}
-	found = route_entry_clone(&route);
-	this->routes->put(this->routes, found, found);
 	status = manage_route(this, RTM_ADD, dst_net, prefixlen, gateway, if_name);
+	if (status == SUCCESS)
+	{
+		found = route_entry_clone(&route);
+		this->routes->put(this->routes, found, found);
+	}
 	this->routes_lock->unlock(this->routes_lock);
 	return status;
 }
@@ -1515,8 +1575,7 @@ retry:
 			{	/* timed out? */
 				break;
 			}
-			if (this->reply->rtm_msglen < sizeof(*this->reply) ||
-				msg.hdr.rtm_seq != this->reply->rtm_seq)
+			if (!this->reply)
 			{
 				continue;
 			}
@@ -1556,6 +1615,8 @@ retry:
 	{
 		failed = TRUE;
 	}
+	free(this->reply);
+	this->reply = NULL;
 	/* signal completion of query to a waiting thread */
 	this->waiting_seq = 0;
 	this->condvar->signal(this->condvar);
@@ -1573,16 +1634,20 @@ retry:
 		}
 		DBG1(DBG_KNL, "PF_ROUTE lookup failed: %s", strerror(errno));
 	}
-	if (!host)
+	if (nexthop)
 	{
-		return NULL;
+		host = host ?: dest->clone(dest);
 	}
-	if (!nexthop)
+	else
 	{	/* make sure the source address is not virtual and usable */
 		addr_entry_t *entry, lookup = {
 			.ip = host,
 		};
 
+		if (!host)
+		{
+			return NULL;
+		}
 		this->lock->read_lock(this->lock);
 		entry = this->addrs->get_match(this->addrs, &lookup,
 									(void*)addr_map_entry_match_up_and_usable);
@@ -1605,7 +1670,7 @@ METHOD(kernel_net_t, get_source_addr, host_t*,
 }
 
 METHOD(kernel_net_t, get_nexthop, host_t*,
-	private_kernel_pfroute_net_t *this, host_t *dest, host_t *src)
+	private_kernel_pfroute_net_t *this, host_t *dest, int prefix, host_t *src)
 {
 	return get_route(this, TRUE, dest, src);
 }
@@ -1782,7 +1847,7 @@ kernel_pfroute_net_t *kernel_pfroute_net_create()
 		.net_changes_lock = mutex_create(MUTEX_TYPE_DEFAULT),
 		.roam_lock = spinlock_create(),
 		.vip_wait = lib->settings->get_int(lib->settings,
-					"%s.plugins.kernel-pfroute.vip_wait", 1000, hydra->daemon),
+						"%s.plugins.kernel-pfroute.vip_wait", 1000, lib->ns),
 	);
 	timerclear(&this->last_route_reinstall);
 	timerclear(&this->next_roam);
@@ -1796,7 +1861,7 @@ kernel_pfroute_net_t *kernel_pfroute_net_create()
 		return NULL;
 	}
 
-	if (streq(hydra->daemon, "starter"))
+	if (streq(lib->ns, "starter"))
 	{
 		/* starter has no threads, so we do not register for kernel events */
 		if (shutdown(this->socket, SHUT_RD) != 0)

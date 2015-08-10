@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2012 Tobias Brunner
+ * Copyright (C) 2012-2015 Tobias Brunner
  * Copyright (C) 2006-2009 Martin Willi
  * Hochschule fuer Technik Rapperswil
  *
@@ -101,9 +101,11 @@ enum alert_t {
 	/** received IKE message with invalid body, argument is message_t*,
 	 *  followed by a status_t result returned by message_t.parse_body(). */
 	ALERT_PARSE_ERROR_BODY,
-	/** sending a retransmit for a message, argument is packet_t */
+	/** sending a retransmit for a message, argument is packet_t, if the message
+	 *  got fragmented only the first fragment is passed */
 	ALERT_RETRANSMIT_SEND,
-	/** sending retransmits timed out, argument is packet_t, if available */
+	/** sending retransmits timed out, argument is packet_t, if available and if
+	 *  the message got fragmented only the first fragment is passed */
 	ALERT_RETRANSMIT_SEND_TIMEOUT,
 	/** received a retransmit for a message, argument is message_t */
 	ALERT_RETRANSMIT_RECEIVE,
@@ -128,7 +130,8 @@ enum alert_t {
 	ALERT_UNIQUE_REPLACE,
 	/** IKE_SA deleted because of "keep" unique policy, no argument */
 	ALERT_UNIQUE_KEEP,
-	/** IKE_SA kept on failed child SA establishment, no argument */
+	/** IKE_SA kept on failed child SA establishment, argument is an int (!=0 if
+	 * first child SA) */
 	ALERT_KEEP_ON_CHILD_SA_FAILURE,
 	/** allocating virtual IP failed, linked_list_t of host_t requested */
 	ALERT_VIP_FAILURE,
@@ -380,12 +383,32 @@ struct bus_t {
 	void (*ike_rekey)(bus_t *this, ike_sa_t *old, ike_sa_t *new);
 
 	/**
-	 * IKE_SA reestablishing hook.
+	 * IKE_SA peer endpoint update hook.
+	 *
+	 * @param ike_sa	updated IKE_SA, having old endpoints set
+	 * @param local		TRUE if local endpoint gets updated, FALSE for remote
+	 * @param new		new endpoint address and port
+	 */
+	void (*ike_update)(bus_t *this, ike_sa_t *ike_sa, bool local, host_t *new);
+
+	/**
+	 * IKE_SA reestablishing hook (before resolving hosts).
 	 *
 	 * @param old		reestablished and obsolete IKE_SA
 	 * @param new		new IKE_SA replacing old
 	 */
-	void (*ike_reestablish)(bus_t *this, ike_sa_t *old, ike_sa_t *new);
+	void (*ike_reestablish_pre)(bus_t *this, ike_sa_t *old, ike_sa_t *new);
+
+	/**
+	 * IKE_SA reestablishing hook (after configuring and initiating the new
+	 * IKE_SA).
+	 *
+	 * @param old		reestablished and obsolete IKE_SA
+	 * @param new		new IKE_SA replacing old
+	 * @param initiated	TRUE if initiated successfully, FALSE otherwise
+	 */
+	void (*ike_reestablish_post)(bus_t *this, ike_sa_t *old, ike_sa_t *new,
+								 bool initiated);
 
 	/**
 	 * CHILD_SA up/down hook.
@@ -404,12 +427,28 @@ struct bus_t {
 	void (*child_rekey)(bus_t *this, child_sa_t *old, child_sa_t *new);
 
 	/**
+	 * CHILD_SA migration hook.
+	 *
+	 * @param new		ID of new SA when called for the old, NULL otherwise
+	 * @param uniue		unique ID of new SA when called for the old, 0 otherwise
+	 */
+	void (*children_migrate)(bus_t *this, ike_sa_id_t *new, u_int32_t unique);
+
+	/**
 	 * Virtual IP assignment hook.
 	 *
 	 * @param ike_sa	IKE_SA the VIPs are assigned to
 	 * @param assign	TRUE if assigned to IKE_SA, FALSE if released
 	 */
 	void (*assign_vips)(bus_t *this, ike_sa_t *ike_sa, bool assign);
+
+	/**
+	 * Virtual IP handler hook.
+	 *
+	 * @param ike_sa	IKE_SA the VIPs/attributes got handled on
+	 * @param assign	TRUE after installing attributes, FALSE on release
+	 */
+	void (*handle_vips)(bus_t *this, ike_sa_t *ike_sa, bool handle);
 
 	/**
 	 * Destroy the event bus.

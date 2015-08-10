@@ -40,7 +40,7 @@ struct private_openssl_ec_diffie_hellman_t {
 	/**
 	 * Diffie Hellman group number.
 	 */
-	u_int16_t group;
+	diffie_hellman_group_t group;
 
 	/**
 	 * EC private (public) key
@@ -98,6 +98,11 @@ static bool chunk2ecp(const EC_GROUP *group, chunk_t chunk, EC_POINT *point)
 	}
 
 	if (!EC_POINT_set_affine_coordinates_GFp(group, point, x, y, ctx))
+	{
+		goto error;
+	}
+
+	if (!EC_POINT_is_on_curve(group, point, ctx))
 	{
 		goto error;
 	}
@@ -196,7 +201,7 @@ static bool compute_shared_key(private_openssl_ec_diffie_hellman_t *this,
 	 * http://www.rfc-editor.org/errata_search.php?eid=9
 	 */
 	x_coordinate_only = lib->settings->get_bool(lib->settings,
-							"libstrongswan.ecp_x_coordinate_only", TRUE);
+									"%s.ecp_x_coordinate_only", TRUE, lib->ns);
 	if (!ecp2chunk(this->ec_group, secret, shared_secret, x_coordinate_only))
 	{
 		goto error;
@@ -211,40 +216,90 @@ error:
 	return ret;
 }
 
-METHOD(diffie_hellman_t, set_other_public_value, void,
+METHOD(diffie_hellman_t, set_other_public_value, bool,
 	private_openssl_ec_diffie_hellman_t *this, chunk_t value)
 {
+	if (!diffie_hellman_verify_value(this->group, value))
+	{
+		return FALSE;
+	}
+
 	if (!chunk2ecp(this->ec_group, value, this->pub_key))
 	{
 		DBG1(DBG_LIB, "ECDH public value is malformed");
-		return;
+		return FALSE;
 	}
 
 	chunk_clear(&this->shared_secret);
 
 	if (!compute_shared_key(this, &this->shared_secret)) {
 		DBG1(DBG_LIB, "ECDH shared secret computation failed");
-		return;
+		return FALSE;
 	}
 
 	this->computed = TRUE;
+	return TRUE;
 }
 
-METHOD(diffie_hellman_t, get_my_public_value, void,
+METHOD(diffie_hellman_t, get_my_public_value, bool,
 	private_openssl_ec_diffie_hellman_t *this,chunk_t *value)
 {
 	ecp2chunk(this->ec_group, EC_KEY_get0_public_key(this->key), value, FALSE);
+	return TRUE;
 }
 
-METHOD(diffie_hellman_t, get_shared_secret, status_t,
+METHOD(diffie_hellman_t, set_private_value, bool,
+	private_openssl_ec_diffie_hellman_t *this, chunk_t value)
+{
+	EC_POINT *pub = NULL;
+	BIGNUM *priv = NULL;
+	bool ret = FALSE;
+
+	priv = BN_bin2bn(value.ptr, value.len, NULL);
+	if (!priv)
+	{
+		goto error;
+	}
+	pub = EC_POINT_new(EC_KEY_get0_group(this->key));
+	if (!pub)
+	{
+		goto error;
+	}
+	if (EC_POINT_mul(this->ec_group, pub, priv, NULL, NULL, NULL) != 1)
+	{
+		goto error;
+	}
+	if (EC_KEY_set_private_key(this->key, priv) != 1)
+	{
+		goto error;
+	}
+	if (EC_KEY_set_public_key(this->key, pub) != 1)
+	{
+		goto error;
+	}
+	ret = TRUE;
+
+error:
+	if (pub)
+	{
+		EC_POINT_free(pub);
+	}
+	if (priv)
+	{
+		BN_free(priv);
+	}
+	return ret;
+}
+
+METHOD(diffie_hellman_t, get_shared_secret, bool,
 	private_openssl_ec_diffie_hellman_t *this, chunk_t *secret)
 {
 	if (!this->computed)
 	{
-		return FAILED;
+		return FALSE;
 	}
 	*secret = chunk_clone(this->shared_secret);
-	return SUCCESS;
+	return TRUE;
 }
 
 METHOD(diffie_hellman_t, get_dh_group, diffie_hellman_group_t,
@@ -546,6 +601,7 @@ openssl_ec_diffie_hellman_t *openssl_ec_diffie_hellman_create(diffie_hellman_gro
 				.get_shared_secret = _get_shared_secret,
 				.set_other_public_value = _set_other_public_value,
 				.get_my_public_value = _get_my_public_value,
+				.set_private_value = _set_private_value,
 				.get_dh_group = _get_dh_group,
 				.destroy = _destroy,
 			},
