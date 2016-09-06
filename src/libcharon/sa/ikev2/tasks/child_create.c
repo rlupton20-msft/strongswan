@@ -18,7 +18,6 @@
 #include "child_create.h"
 
 #include <daemon.h>
-#include <hydra.h>
 #include <sa/ikev2/keymat_v2.h>
 #include <crypto/diffie_hellman.h>
 #include <credentials/certificates/x509.h>
@@ -145,6 +144,11 @@ struct private_child_create_t {
 	ipcomp_transform_t ipcomp_received;
 
 	/**
+	 * IPsec protocol
+	 */
+	protocol_id_t proto;
+
+	/**
 	 * Own allocated SPI
 	 */
 	u_int32_t my_spi;
@@ -260,23 +264,23 @@ static bool allocate_spi(private_child_create_t *this)
 {
 	enumerator_t *enumerator;
 	proposal_t *proposal;
-	protocol_id_t proto = PROTO_ESP;
 
 	if (this->initiator)
 	{
+		this->proto = PROTO_ESP;
 		/* we just get a SPI for the first protocol. TODO: If we ever support
 		 * proposal lists with mixed protocols, we'd need multiple SPIs */
 		if (this->proposals->get_first(this->proposals,
 									   (void**)&proposal) == SUCCESS)
 		{
-			proto = proposal->get_protocol(proposal);
+			this->proto = proposal->get_protocol(proposal);
 		}
 	}
 	else
 	{
-		proto = this->proposal->get_protocol(this->proposal);
+		this->proto = this->proposal->get_protocol(this->proposal);
 	}
-	this->my_spi = this->child_sa->alloc_spi(this->child_sa, proto);
+	this->my_spi = this->child_sa->alloc_spi(this->child_sa, this->proto);
 	if (this->my_spi)
 	{
 		if (this->initiator)
@@ -707,7 +711,7 @@ static status_t select_and_install(private_child_create_t *this,
 				this->child_sa->create_ts_enumerator(this->child_sa, FALSE));
 
 	DBG0(DBG_IKE, "CHILD_SA %s{%d} established "
-		 "with SPIs %.8x_i %.8x_o and TS %#R=== %#R",
+		 "with SPIs %.8x_i %.8x_o and TS %#R === %#R",
 		 this->child_sa->get_name(this->child_sa),
 		 this->child_sa->get_unique_id(this->child_sa),
 		 ntohl(this->child_sa->get_spi(this->child_sa, TRUE)),
@@ -781,7 +785,7 @@ static bool build_payloads(private_child_create_t *this, message_t *message)
 			break;
 	}
 
-	features = hydra->kernel_interface->get_features(hydra->kernel_interface);
+	features = charon->kernel->get_features(charon->kernel);
 	if (!(features & KERNEL_ESP_V3_TFC))
 	{
 		message->add_notify(message, FALSE, ESP_TFC_PADDING_NOT_SUPPORTED,
@@ -1216,6 +1220,10 @@ METHOD(task_t, build_r, status_t,
 			{	/* wait until all authentication round completed */
 				return NEED_MORE;
 			}
+			if (this->ike_sa->has_condition(this->ike_sa, COND_REDIRECTED))
+			{	/* no CHILD_SA is created for redirected SAs */
+				return SUCCESS;
+			}
 			ike_auth = TRUE;
 		default:
 			break;
@@ -1240,7 +1248,7 @@ METHOD(task_t, build_r, status_t,
 	}
 	if (this->config == NULL)
 	{
-		DBG1(DBG_IKE, "traffic selectors %#R=== %#R inacceptable",
+		DBG1(DBG_IKE, "traffic selectors %#R === %#R inacceptable",
 			 this->tsr, this->tsi);
 		charon->bus->alert(charon->bus, ALERT_TS_MISMATCH, this->tsi, this->tsr);
 		message->add_notify(message, FALSE, TS_UNACCEPTABLE, chunk_empty);
@@ -1352,20 +1360,16 @@ METHOD(task_t, build_i_delete, status_t,
 	private_child_create_t *this, message_t *message)
 {
 	message->set_exchange_type(message, INFORMATIONAL);
-	if (this->child_sa && this->proposal)
+	if (this->my_spi && this->proto)
 	{
-		protocol_id_t proto;
 		delete_payload_t *del;
-		u_int32_t spi;
 
-		proto = this->proposal->get_protocol(this->proposal);
-		spi = this->child_sa->get_spi(this->child_sa, TRUE);
-		del = delete_payload_create(PLV2_DELETE, proto);
-		del->add_spi(del, spi);
+		del = delete_payload_create(PLV2_DELETE, this->proto);
+		del->add_spi(del, this->my_spi);
 		message->add_payload(message, (payload_t*)del);
 
 		DBG1(DBG_IKE, "sending DELETE for %N CHILD_SA with SPI %.8x",
-			 protocol_id_names, proto, ntohl(spi));
+			 protocol_id_names, this->proto, ntohl(this->my_spi));
 	}
 	return NEED_MORE;
 }
@@ -1375,9 +1379,13 @@ METHOD(task_t, build_i_delete, status_t,
  */
 static status_t delete_failed_sa(private_child_create_t *this)
 {
-	this->public.task.build = _build_i_delete;
-	this->public.task.process = (void*)return_success;
-	return NEED_MORE;
+	if (this->my_spi && this->proto)
+	{
+		this->public.task.build = _build_i_delete;
+		this->public.task.process = (void*)return_success;
+		return NEED_MORE;
+	}
+	return SUCCESS;
 }
 
 METHOD(task_t, process_i, status_t,
@@ -1596,6 +1604,7 @@ METHOD(task_t, migrate, void,
 	this->tsi = NULL;
 	this->tsr = NULL;
 	this->dh = NULL;
+	this->nonceg = NULL;
 	this->child_sa = NULL;
 	this->mode = MODE_TUNNEL;
 	this->ipcomp = IPCOMP_NONE;

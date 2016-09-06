@@ -70,11 +70,12 @@ static bool verify_bliss(private_bliss_public_key_t *this, hash_algorithm_t alg,
 	uint8_t data_hash_buf[HASH_SIZE_SHA512];
 	chunk_t data_hash;
 	hasher_t *hasher;
+	hash_algorithm_t oracle_alg;
 	bliss_fft_t *fft;
 	bliss_signature_t *sig;
 	bool success = FALSE;
 
-	/* Create data hash */
+	/* Create data hash using configurable hash algorithm */
 	hasher = lib->crypto->create_hasher(lib->crypto, alg);
 	if (!hasher )
 	{
@@ -89,27 +90,21 @@ static bool verify_bliss(private_bliss_public_key_t *this, hash_algorithm_t alg,
 	}
 	hasher->destroy(hasher);
 
-	/* Create SHA512 hasher for c_indices oracle */
-	hasher = lib->crypto->create_hasher(lib->crypto, HASH_SHA512);
-	if (!hasher)
-	{
-		return FALSE;
-	}
-
 	sig = bliss_signature_create_from_data(this->set, signature);
 	if (!sig)
 	{
-		hasher->destroy(hasher);
 		return FALSE;
 	}
 	sig->get_parameters(sig, &z1, &z2d, &c_indices);
 
 	if (!bliss_utils_check_norms(this->set, z1, z2d))
 	{
-		hasher->destroy(hasher);
 		sig->destroy(sig);
 		return FALSE;
 	}
+
+	/* MGF1 hash algorithm to be used for random oracle */
+	oracle_alg = HASH_SHA512;
 
 	/* Initialize a couple of needed variables */
 	n  = this->set->n;
@@ -165,8 +160,7 @@ static bool verify_bliss(private_bliss_public_key_t *this, hash_algorithm_t alg,
 		DBG3(DBG_LIB, "%3d  %6d   %4d  %4d", i, u[i], ud[i], z2d[i]);
 	}
 
-	if (!bliss_utils_generate_c(hasher, data_hash, ud, n, this->set->kappa,
-								indices))
+	if (!bliss_utils_generate_c(oracle_alg, data_hash, ud, this->set, indices))
 	{
 		goto end;
 	}
@@ -183,7 +177,6 @@ static bool verify_bliss(private_bliss_public_key_t *this, hash_algorithm_t alg,
 
 end:
 	/* cleanup */
-	hasher->destroy(hasher);
 	sig->destroy(sig);
 	fft->destroy(fft);
 	free(az);
@@ -200,12 +193,18 @@ METHOD(public_key_t, verify, bool,
 {
 	switch (scheme)
 	{
-		case SIGN_BLISS_WITH_SHA256:
+		case SIGN_BLISS_WITH_SHA2_256:
 			return verify_bliss(this, HASH_SHA256, data, signature);
-		case SIGN_BLISS_WITH_SHA384:
+		case SIGN_BLISS_WITH_SHA2_384:
 			return verify_bliss(this, HASH_SHA384, data, signature);
-		case SIGN_BLISS_WITH_SHA512:
+		case SIGN_BLISS_WITH_SHA2_512:
 			return verify_bliss(this, HASH_SHA512, data, signature);
+		case SIGN_BLISS_WITH_SHA3_256:
+			return verify_bliss(this, HASH_SHA3_256, data, signature);
+		case SIGN_BLISS_WITH_SHA3_384:
+			return verify_bliss(this, HASH_SHA3_384, data, signature);
+		case SIGN_BLISS_WITH_SHA3_512:
+			return verify_bliss(this, HASH_SHA3_512, data, signature);
 		default:
 			DBG1(DBG_LIB, "signature scheme %N not supported by BLISS",
 				 signature_scheme_names, scheme);

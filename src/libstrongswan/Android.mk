@@ -15,12 +15,14 @@ crypto/rngs/rng.c crypto/prf_plus.c crypto/signers/signer.c \
 crypto/signers/mac_signer.c crypto/crypto_factory.c crypto/crypto_tester.c \
 crypto/diffie_hellman.c crypto/aead.c crypto/transform.c \
 crypto/iv/iv_gen.c crypto/iv/iv_gen_rand.c crypto/iv/iv_gen_seq.c \
+crypto/iv/iv_gen_null.c \
 crypto/mgf1/mgf1.c crypto/mgf1/mgf1_bitspender.c \
 credentials/credential_factory.c credentials/builder.c \
 credentials/cred_encoding.c credentials/keys/private_key.c \
 credentials/keys/public_key.c credentials/keys/shared_key.c \
 credentials/certificates/certificate.c credentials/certificates/crl.c \
-credentials/certificates/ocsp_response.c \
+credentials/certificates/ocsp_response.c credentials/certificates/x509.c \
+credentials/certificates/certificate_printer.c \
 credentials/containers/container.c credentials/containers/pkcs12.c \
 credentials/credential_manager.c \
 credentials/sets/auth_cfg_wrapper.c credentials/sets/ocsp_response_wrapper.c \
@@ -116,8 +118,7 @@ LOCAL_SRC_FILES += $(call add_plugin, xcbc)
 
 # build libstrongswan ----------------------------------------------------------
 
-LOCAL_CFLAGS := $(strongswan_CFLAGS) \
-	-include $(LOCAL_PATH)/AndroidConfigLocal.h
+LOCAL_CFLAGS := $(strongswan_CFLAGS)
 
 LOCAL_MODULE := libstrongswan
 

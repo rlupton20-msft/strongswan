@@ -97,9 +97,21 @@ Strictly require at least one test vector to enable an algorithm.
 Whether to test RNG with TRUE quality; requires a lot of entropy.
 
 .TP
+.BR charon.delete_rekeyed " [no]"
+Delete CHILD_SAs right after they got successfully rekeyed (IKEv1 only). Reduces
+the number of stale CHILD_SAs in scenarios with a lot of rekeyings. However,
+this might cause problems with implementations that continue to use rekeyed SAs
+until they expire.
+
+.TP
 .BR charon.dh_exponent_ansi_x9_42 " [yes]"
 Use ANSI X9.42 DH exponent size or optimum size matched to cryptographic
 strength.
+
+.TP
+.BR charon.dlopen_use_rtld_now " [no]"
+Use RTLD_NOW with dlopen when loading plugins and IMV/IMCs to reveal missing
+symbols immediately.
 
 .TP
 .BR charon.dns1 " []"
@@ -152,6 +164,13 @@ Prefix each log entry with the connection name and a unique numerical identifier
 for each IKE_SA.
 
 .TP
+.BR charon.filelog.<filename>.time_add_ms " [no]"
+Adds the milliseconds within the current second after the timestamp (separated
+by a dot, so
+.RI "" "time_format" ""
+should end with %S or %T).
+
+.TP
 .BR charon.filelog.<filename>.time_format " []"
 Prefix each log entry with a timestamp. The option accepts a format string as
 passed to
@@ -163,6 +182,10 @@ passed to
 If enabled objects used during authentication (certificates, identities etc.)
 are released to free memory once an IKE_SA is established. Enabling this might
 conflict with plugins that later need access to e.g. the used certificates.
+
+.TP
+.BR charon.follow_redirects " [yes]"
+Whether to follow IKEv2 redirects (RFC 5685).
 
 .TP
 .BR charon.fragment_size " [0]"
@@ -238,6 +261,10 @@ Whether IMVs send a standard IETF Assessment Result attribute.
 .BR charon.imcv.database " []"
 Global IMV policy database URI. If it contains a password, make sure to adjust
 the permissions of the config file accordingly.
+
+.TP
+.BR charon.imcv.os_info.default_password_enabled " [no]"
+Manually set whether a default password is enabled
 
 .TP
 .BR charon.imcv.os_info.name " []"
@@ -338,6 +365,11 @@ during reauthentication by first recreating all new SAs before deleting the old
 ones. This behavior can be beneficial to avoid connectivity gaps during
 reauthentication, but requires support for overlapping SAs by the peer.
 strongSwan can handle such overlapping SAs since version 5.3.0.
+
+.TP
+.BR charon.max_ikev1_exchanges " [3]"
+Maximum number of IKEv1 phase 2 exchanges per IKE_SA to keep state about and
+track concurrently.
 
 .TP
 .BR charon.max_packet " [10000]"
@@ -536,12 +568,13 @@ Close the IKE_SA if there is a timeout during interim RADIUS accounting updates.
 
 .TP
 .BR charon.plugins.eap-radius.accounting_interval " [0]"
-Interval for interim RADIUS accounting updates, if not specified by the RADIUS
-server in the Access\-Accept message.
+Interval in seconds for interim RADIUS accounting updates, if not specified by
+the RADIUS server in the Access\-Accept message.
 
 .TP
 .BR charon.plugins.eap-radius.accounting_requires_vip " [no]"
 If enabled, accounting is disabled unless an IKE_SA has at least one virtual IP.
+Only for IKEv2, for IKEv1 a virtual IP is strictly necessary.
 
 .TP
 .BR charon.plugins.eap-radius.class_group " [no]"
@@ -623,6 +656,18 @@ NAS\-Identifier to include in RADIUS messages.
 Port of RADIUS server (authentication).
 
 .TP
+.BR charon.plugins.eap-radius.retransmit_base " [1.4]"
+Base to use for calculating exponential back off.
+
+.TP
+.BR charon.plugins.eap-radius.retransmit_timeout " [2.0]"
+Timeout in seconds before sending first retransmit.
+
+.TP
+.BR charon.plugins.eap-radius.retransmit_tries " [4]"
+Number of times to retransmit a packet before giving up.
+
+.TP
 .BR charon.plugins.eap-radius.secret " []"
 Shared secret between RADIUS and NAS. If set, make sure to adjust the
 permissions of the config file accordingly.
@@ -651,7 +696,13 @@ The
 [1813] option can be used to specify the port used for RADIUS
 accounting. For each RADIUS server a priority can be specified using the
 .RB "" "preference" ""
-[0] option.
+[0] option. The retransmission time for each server can set set
+using
+.RB "" "retransmit_base" ","
+.RB "" "retransmit_timeout" ""
+and
+.RB "" "retransmit_tries" "."
+
 
 .TP
 .BR charon.plugins.eap-radius.sockets " [1]"
@@ -853,7 +904,7 @@ plugins can be used
 to circumvent that problem.
 
 .TP
-.BR charon.plugins.kernel-netlink.buflen " [4096]"
+.BR charon.plugins.kernel-netlink.buflen " [<min(PAGE_SIZE, 8192)>]"
 Buffer size for received Netlink messages.
 
 .TP
@@ -1147,6 +1198,21 @@ ENGINE ID to use in the OpenSSL plugin.
 Set OpenSSL FIPS mode: disabled(0), enabled(1), Suite B enabled(2).
 
 .TP
+.BR charon.plugins.osx-attr.append " [yes]"
+Whether DNS servers are appended to existing entries, instead of replacing them.
+
+.TP
+.B charon.plugins.p-cscf.enable
+.br
+Section to enable requesting P\-CSCF server addresses for individual connections.
+
+.TP
+.BR charon.plugins.p-cscf.enable.<conn> " [no]"
+<conn> is the name of a connection with an ePDG from which to request P\-CSCF
+server addresses.  Requests will be sent for addresses of the same families for
+which internal IPs are requested.
+
+.TP
 .BR charon.plugins.pkcs11.load_certs " [yes]"
 Whether to load certificates from tokens.
 
@@ -1244,6 +1310,17 @@ adjust the permissions of the config file accordingly.
 .TP
 .BR charon.plugins.sql.loglevel " [-1]"
 Loglevel for logging to SQL database.
+
+.TP
+.BR charon.plugins.stroke.allow_swap " [yes]"
+Analyze addresses/hostnames in
+.RI "" "left|right" ""
+to detect which side is local and
+swap configuration options if necessary. If disabled
+.RI "" "left" ""
+is always
+.RI "" "local" "."
+
 
 .TP
 .BR charon.plugins.stroke.ignore_missing_ca_basic_constraint " [no]"
@@ -1512,12 +1589,12 @@ Number of times to retransmit a packet before giving up.
 
 .TP
 .BR charon.retry_initiate_interval " [0]"
-Interval to use when retrying to initiate an IKE_SA (e.g. if DNS resolution
-failed), 0 to disable retries.
+Interval in seconds to use when retrying to initiate an IKE_SA (e.g. if DNS
+resolution failed), 0 to disable retries.
 
 .TP
 .BR charon.reuse_ikesa " [yes]"
-Initiate CHILD_SA within existing IKE_SAs.
+Initiate CHILD_SA within existing IKE_SAs (always enabled for IKEv1).
 
 .TP
 .BR charon.routing_table " []"
@@ -1747,6 +1824,105 @@ Whether to send pcr_before and pcr_after info.
 Use Quote2 AIK signature instead of Quote signature.
 
 .TP
+.BR libimcv.plugins.imc-hcd.push_info " [yes]"
+Send quadruple info without being prompted.
+
+.TP
+.BR libimcv.plugins.imc-hcd.subtypes " []"
+Section to define PWG HCD PA subtypes.
+
+.TP
+.BR libimcv.plugins.imc-hcd.subtypes.<section> " []"
+Defines a PWG HCD PA subtype section. Recognized subtype section names are
+.RI "" "system" ","
+.RI "" "control" ","
+.RI "" "marker" ","
+.RI "" "finisher" ","
+.RI "" "interface" ""
+and
+.RI "" "scanner" "."
+
+
+.TP
+.BR libimcv.plugins.imc-hcd.subtypes.<section>.<sw_type> " []"
+Defines a software type section. Recognized software type section names are
+.RI "" "firmware" ","
+.RI "" "resident_application" ""
+and
+.RI "" "user_application" "."
+
+
+.TP
+.BR libimcv.plugins.imc-hcd.subtypes.<section>.<sw_type>.<software> " []"
+Defines a software section having an arbitrary name.
+
+.TP
+.BR libimcv.plugins.imc-hcd.subtypes.<section>.<sw_type>.<software>.name " []"
+Name of the software installed on the hardcopy device.
+
+.TP
+.BR libimcv.plugins.imc-hcd.subtypes.<section>.<sw_type>.<software>.patches " []"
+String describing all patches applied to the given software on this hardcopy
+device. The individual patches are separated by a newline character '\\n'.
+
+.TP
+.BR libimcv.plugins.imc-hcd.subtypes.<section>.<sw_type>.<software>.string_version " []"
+String describing the version of the given software on this hardcopy device.
+
+.TP
+.BR libimcv.plugins.imc-hcd.subtypes.<section>.<sw_type>.<software>.version " []"
+Hex\-encoded version string with a length of 16 octets consisting of the fields
+major version number (4 octets), minor version number (4 octets), build number
+(4 octets), service pack major number (2 octets) and service pack minor number
+(2 octets).
+
+.TP
+.BR libimcv.plugins.imc-hcd.subtypes.<section>.attributes_natural_language " [en]"
+Variable length natural language tag conforming to RFC 5646 specifies the
+language to be used in the health assessment message of a given subtype.
+
+.TP
+.BR libimcv.plugins.imc-hcd.subtypes.system.certification_state " []"
+Hex\-encoded certification state.
+
+.TP
+.BR libimcv.plugins.imc-hcd.subtypes.system.configuration_state " []"
+Hex\-encoded configuration state.
+
+.TP
+.BR libimcv.plugins.imc-hcd.subtypes.system.machine_type_model " []"
+String specifying the machine type and model of the hardcopy device.
+
+.TP
+.BR libimcv.plugins.imc-hcd.subtypes.system.pstn_fax_enabled " [no]"
+Specifies if a PSTN facsimile interface is installed and enabled on the hardcopy
+device.
+
+.TP
+.BR libimcv.plugins.imc-hcd.subtypes.system.time_source " []"
+String specifying the hostname of the network time server used by the hardcopy
+device.
+
+.TP
+.BR libimcv.plugins.imc-hcd.subtypes.system.user_application_enabled " [no]"
+Specifies if users can dynamically download and execute applications on the
+hardcopy device.
+
+.TP
+.BR libimcv.plugins.imc-hcd.subtypes.system.user_application_persistence_enabled " [no]"
+Specifies if user dynamically downloaded applications can persist outside the
+boundaries of a single job on the hardcopy device.
+
+.TP
+.BR libimcv.plugins.imc-hcd.subtypes.system.vendor_name " []"
+String specifying the manufacturer of the hardcopy device.
+
+.TP
+.BR libimcv.plugins.imc-hcd.subtypes.system.vendor_smi_code " []"
+Integer specifying the globally unique 24\-bit SMI code assigned to the
+manufacturer of the hardcopy device.
+
+.TP
 .BR libimcv.plugins.imc-os.device_cert " []"
 Manually set the path to the client device certificate (e.g.
 /etc/pts/aikCert.der)
@@ -1943,10 +2119,6 @@ Plugins to load in ipsec scepclient tool.
 .TP
 .BR starter.config_file " [${sysconfdir}/ipsec.conf]"
 Location of the ipsec.conf file
-
-.TP
-.BR starter.load " []"
-Plugins to load in starter.
 
 .TP
 .BR starter.load_warning " [yes]"

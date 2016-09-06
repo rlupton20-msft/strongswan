@@ -219,9 +219,8 @@ int traffic_selector_printf_hook(printf_hook_data_t *data,
 	enumerator_t *enumerator;
 	char from_str[INET6_ADDRSTRLEN] = "";
 	char to_str[INET6_ADDRSTRLEN] = "";
-	char *serv_proto = NULL;
-	bool has_proto;
-	bool has_ports;
+	char *serv_proto = NULL, *sep = "";
+	bool has_proto, has_ports;
 	size_t written = 0;
 	u_int32_t from[4], to[4];
 
@@ -235,8 +234,8 @@ int traffic_selector_printf_hook(printf_hook_data_t *data,
 		enumerator = list->create_enumerator(list);
 		while (enumerator->enumerate(enumerator, (void**)&this))
 		{
-			/* call recursivly */
-			written += print_in_hook(data, "%R ", this);
+			written += print_in_hook(data, "%s%R", sep, this);
+			sep = " ";
 		}
 		enumerator->destroy(enumerator);
 		return written;
@@ -849,8 +848,7 @@ traffic_selector_t *traffic_selector_create_from_rfc3779_format(ts_type_t type,
 		memcpy(this->to, to.ptr+1, to.len-1);
 		this->to[to.len-2] |= mask;
 	}
-	this->netbits = chunk_equals(from, to) ? (from.len-1)*8 - from.ptr[0]
-										   : NON_SUBNET_ADDRESS_RANGE;
+	calc_netbits(this);
 	return (&this->public);
 }
 

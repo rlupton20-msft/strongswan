@@ -170,13 +170,8 @@ METHOD(task_t, build_i, status_t,
 	}
 	config = this->child_sa->get_config(this->child_sa);
 
-	/* we just need the rekey notify ... */
-	notify = notify_payload_create_from_protocol_and_type(PLV2_NOTIFY,
-													this->protocol, REKEY_SA);
-	notify->set_spi(notify, this->spi);
-	message->add_payload(message, (payload_t*)notify);
 
-	/* ... our CHILD_CREATE task does the hard work for us. */
+	/* our CHILD_CREATE task does the hard work for us */
 	if (!this->child_create)
 	{
 		this->child_create = child_create_create(this->ike_sa,
@@ -193,6 +188,14 @@ METHOD(task_t, build_i, status_t,
 	{
 		schedule_delayed_rekey(this);
 		return FAILED;
+	}
+	if (message->get_exchange_type(message) == CREATE_CHILD_SA)
+	{
+		/* don't add the notify if the CHILD_CREATE task changed the exchange */
+		notify = notify_payload_create_from_protocol_and_type(PLV2_NOTIFY,
+													this->protocol, REKEY_SA);
+		notify->set_spi(notify, this->spi);
+		message->add_payload(message, (payload_t*)notify);
 	}
 	this->child_sa->set_state(this->child_sa, CHILD_REKEYING);
 
@@ -276,11 +279,15 @@ static child_sa_t *handle_collision(private_child_rekey_t *this)
 			/* don't touch child other created, it has already been deleted */
 			if (!this->other_child_destroyed)
 			{
-				/* disable close action for the redundand child */
+				/* disable close action and updown event for redundant child */
 				child_sa = other->child_create->get_child(other->child_create);
 				if (child_sa)
 				{
 					child_sa->set_close_action(child_sa, ACTION_NONE);
+					if (child_sa->get_state(child_sa) != CHILD_REKEYING)
+					{
+						child_sa->set_state(child_sa, CHILD_REKEYING);
+					}
 				}
 			}
 		}
@@ -334,8 +341,7 @@ METHOD(task_t, process_i, status_t,
 	if (this->child_create->task.process(&this->child_create->task,
 										 message) == NEED_MORE)
 	{
-		/* bad DH group while rekeying, try again */
-		this->child_create->task.migrate(&this->child_create->task, this->ike_sa);
+		/* bad DH group while rekeying, retry, or failure requiring deletion */
 		return NEED_MORE;
 	}
 	if (message->get_payload(message, PLV2_SECURITY_ASSOCIATION) == NULL)
@@ -369,6 +375,11 @@ METHOD(task_t, process_i, status_t,
 	if (to_delete == NULL)
 	{
 		return SUCCESS;
+	}
+	/* disable updown event for redundant CHILD_SA */
+	if (to_delete->get_state(to_delete) != CHILD_REKEYING)
+	{
+		to_delete->set_state(to_delete, CHILD_REKEYING);
 	}
 	spi = to_delete->get_spi(to_delete, TRUE);
 	protocol = to_delete->get_protocol(to_delete);

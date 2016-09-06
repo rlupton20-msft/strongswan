@@ -1,4 +1,5 @@
 /*
+ * Copyright (C) 2012-2015 Tobias Brunner
  * Copyright (C) 2005-2007 Martin Willi
  * Copyright (C) 2005 Jan Hutter
  * Hochschule fuer Technik Rapperswil
@@ -370,9 +371,6 @@ METHOD(ike_cfg_t, equals, bool,
 	private_ike_cfg_t *this, ike_cfg_t *other_public)
 {
 	private_ike_cfg_t *other = (private_ike_cfg_t*)other_public;
-	enumerator_t *e1, *e2;
-	proposal_t *p1, *p2;
-	bool eq = TRUE;
 
 	if (this == other)
 	{
@@ -382,25 +380,12 @@ METHOD(ike_cfg_t, equals, bool,
 	{
 		return FALSE;
 	}
-	if (this->proposals->get_count(this->proposals) !=
-		other->proposals->get_count(other->proposals))
+	if (!this->proposals->equals_offset(this->proposals, other->proposals,
+										offsetof(proposal_t, equals)))
 	{
 		return FALSE;
 	}
-	e1 = this->proposals->create_enumerator(this->proposals);
-	e2 = other->proposals->create_enumerator(other->proposals);
-	while (e1->enumerate(e1, &p1) && e2->enumerate(e2, &p2))
-	{
-		if (!p1->equals(p1, p2))
-		{
-			eq = FALSE;
-			break;
-		}
-	}
-	e1->destroy(e1);
-	e2->destroy(e2);
-
-	return (eq &&
+	return
 		this->version == other->version &&
 		this->certreq == other->certreq &&
 		this->force_encap == other->force_encap &&
@@ -408,7 +393,7 @@ METHOD(ike_cfg_t, equals, bool,
 		streq(this->me, other->me) &&
 		streq(this->other, other->other) &&
 		this->my_port == other->my_port &&
-		this->other_port == other->other_port);
+		this->other_port == other->other_port;
 }
 
 METHOD(ike_cfg_t, get_ref, ike_cfg_t*,
@@ -508,6 +493,52 @@ static void parse_addresses(char *str, linked_list_t *hosts,
 		hosts->insert_last(hosts, strdup(str));
 	}
 	enumerator->destroy(enumerator);
+}
+
+/**
+ * Described in header.
+ */
+int ike_cfg_get_family(ike_cfg_t *cfg, bool local)
+{
+	private_ike_cfg_t *this = (private_ike_cfg_t*)cfg;
+	enumerator_t *enumerator;
+	host_t *host;
+	char *str;
+	int family = AF_UNSPEC;
+
+	if (local)
+	{
+		enumerator = this->my_hosts->create_enumerator(this->my_hosts);
+	}
+	else
+	{
+		enumerator = this->other_hosts->create_enumerator(this->other_hosts);
+	}
+	while (enumerator->enumerate(enumerator, &str))
+	{
+		if (streq(str, "%any"))
+		{	/* ignore %any as its family is undetermined */
+			continue;
+		}
+		host = host_create_from_string(str, 0);
+		if (host)
+		{
+			if (family == AF_UNSPEC)
+			{
+				family = host->get_family(host);
+			}
+			else if (family != host->get_family(host))
+			{
+				/* more than one address family defined */
+				family = AF_UNSPEC;
+				host->destroy(host);
+				break;
+			}
+		}
+		DESTROY_IF(host);
+	}
+	enumerator->destroy(enumerator);
+	return family;
 }
 
 /**

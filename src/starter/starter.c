@@ -33,7 +33,6 @@
 #include <pthread.h>
 
 #include <library.h>
-#include <hydra.h>
 #include <utils/backtrace.h>
 #include <threading/thread.h>
 #include <utils/debug.h>
@@ -427,9 +426,6 @@ int main (int argc, char **argv)
 	library_init(NULL, "starter");
 	atexit(library_deinit);
 
-	libhydra_init();
-	atexit(libhydra_deinit);
-
 	/* parse command line */
 	for (i = 1; i < argc; i++)
 	{
@@ -703,7 +699,6 @@ int main (int argc, char **argv)
 			{
 				starter_stop_charon();
 			}
-			starter_netkey_cleanup();
 			confread_free(cfg);
 			unlink(starter_pid_file);
 			cleanup();

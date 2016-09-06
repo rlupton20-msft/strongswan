@@ -2,6 +2,9 @@
  * Copyright (C) 2014 Martin Willi
  * Copyright (C) 2014 revosec AG
  *
+ * Copyright (C) 2016 Andreas Steffen
+ * HSR Hochschule fuer Technik Rapperswil
+
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
  * Free Software Foundation; either version 2 of the License, or (at your
@@ -198,10 +201,18 @@ CALLBACK(ike_sa, int,
 			ike->get(ike, "state"), ike->get(ike, "version"),
 			ike->get(ike, "initiator-spi"), ike->get(ike, "responder-spi"));
 
-		printf("  local  '%s' @ %s\n",
-			ike->get(ike, "local-id"), ike->get(ike, "local-host"));
-		printf("  remote '%s' @ %s",
-			ike->get(ike, "remote-id"), ike->get(ike, "remote-host"));
+		printf("  local  '%s' @ %s[%s]",
+			ike->get(ike, "local-id"), ike->get(ike, "local-host"),
+			ike->get(ike, "local-port"));
+		if (ike->get(ike, "local-vips"))
+		{
+			printf(" [%s]", ike->get(ike, "local-vips"));
+		}
+		printf("\n");
+
+		printf("  remote '%s' @ %s[%s]",
+			ike->get(ike, "remote-id"), ike->get(ike, "remote-host"),
+			ike->get(ike, "remote-port"));
 		if (ike->get(ike, "remote-eap-id"))
 		{
 			printf(" EAP: '%s'", ike->get(ike, "remote-eap-id"));
@@ -209,6 +220,10 @@ CALLBACK(ike_sa, int,
 		if (ike->get(ike, "remote-xauth-id"))
 		{
 			printf(" XAuth: '%s'", ike->get(ike, "remote-xauth-id"));
+		}
+		if (ike->get(ike, "remote-vips"))
+		{
+			printf(" [%s]", ike->get(ike, "remote-vips"));
 		}
 		printf("\n");
 

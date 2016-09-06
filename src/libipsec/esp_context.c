@@ -215,6 +215,7 @@ static bool create_aead(private_esp_context_t *this, int alg,
 		case ENCR_AES_GCM_ICV8:
 		case ENCR_AES_GCM_ICV12:
 		case ENCR_AES_GCM_ICV16:
+		case ENCR_CHACHA20_POLY1305:
 			/* the key includes a 4 byte salt */
 			this->aead = lib->crypto->create_aead(lib->crypto, alg,
 												  key.len - 4, 4);
@@ -246,7 +247,19 @@ static bool create_traditional(private_esp_context_t *this, int enc_alg,
 	signer_t *signer = NULL;
 	iv_gen_t *ivg;
 
-	crypter = lib->crypto->create_crypter(lib->crypto, enc_alg, enc_key.len);
+	switch (enc_alg)
+	{
+		case ENCR_AES_CTR:
+		case ENCR_CAMELLIA_CTR:
+			/* the key includes a 4 byte salt */
+			crypter = lib->crypto->create_crypter(lib->crypto, enc_alg,
+												  enc_key.len - 4);
+			break;
+		default:
+			crypter = lib->crypto->create_crypter(lib->crypto, enc_alg,
+												  enc_key.len);
+			break;
+	}
 	if (!crypter)
 	{
 		DBG1(DBG_ESP, "failed to create ESP context: unsupported encryption "

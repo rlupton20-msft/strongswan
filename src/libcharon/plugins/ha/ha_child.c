@@ -91,6 +91,10 @@ METHOD(listener_t, child_keys, bool,
 	{
 		m->add_attribute(m, HA_ALG_INTEG, alg);
 	}
+	if (proposal->get_algorithm(proposal, DIFFIE_HELLMAN_GROUP, &alg, NULL))
+	{
+		m->add_attribute(m, HA_ALG_DH, alg);
+	}
 	if (proposal->get_algorithm(proposal, EXTENDED_SEQUENCE_NUMBERS, &alg, NULL))
 	{
 		m->add_attribute(m, HA_ESN, alg);
@@ -126,7 +130,7 @@ METHOD(listener_t, child_keys, bool,
 			ike_sa->get_my_host(ike_sa), child_sa->get_spi(child_sa, TRUE));
 	seg_o = this->kernel->get_segment_spi(this->kernel,
 			ike_sa->get_other_host(ike_sa), child_sa->get_spi(child_sa, FALSE));
-	DBG1(DBG_CFG, "handling HA CHILD_SA %s{%d} %#R=== %#R "
+	DBG1(DBG_CFG, "handling HA CHILD_SA %s{%d} %#R === %#R "
 		"(segment in: %d%s, out: %d%s)", child_sa->get_name(child_sa),
 		child_sa->get_unique_id(child_sa), local_ts, remote_ts,
 		seg_i, this->segments->is_active(this->segments, seg_i) ? "*" : "",

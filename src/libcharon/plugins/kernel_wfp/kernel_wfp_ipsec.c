@@ -20,7 +20,6 @@
 #include "kernel_wfp_ipsec.h"
 
 #include <daemon.h>
-#include <hydra.h>
 #include <threading/mutex.h>
 #include <collections/array.h>
 #include <collections/hashtable.h>
@@ -1396,10 +1395,9 @@ static bool uninstall_route(private_kernel_wfp_ipsec_t *this,
 	{
 		if (--route->refs == 0)
 		{
-			if (hydra->kernel_interface->get_interface(hydra->kernel_interface,
-													   src, &name))
+			if (charon->kernel->get_interface(charon->kernel, src, &name))
 			{
-				res = hydra->kernel_interface->del_route(hydra->kernel_interface,
+				res = charon->kernel->del_route(charon->kernel,
 						dst->get_address(dst), mask, gtw, src, name) == SUCCESS;
 				free(name);
 			}
@@ -1442,10 +1440,9 @@ static bool install_route(private_kernel_wfp_ipsec_t *this,
 	}
 	else
 	{
-		if (hydra->kernel_interface->get_interface(hydra->kernel_interface,
-												   src, &name))
+		if (charon->kernel->get_interface(charon->kernel, src, &name))
 		{
-			if (hydra->kernel_interface->add_route(hydra->kernel_interface,
+			if (charon->kernel->add_route(charon->kernel,
 						dst->get_address(dst), mask, gtw, src, name) == SUCCESS)
 			{
 				INIT(route,
@@ -1486,14 +1483,13 @@ static bool manage_route(private_kernel_wfp_ipsec_t *this,
 	{
 		return FALSE;
 	}
-	if (hydra->kernel_interface->get_address_by_ts(hydra->kernel_interface,
-												src_ts, &src, NULL) != SUCCESS)
+	if (charon->kernel->get_address_by_ts(charon->kernel, src_ts, &src,
+										  NULL) != SUCCESS)
 	{
 		dst->destroy(dst);
 		return FALSE;
 	}
-	gtw = hydra->kernel_interface->get_nexthop(hydra->kernel_interface,
-											   remote, -1, local);
+	gtw = charon->kernel->get_nexthop(charon->kernel, remote, -1, local);
 	if (add)
 	{
 		done = install_route(this, dst, mask, src, gtw);
@@ -1650,8 +1646,7 @@ static void acquire(private_kernel_wfp_ipsec_t *this, UINT64 filter_id,
 	{
 		src = src ? src->clone(src) : NULL;
 		dst = dst ? dst->clone(dst) : NULL;
-		hydra->kernel_interface->acquire(hydra->kernel_interface, reqid,
-										 src, dst);
+		charon->kernel->acquire(charon->kernel, reqid, src, dst);
 	}
 }
 
@@ -2069,8 +2064,8 @@ static job_requeue_t expire_job(expire_data_t *data)
 
 	if (entry)
 	{
-		hydra->kernel_interface->expire(hydra->kernel_interface, protocol,
-										data->spi, data->dst, data->hard);
+		charon->kernel->expire(charon->kernel, protocol, data->spi, data->dst,
+							   data->hard);
 	}
 
 	return JOB_REQUEUE_NONE;
@@ -2456,15 +2451,16 @@ METHOD(kernel_ipsec_t, query_policy, status_t,
 }
 
 METHOD(kernel_ipsec_t, del_policy, status_t,
-	private_kernel_wfp_ipsec_t *this, traffic_selector_t *src_ts,
-	traffic_selector_t *dst_ts, policy_dir_t direction, u_int32_t reqid,
+	private_kernel_wfp_ipsec_t *this, host_t *src, host_t *dst,
+	traffic_selector_t *src_ts, traffic_selector_t *dst_ts,
+	policy_dir_t direction, policy_type_t type, ipsec_sa_cfg_t *sa,
 	mark_t mark, policy_priority_t priority)
 {
 	if (direction == POLICY_OUT && priority == POLICY_PRIORITY_ROUTED)
 	{
-		if (remove_trap(this, reqid, FALSE, src_ts, dst_ts))
+		if (remove_trap(this, sa->reqid, FALSE, src_ts, dst_ts))
 		{
-			remove_trap(this, reqid, TRUE, src_ts, dst_ts);
+			remove_trap(this, sa->reqid, TRUE, src_ts, dst_ts);
 			return SUCCESS;
 		}
 		return NOT_FOUND;

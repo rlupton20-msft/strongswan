@@ -590,17 +590,10 @@ static void stroke_loglevel(private_stroke_socket_t *this,
 		fprintf(out, "command not allowed!\n");
 		return;
 	}
-	if (strcaseeq(msg->loglevel.type, "any"))
+	if (!enum_from_name(debug_names, msg->loglevel.type, &group))
 	{
-		group = DBG_ANY;
-	}
-	else
-	{
-		if (!enum_from_name(debug_names, msg->loglevel.type, &group))
-		{
-			fprintf(out, "unknown type '%s'!\n", msg->loglevel.type);
-			return;
-		}
+		fprintf(out, "unknown type '%s'!\n", msg->loglevel.type);
+		return;
 	}
 	charon->set_level(charon, group, msg->loglevel.level);
 }
@@ -779,10 +772,10 @@ stroke_socket_t *stroke_socket_create()
 				"%s.plugins.stroke.prevent_loglevel_changes", FALSE, lib->ns),
 	);
 
-	this->cred = stroke_cred_create();
+	this->ca = stroke_ca_create();
+	this->cred = stroke_cred_create(this->ca);
 	this->attribute = stroke_attribute_create();
 	this->handler = stroke_handler_create();
-	this->ca = stroke_ca_create(this->cred);
 	this->config = stroke_config_create(this->ca, this->cred, this->attribute);
 	this->control = stroke_control_create();
 	this->list = stroke_list_create(this->attribute);

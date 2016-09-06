@@ -247,7 +247,11 @@ module Vici
     def recv_all(len)
       encoding = ""
       while encoding.length < len do
-        encoding << @socket.recv(len - encoding.length)
+        data = @socket.recv(len - encoding.length)
+        if data.empty?
+          raise TransportError, "connection closed"
+        end
+        encoding << data
       end
       encoding
     end
@@ -498,6 +502,12 @@ module Vici
     def terminate(options, &block)
       check_success(call_with_event("terminate", Message.new(options),
                     "control-log", &block))
+    end
+
+    ##
+    # Redirect an IKE_SA.
+    def redirect(options)
+      check_success(@transp.request("redirect", Message.new(options)))
     end
 
     ##

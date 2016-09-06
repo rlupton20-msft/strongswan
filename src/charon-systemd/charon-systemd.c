@@ -31,7 +31,6 @@
 #include <systemd/sd-daemon.h>
 #include <systemd/sd-journal.h>
 
-#include <hydra.h>
 #include <daemon.h>
 
 #include <library.h>
@@ -249,12 +248,16 @@ static int run()
 
 	while (TRUE)
 	{
-		int sig, error;
+		int sig;
 
-		error = sigwait(&set, &sig);
-		if (error)
+		sig = sigwaitinfo(&set, NULL);
+		if (sig == -1)
 		{
-			DBG1(DBG_DMN, "waiting for signal failed: %s", strerror(error));
+			if (errno == EINTR)
+			{	/* ignore signals we didn't wait for */
+				continue;
+			}
+			DBG1(DBG_DMN, "waiting for signal failed: %s", strerror(errno));
 			return SS_RC_INITIALIZATION_FAILED;
 		}
 		switch (sig)
@@ -264,11 +267,6 @@ static int run()
 				DBG1(DBG_DMN, "SIGTERM received, shutting down");
 				charon->bus->alert(charon->bus, ALERT_SHUTDOWN_SIGNAL, sig);
 				return 0;
-			}
-			default:
-			{
-				DBG1(DBG_DMN, "unknown signal %d received. Ignored", sig);
-				break;
 			}
 		}
 	}
@@ -327,6 +325,15 @@ static plugin_feature_t features[] = {
 };
 
 /**
+ * Add namespace alias
+ */
+static void __attribute__ ((constructor))register_namespace()
+{
+	/* inherit settings from charon */
+	library_add_namespace("charon");
+}
+
+/**
  * Main function, starts the daemon.
  */
 int main(int argc, char *argv[])
@@ -354,12 +361,6 @@ int main(int argc, char *argv[])
 		!lib->integrity->check_file(lib->integrity, "charon-systemd", argv[0]))
 	{
 		sd_notifyf(0, "STATUS=integrity check of charon-systemd failed");
-		return SS_RC_INITIALIZATION_FAILED;
-	}
-	atexit(libhydra_deinit);
-	if (!libhydra_init())
-	{
-		sd_notifyf(0, "STATUS=libhydra initialization failed");
 		return SS_RC_INITIALIZATION_FAILED;
 	}
 	atexit(libcharon_deinit);
@@ -393,7 +394,7 @@ int main(int argc, char *argv[])
 	}
 
 	/* add handler for SEGV and ILL,
-	 * INT, TERM and HUP are handled by sigwait() in run() */
+	 * INT, TERM and HUP are handled by sigwaitinfo() in run() */
 	action.sa_handler = segv_handler;
 	action.sa_flags = 0;
 	sigemptyset(&action.sa_mask);

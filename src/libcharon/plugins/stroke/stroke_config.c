@@ -16,7 +16,6 @@
 
 #include "stroke_config.h"
 
-#include <hydra.h>
 #include <daemon.h>
 #include <threading/mutex.h>
 #include <utils/lexparser.h>
@@ -184,19 +183,16 @@ static void add_proposals(private_stroke_config_t *this, char *string,
 }
 
 /**
- * Build an IKE config from a stroke message
+ * Check if any addresses in the given string are local
  */
-static ike_cfg_t *build_ike_cfg(private_stroke_config_t *this, stroke_msg_t *msg)
+static bool is_local(char *address, bool any_allowed)
 {
 	enumerator_t *enumerator;
-	stroke_end_t tmp_end;
-	ike_cfg_t *ike_cfg;
 	host_t *host;
-	u_int16_t ikeport;
-	char me[256], other[256], *token;
-	bool swapped = FALSE;;
+	char *token;
+	bool found = FALSE;
 
-	enumerator = enumerator_create_token(msg->add_conn.other.address, ",", " ");
+	enumerator = enumerator_create_token(address, ",", " ");
 	while (enumerator->enumerate(enumerator, &token))
 	{
 		if (!strchr(token, '/'))
@@ -204,43 +200,62 @@ static ike_cfg_t *build_ike_cfg(private_stroke_config_t *this, stroke_msg_t *msg
 			host = host_create_from_dns(token, 0, 0);
 			if (host)
 			{
-				if (hydra->kernel_interface->get_interface(
-										hydra->kernel_interface, host, NULL))
+				if (charon->kernel->get_interface(charon->kernel, host, NULL))
 				{
-					DBG2(DBG_CFG, "left is other host, swapping ends");
-					tmp_end = msg->add_conn.me;
-					msg->add_conn.me = msg->add_conn.other;
-					msg->add_conn.other = tmp_end;
-					swapped = TRUE;
+					found = TRUE;
+				}
+				else if (any_allowed && host->is_anyaddr(host))
+				{
+					found = TRUE;
 				}
 				host->destroy(host);
+				if (found)
+				{
+					break;
+				}
 			}
 		}
 	}
 	enumerator->destroy(enumerator);
+	return found;
+}
 
-	if (!swapped)
+/**
+ * Swap ends if indicated by left|right
+ */
+static void swap_ends(stroke_msg_t *msg)
+{
+	if (!lib->settings->get_bool(lib->settings, "%s.plugins.stroke.allow_swap",
+								 TRUE, lib->ns))
 	{
-		enumerator = enumerator_create_token(msg->add_conn.me.address, ",", " ");
-		while (enumerator->enumerate(enumerator, &token))
-		{
-			if (!strchr(token, '/'))
-			{
-				host = host_create_from_dns(token, 0, 0);
-				if (host)
-				{
-					if (!hydra->kernel_interface->get_interface(
-										hydra->kernel_interface, host, NULL))
-					{
-						DBG1(DBG_CFG, "left nor right host is our side, "
-							 "assuming left=local");
-					}
-					host->destroy(host);
-				}
-			}
-		}
-		enumerator->destroy(enumerator);
+		return;
 	}
+
+	if (is_local(msg->add_conn.other.address, FALSE))
+	{
+		stroke_end_t tmp_end;
+
+		DBG2(DBG_CFG, "left is other host, swapping ends");
+		tmp_end = msg->add_conn.me;
+		msg->add_conn.me = msg->add_conn.other;
+		msg->add_conn.other = tmp_end;
+	}
+	else if (!is_local(msg->add_conn.me.address, TRUE))
+	{
+		DBG1(DBG_CFG, "left nor right host is our side, assuming left=local");
+	}
+}
+
+/**
+ * Build an IKE config from a stroke message
+ */
+static ike_cfg_t *build_ike_cfg(private_stroke_config_t *this, stroke_msg_t *msg)
+{
+	ike_cfg_t *ike_cfg;
+	u_int16_t ikeport;
+	char me[256], other[256];
+
+	swap_ends(msg);
 
 	if (msg->add_conn.me.allow_any)
 	{
@@ -293,117 +308,6 @@ static void build_crl_policy(auth_cfg_t *cfg, bool local, int policy)
 				break;
 		}
 	}
-}
-
-/**
- * Parse public key / signature strength constraints
- */
-static void parse_pubkey_constraints(char *auth, auth_cfg_t *cfg)
-{
-	enumerator_t *enumerator;
-	bool rsa = FALSE, ecdsa = FALSE, bliss = FALSE,
-		 rsa_len = FALSE, ecdsa_len = FALSE, bliss_strength = FALSE;
-	int strength;
-	char *token;
-
-	enumerator = enumerator_create_token(auth, "-", "");
-	while (enumerator->enumerate(enumerator, &token))
-	{
-		bool found = FALSE;
-		int i;
-		struct {
-			char *name;
-			signature_scheme_t scheme;
-			key_type_t key;
-		} schemes[] = {
-			{ "md5",		SIGN_RSA_EMSA_PKCS1_MD5,		KEY_RSA,	},
-			{ "sha1",		SIGN_RSA_EMSA_PKCS1_SHA1,		KEY_RSA,	},
-			{ "sha224",		SIGN_RSA_EMSA_PKCS1_SHA224,		KEY_RSA,	},
-			{ "sha256",		SIGN_RSA_EMSA_PKCS1_SHA256,		KEY_RSA,	},
-			{ "sha384",		SIGN_RSA_EMSA_PKCS1_SHA384,		KEY_RSA,	},
-			{ "sha512",		SIGN_RSA_EMSA_PKCS1_SHA512,		KEY_RSA,	},
-			{ "sha1",		SIGN_ECDSA_WITH_SHA1_DER,		KEY_ECDSA,	},
-			{ "sha256",		SIGN_ECDSA_WITH_SHA256_DER,		KEY_ECDSA,	},
-			{ "sha384",		SIGN_ECDSA_WITH_SHA384_DER,		KEY_ECDSA,	},
-			{ "sha512",		SIGN_ECDSA_WITH_SHA512_DER,		KEY_ECDSA,	},
-			{ "sha256",		SIGN_ECDSA_256,					KEY_ECDSA,	},
-			{ "sha384",		SIGN_ECDSA_384,					KEY_ECDSA,	},
-			{ "sha512",		SIGN_ECDSA_521,					KEY_ECDSA,	},
-			{ "sha256",		SIGN_BLISS_WITH_SHA256,			KEY_BLISS,	},
-			{ "sha384",		SIGN_BLISS_WITH_SHA384,			KEY_BLISS,	},
-			{ "sha512",		SIGN_BLISS_WITH_SHA512,			KEY_BLISS,	},
-		};
-
-		if (rsa_len || ecdsa_len || bliss_strength)
-		{	/* expecting a key strength token */
-			strength = atoi(token);
-			if (strength)
-			{
-				if (rsa_len)
-				{
-					cfg->add(cfg, AUTH_RULE_RSA_STRENGTH, (uintptr_t)strength);
-				}
-				else if (ecdsa_len)
-				{
-					cfg->add(cfg, AUTH_RULE_ECDSA_STRENGTH, (uintptr_t)strength);
-				}
-				else if (bliss_strength)
-				{
-					cfg->add(cfg, AUTH_RULE_BLISS_STRENGTH, (uintptr_t)strength);
-				}
-			}
-			rsa_len = ecdsa_len = bliss_strength = FALSE;
-			if (strength)
-			{
-				continue;
-			}
-		}
-		if (streq(token, "rsa"))
-		{
-			rsa = rsa_len = TRUE;
-			continue;
-		}
-		if (streq(token, "ecdsa"))
-		{
-			ecdsa = ecdsa_len = TRUE;
-			continue;
-		}
-		if (streq(token, "bliss"))
-		{
-			bliss = bliss_strength = TRUE;
-			continue;
-		}
-		if (streq(token, "pubkey"))
-		{
-			continue;
-		}
-
-		for (i = 0; i < countof(schemes); i++)
-		{
-			if (streq(schemes[i].name, token))
-			{
-				/* for each matching string, allow the scheme, if:
-				 * - it is an RSA scheme, and we enforced RSA
-				 * - it is an ECDSA scheme, and we enforced ECDSA
-				 * - it is not a key type specific scheme
-				 */
-				if ((rsa && schemes[i].key == KEY_RSA) ||
-					(ecdsa && schemes[i].key == KEY_ECDSA) ||
-					(bliss && schemes[i].key == KEY_BLISS) ||
-					(!rsa && !ecdsa && !bliss))
-				{
-					cfg->add(cfg, AUTH_RULE_SIGNATURE_SCHEME,
-							 (uintptr_t)schemes[i].scheme);
-				}
-				found = TRUE;
-			}
-		}
-		if (!found)
-		{
-			DBG1(DBG_CFG, "ignoring invalid auth token: '%s'", token);
-		}
-	}
-	enumerator->destroy(enumerator);
 }
 
 /**
@@ -602,15 +506,15 @@ static auth_cfg_t *build_auth_cfg(private_stroke_config_t *this,
 	}
 
 	/* authentication metod (class, actually) */
-	if (strpfx(auth, "pubkey") ||
+	if (strpfx(auth, "ike:") ||
+		strpfx(auth, "pubkey") ||
 		strpfx(auth, "rsa") ||
 		strpfx(auth, "ecdsa") ||
 		strpfx(auth, "bliss"))
 	{
 		cfg->add(cfg, AUTH_RULE_AUTH_CLASS, AUTH_CLASS_PUBKEY);
 		build_crl_policy(cfg, local, msg->add_conn.crl_policy);
-
-		parse_pubkey_constraints(auth, cfg);
+		cfg->add_pubkey_constraints(cfg, auth, TRUE);
 	}
 	else if (streq(auth, "psk") || streq(auth, "secret"))
 	{
@@ -643,7 +547,7 @@ static auth_cfg_t *build_auth_cfg(private_stroke_config_t *this,
 		if (pos)
 		{
 			*pos = 0;
-			parse_pubkey_constraints(pos + 1, cfg);
+			cfg->add_pubkey_constraints(cfg, pos + 1, FALSE);
 		}
 		type = eap_vendor_type_from_string(auth);
 		if (type)

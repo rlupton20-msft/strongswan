@@ -1,4 +1,4 @@
-.TH SWANCTL 8 "2014-04-28" "@PACKAGE_VERSION@" "strongSwan"
+.TH SWANCTL 8 "2015-11-20" "@PACKAGE_VERSION@" "strongSwan"
 .SH NAME
 swanctl \- strongSwan configuration, control and monitoring command line interface.
 .SH SYNOPSIS
@@ -41,6 +41,10 @@ initiate a connection
 \-\-terminate\fR
 terminate a connection
 .TP
+.B "\-d, \-\-redirect"
+\-\-redirect\fR
+redirect an IKE_SA
+.TP
 .B "\-p, \-\-install"
 install a trap or shunt policy
 .TP
@@ -53,8 +57,14 @@ list currently active IKE_SAs
 .B "\-P, \-\-list\-pols"
 list currently installed policies
 .TP
+.B "\-b, \-\-load\-authorities"
+(re\-)load certification authorities information
+.TP
 .B "\-L, \-\-list\-conns"
 list loaded configurations
+.TP
+.B "\-B, \-\-list\-authorities"
+list loaded certification authorities information
 .TP
 .B "\-x, \-\-list\-certs"
 list stored certificates
@@ -62,8 +72,11 @@ list stored certificates
 .B "\-A, \-\-list\-pools"
 list loaded pool configurations
 .TP
+.B "\-g, \-\-list\-algs"
+list loaded algorithms and their implementation
+.TP
 .B "\-q, \-\-load\-all"
-(re\-)load credentials, pools and connections
+(re\-)load credentials, pools, authorities and connections
 .TP
 .B "\-c, \-\-load\-conns"
 (re\-)load connection configuration

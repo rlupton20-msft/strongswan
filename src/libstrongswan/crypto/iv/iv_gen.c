@@ -1,4 +1,7 @@
 /*
+ * Copyright (C) 2015 Tobias Brunner
+ * Hochschule fuer Technik Rapperswil
+ *
  * Copyright (C) 2015 Martin Willi
  * Copyright (C) 2015 revosec AG
  *
@@ -16,6 +19,7 @@
 #include "iv_gen.h"
 #include "iv_gen_rand.h"
 #include "iv_gen_seq.h"
+#include "iv_gen_null.h"
 
 /**
  * See header.
@@ -48,9 +52,11 @@ iv_gen_t* iv_gen_create_for_alg(encryption_algorithm_t alg)
 		case ENCR_CAMELLIA_CCM_ICV8:
 		case ENCR_CAMELLIA_CCM_ICV12:
 		case ENCR_CAMELLIA_CCM_ICV16:
+		case ENCR_CHACHA20_POLY1305:
 		case ENCR_NULL_AUTH_AES_GMAC:
 			return iv_gen_seq_create();
 		case ENCR_NULL:
+			return iv_gen_null_create();
 		case ENCR_UNDEFINED:
 		case ENCR_DES_ECB:
 		case ENCR_DES_IV32:

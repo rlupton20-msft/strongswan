@@ -51,6 +51,15 @@ bool settings_value_as_bool(char *value, bool def);
 int settings_value_as_int(char *value, int def);
 
 /**
+ * Convert a string value returned by a key/value enumerator to an u_int64_t.
+ *
+ * @see settings_t.create_key_value_enumerator()
+ * @param value			the string value
+ * @param def			the default value, if value is NULL or invalid
+ */
+u_int64_t settings_value_as_uint64(char *value, u_int64_t def);
+
+/**
  * Convert a string value returned by a key/value enumerator to a double.
  *
  * @see settings_t.create_key_value_enumerator()
@@ -335,6 +344,50 @@ struct settings_t {
 							   char *section, ...);
 
 	/**
+	 * Load settings from the given string.
+	 *
+	 * If merge is TRUE, existing sections are extended, existing values
+	 * replaced, by those found in the string. If it is FALSE, existing
+	 * sections are purged before reading the new config.
+	 *
+	 * @note If the string contains _include_ statements they should be
+	 * absolute paths.
+	 *
+	 * @note If any failures occur, no settings are added at all. So, it's all
+	 * or nothing.
+	 *
+	 * @param settings	string to parse
+	 * @param merge		TRUE to merge config with existing values
+	 * @return			TRUE, if settings were loaded successfully
+	 */
+	bool (*load_string)(settings_t *this, char *settings, bool merge);
+
+	/**
+	 * Load settings from the given string.
+	 *
+	 * If merge is TRUE, existing sections are extended, existing values
+	 * replaced, by those found in the string. If it is FALSE, existing
+	 * sections are purged before reading the new config.
+	 *
+	 * All settings are loaded relative to the given section. The section is
+	 * created, if it does not yet exist.
+	 *
+	 * @note If the string contains _include_ statements they should be
+	 * absolute paths.
+	 *
+	 * @note If any failures occur, no settings are added at all. So, it's all
+	 * or nothing.
+	 *
+	 * @param settings	string to parse
+	 * @param merge		TRUE to merge config with existing values
+	 * @param section	section name of parent section, printf style
+	 * @param ...		argument list for section
+	 * @return			TRUE, if settings were loaded successfully
+	 */
+	bool (*load_string_section)(settings_t *this, char *settings, bool merge,
+								char *section, ...);
+
+	/**
 	 * Destroy a settings instance.
 	 */
 	void (*destroy)(settings_t *this);
@@ -349,5 +402,15 @@ struct settings_t {
  * @return				settings object
  */
 settings_t *settings_create(char *file);
+
+/**
+ * Load settings from a string.
+ *
+ * @note If parsing the file fails the object is still created.
+ *
+ * @param settings		string to read settings from
+ * @return				settings object, or NULL
+ */
+settings_t *settings_create_string(char *settings);
 
 #endif /** SETTINGS_H_ @}*/
