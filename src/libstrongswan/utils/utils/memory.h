@@ -14,6 +14,8 @@
  * for more details.
  */
 
+#include <stdint.h> /* for uintptr_t */
+
 /**
  * @defgroup memory_i memory
  * @{ @ingroup utils_i
