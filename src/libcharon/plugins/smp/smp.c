@@ -17,6 +17,7 @@
 
 #include "smp.h"
 
+#include <inttypes.h>
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <sys/socket.h>
@@ -181,6 +182,10 @@ static void write_childend(xmlTextWriterPtr writer, child_sa_t *child, bool loca
 static void write_child(xmlTextWriterPtr writer, child_sa_t *child)
 {
 	child_cfg_t *config;
+	time_t now, rekey_time, reauth_time;
+	time_t use_in, use_out;
+	u_int64_t bytes_in, bytes_out, packets_in, packets_out;
+	proposal_t *proposal;
 
 	config = child->get_config(child);
 
@@ -189,11 +194,48 @@ static void write_child(xmlTextWriterPtr writer, child_sa_t *child)
 									child->get_reqid(child));
 	xmlTextWriterWriteFormatElement(writer, "childconfig", "%s",
 									config->get_name(config));
+	now = time_monotonic(NULL);
+	reauth_time = child->get_lifetime(child, TRUE);
+	if (reauth_time)
+	{
+	  xmlTextWriterWriteFormatElement(writer, "lifetime", "%V", &now, &reauth_time);
+	}
+	rekey_time = child->get_lifetime(child, FALSE);
+	if (rekey_time)
+	{
+	  xmlTextWriterWriteFormatElement(writer, "rekeytime", "%V", &now, &rekey_time);
+	}
 	xmlTextWriterStartElement(writer, "local");
 	write_childend(writer, child, TRUE);
 	xmlTextWriterEndElement(writer);
 	xmlTextWriterStartElement(writer, "remote");
 	write_childend(writer, child, FALSE);
+	xmlTextWriterEndElement(writer);
+	proposal = child->get_proposal(child);
+	if (proposal)
+	{
+		xmlTextWriterWriteFormatElement(writer, "proposal", "%P", proposal);
+	}
+
+	xmlTextWriterStartElement(writer, "stats");
+	child->get_usestats(child, TRUE,
+									&use_in, &bytes_in, &packets_in);
+	xmlTextWriterWriteFormatElement(writer, "rcvbytes", "%"PRIu64, bytes_in);
+	if (use_in)
+	{
+		xmlTextWriterWriteFormatElement(writer, "rcvpackets", "%"PRIu64, packets_in);
+		xmlTextWriterWriteFormatElement(writer, "lastrcv", "%V", &now, &use_in);
+	}
+
+	child->get_usestats(child, TRUE,
+									&use_out, &bytes_out, &packets_out);
+	xmlTextWriterWriteFormatElement(writer, "sndbytes", "%"PRIu64, bytes_out);
+	if (use_out)
+	{
+		xmlTextWriterWriteFormatElement(writer, "sndpackets", "%"PRIu64, packets_out);
+		xmlTextWriterWriteFormatElement(writer, "lastsend", "%V", &now, &use_out);
+	}
+
 	xmlTextWriterEndElement(writer);
 	xmlTextWriterEndElement(writer);
 }
@@ -216,7 +258,9 @@ static void request_query_ikesa(xmlTextReaderPtr reader, xmlTextWriterPtr writer
 		ike_sa_id_t *id;
 		host_t *local, *remote;
 		enumerator_t *children;
+		proposal_t *ike_proposal;
 		child_sa_t *child_sa;
+		time_t now, rekey_time, reauth_time;
 
 		id = ike_sa->get_id(ike_sa);
 
@@ -228,6 +272,25 @@ static void request_query_ikesa(xmlTextReaderPtr reader, xmlTextWriterPtr writer
 		xmlTextWriterWriteElement(writer, "role",
 							id->is_initiator(id) ? "initiator" : "responder");
 		xmlTextWriterWriteElement(writer, "peerconfig", ike_sa->get_name(ike_sa));
+
+		now = time_monotonic(NULL);
+		rekey_time = ike_sa->get_statistic(ike_sa, STAT_REKEY);
+		if (rekey_time)
+		{
+			xmlTextWriterWriteFormatElement(writer, "rekeytime", "%V", &now, &rekey_time);
+		}
+
+		reauth_time = ike_sa->get_statistic(ike_sa, STAT_REAUTH);
+		if (reauth_time)
+		{
+			xmlTextWriterWriteFormatElement(writer, "lifetime", "%V", &now, &reauth_time);
+		}
+
+		ike_proposal = ike_sa->get_proposal(ike_sa);
+		if (ike_proposal)
+		{
+			xmlTextWriterWriteFormatElement(writer, "proposal", "%P", ike_proposal);
+		}
 
 		/* <local> */
 		local = ike_sa->get_my_host(ike_sa);
