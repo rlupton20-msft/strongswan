@@ -1,7 +1,7 @@
 /*
  * Copyright (C) 2008-2014 Tobias Brunner
  * Copyright (C) 2008 Martin Willi
- * Hochschule fuer Technik Rapperswil
+ * HSR Hochschule fuer Technik Rapperswil
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -27,7 +27,7 @@
  */
 static inline bool streq(const char *x, const char *y)
 {
-	return strcmp(x, y) == 0;
+	return (x == y) || (x && y && strcmp(x, y) == 0);
 }
 
 /**
@@ -35,7 +35,7 @@ static inline bool streq(const char *x, const char *y)
  */
 static inline bool strneq(const char *x, const char *y, size_t len)
 {
-	return strncmp(x, y, len) == 0;
+	return (x == y) || (x && y && strncmp(x, y, len) == 0);
 }
 
 /**
@@ -51,7 +51,7 @@ static inline bool strpfx(const char *x, const char *prefix)
  */
 static inline bool strcaseeq(const char *x, const char *y)
 {
-	return strcasecmp(x, y) == 0;
+	return (x == y) || (x && y && strcasecmp(x, y) == 0);
 }
 
 /**
@@ -59,7 +59,7 @@ static inline bool strcaseeq(const char *x, const char *y)
  */
 static inline bool strncaseeq(const char *x, const char *y, size_t len)
 {
-	return strncasecmp(x, y, len) == 0;
+	return (x == y) || (x && y && strncasecmp(x, y, len) == 0);
 }
 
 /**

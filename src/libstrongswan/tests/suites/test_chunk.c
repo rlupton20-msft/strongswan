@@ -1,7 +1,7 @@
 /*
  * Copyright (C) 2013 Tobias Brunner
  * Copyright (C) 2008 Martin Willi
- * Hochschule fuer Technik Rapperswil
+ * HSR Hochschule fuer Technik Rapperswil
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -316,11 +316,11 @@ START_TEST(test_chunk_skip)
 	foobar = chunk_from_str("foobar");
 	a = foobar;
 	a = chunk_skip(a, 0);
-	ck_assert(chunk_equals(a, foobar));
+	ck_assert_chunk_eq(a, foobar);
 	a = chunk_skip(a, 1);
-	ck_assert(chunk_equals(a, chunk_from_str("oobar")));
+	ck_assert_chunk_eq(a, chunk_from_str("oobar"));
 	a = chunk_skip(a, 2);
-	ck_assert(chunk_equals(a, chunk_from_str("bar")));
+	ck_assert_chunk_eq(a, chunk_from_str("bar"));
 	a = chunk_skip(a, 3);
 	assert_chunk_empty(a);
 
@@ -338,20 +338,24 @@ START_TEST(test_chunk_skip_zero)
 {
 	chunk_t foobar, a;
 
-	a = chunk_empty;
-	a = chunk_skip_zero(a);
+	a = chunk_skip_zero(chunk_empty);
 	assert_chunk_empty(a);
 
 	foobar = chunk_from_str("foobar");
-	a = foobar;
-	a = chunk_skip_zero(a);
-	ck_assert(chunk_equals(a, foobar));
+	a = chunk_skip_zero(foobar);
+	ck_assert_chunk_eq(a, foobar);
 
-	a = chunk_from_chars(0x00, 0xaa, 0xbb, 0xcc);
+	foobar = chunk_from_chars(0x00);
+	a = chunk_skip_zero(foobar);
+	ck_assert_chunk_eq(a, foobar);
+
+	a = chunk_skip_zero(chunk_from_chars(0x00, 0xaa, 0xbb, 0xcc));
+	ck_assert_chunk_eq(a, chunk_from_chars(0xaa, 0xbb, 0xcc));
 	a = chunk_skip_zero(a);
-	ck_assert(chunk_equals(a, chunk_from_chars(0xaa, 0xbb, 0xcc)));
-	a = chunk_skip_zero(a);
-	ck_assert(chunk_equals(a, chunk_from_chars(0xaa, 0xbb, 0xcc)));
+	ck_assert_chunk_eq(a, chunk_from_chars(0xaa, 0xbb, 0xcc));
+
+	a = chunk_skip_zero(chunk_from_chars(0x00, 0x00, 0xaa, 0xbb, 0xcc));
+	ck_assert_chunk_eq(a, chunk_from_chars(0xaa, 0xbb, 0xcc));
 }
 END_TEST
 
@@ -393,15 +397,15 @@ START_TEST(test_base16)
 		{FALSE, "fooba", "666f6f6261"},
 		{FALSE, "foobar", "666f6f626172"},
 	};
-	testdata_t test_colon[] = {
-		{TRUE,  "", ""},
-		{TRUE,  "f", "66"},
+	testdata_t test_prefix_colon[] = {
+		{TRUE,  "", "0x"},
+		{TRUE,  "f", "0x66"},
 		{TRUE,  "fo", "66:6F"},
-		{TRUE,  "foo", "66:6F:6F"},
+		{TRUE,  "foo", "0x66:6F:6F"},
 		{FALSE, "foob", "66:6f:6f:62"},
-		{FALSE, "fooba", "66:6f:6f:62:61"},
+		{FALSE, "fooba", "0x66:6f:6f:62:61"},
 		{FALSE, "foobar", "66:6f:6f:62:61:72"},
-		{FALSE, "foobar", "66:6f6f:6261:72"},
+		{FALSE, "foobar", "0x66:6f6f:6261:72"},
 	};
 	int i;
 
@@ -426,14 +430,15 @@ START_TEST(test_base16)
 		free(out.ptr);
 	}
 
-	for (i = 0; i < countof(test_colon); i++)
+	for (i = 0; i < countof(test_prefix_colon); i++)
 	{
 		chunk_t out;
 
-		out = chunk_from_hex(chunk_create(test_colon[i].out, strlen(test_colon[i].out)), NULL);
-		fail_unless(strneq(out.ptr, test_colon[i].in, out.len),
+		out = chunk_from_hex(chunk_create(test_prefix_colon[i].out,
+							 strlen(test_prefix_colon[i].out)), NULL);
+		fail_unless(strneq(out.ptr, test_prefix_colon[i].in, out.len),
 					"base16 conversion error - should '%s', is %#B",
-					test_colon[i].in, &out);
+					test_prefix_colon[i].in, &out);
 		free(out.ptr);
 	}
 }
@@ -565,6 +570,40 @@ START_TEST(test_increment)
 	ck_assert(overflow == increment_data[_i].overflow);
 	ck_assert(!increment_data[_i].out.ptr ||
 			  chunk_equals(chunk, increment_data[_i].out));
+}
+END_TEST
+
+/*******************************************************************************
+ * chunk_copy_pad tests
+ */
+
+static struct {
+	size_t len;
+	u_char chr;
+	chunk_t src;
+	chunk_t exp;
+} copy_pad_data[] = {
+	{0, 0x00, { NULL, 0 }, { NULL, 0 }},
+	{4, 0x00, { NULL, 0 }, chunk_from_chars(0x00,0x00,0x00,0x00)},
+	{0, 0x00, chunk_from_chars(0x01), { NULL, 0 }},
+	{1, 0x00, chunk_from_chars(0x01), chunk_from_chars(0x01)},
+	{2, 0x00, chunk_from_chars(0x01), chunk_from_chars(0x00,0x01)},
+	{3, 0x00, chunk_from_chars(0x01), chunk_from_chars(0x00,0x00,0x01)},
+	{4, 0x00, chunk_from_chars(0x01), chunk_from_chars(0x00,0x00,0x00,0x01)},
+	{4, 0x02, chunk_from_chars(0x01), chunk_from_chars(0x02,0x02,0x02,0x01)},
+	{1, 0x00, chunk_from_chars(0x01,0x02,0x03,0x04), chunk_from_chars(0x04)},
+	{2, 0x00, chunk_from_chars(0x01,0x02,0x03,0x04), chunk_from_chars(0x03,0x04)},
+	{3, 0x00, chunk_from_chars(0x01,0x02,0x03,0x04), chunk_from_chars(0x02,0x03,0x04)},
+	{4, 0x00, chunk_from_chars(0x01,0x02,0x03,0x04), chunk_from_chars(0x01,0x02,0x03,0x04)},
+};
+
+START_TEST(test_copy_pad)
+{
+	chunk_t chunk;
+
+	chunk = chunk_copy_pad(chunk_alloca(copy_pad_data[_i].len),
+						   copy_pad_data[_i].src, copy_pad_data[_i].chr);
+	ck_assert_chunk_eq(chunk, copy_pad_data[_i].exp);
 }
 END_TEST
 
@@ -736,7 +775,7 @@ START_TEST(test_chunk_mac)
 {
 	chunk_t in;
 	u_char key[16];
-	u_int64_t out;
+	uint64_t out;
 	int i, count;
 
 	count = countof(sip_vectors);
@@ -765,7 +804,7 @@ END_TEST
 START_TEST(test_chunk_hash)
 {
 	chunk_t chunk;
-	u_int32_t hash_a, hash_b, hash_c;
+	uint32_t hash_a, hash_b, hash_c;
 
 	chunk = chunk_from_str("asdf");
 
@@ -787,7 +826,7 @@ END_TEST
 START_TEST(test_chunk_hash_static)
 {
 	chunk_t in;
-	u_int32_t out, hash_a, hash_b, hash_inc = 0x7b891a95;
+	uint32_t out, hash_a, hash_b, hash_inc = 0x7b891a95;
 	int i, count;
 
 	count = countof(sip_vectors);
@@ -813,7 +852,7 @@ END_TEST
  * test for chunk_internet_checksum[_inc]()
  */
 
-static inline u_int16_t compensate_alignment(u_int16_t val)
+static inline uint16_t compensate_alignment(uint16_t val)
 {
 	return ((val & 0xff) << 8) | (val >> 8);
 }
@@ -821,7 +860,7 @@ static inline u_int16_t compensate_alignment(u_int16_t val)
 START_TEST(test_chunk_internet_checksum)
 {
 	chunk_t chunk;
-	u_int16_t sum;
+	uint16_t sum;
 
 	chunk = chunk_from_chars(0x45,0x00,0x00,0x30,0x44,0x22,0x40,0x00,0x80,0x06,
 							 0x00,0x00,0x8c,0x7c,0x19,0xac,0xae,0x24,0x1e,0x2b);
@@ -1069,6 +1108,10 @@ Suite *chunk_suite_create()
 
 	tc = tcase_create("chunk_increment");
 	tcase_add_loop_test(tc, test_increment, 0, countof(increment_data));
+	suite_add_tcase(s, tc);
+
+	tc = tcase_create("chunk_copy_pad");
+	tcase_add_loop_test(tc, test_copy_pad, 0, countof(copy_pad_data));
 	suite_add_tcase(s, tc);
 
 	tc = tcase_create("chunk_printable");

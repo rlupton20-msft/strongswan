@@ -2,7 +2,7 @@
  * Copyright (C) 2008 Thomas Kallenberg
  * Copyright (C) 2008 Tobias Brunner
  * Copyright (C) 2008 Martin Willi
- * Hochschule fuer Technik Rapperswil
+ * HSR Hochschule fuer Technik Rapperswil
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -118,28 +118,47 @@ static u_int create_rekey(char *string)
 }
 
 METHOD(enumerator_t, peer_enumerator_enumerate, bool,
-	peer_enumerator_t *this, peer_cfg_t **cfg)
+	peer_enumerator_t *this, va_list args)
 {
 	char *name, *ike_proposal, *esp_proposal, *ike_rekey, *esp_rekey;
-	char *local_id, *local_addr, *local_net;
-	char *remote_id, *remote_addr, *remote_net;
+	char *local_id, *local_net, *remote_id, *remote_net;
+	peer_cfg_t **cfg;
 	child_cfg_t *child_cfg;
 	ike_cfg_t *ike_cfg;
 	auth_cfg_t *auth;
-	lifetime_cfg_t lifetime = {
-		.time = {
-			.life = create_rekey(esp_rekey) + 300,
-			.rekey = create_rekey(esp_rekey),
-			.jitter = 300
-		}
+	ike_cfg_create_t ike = {
+		.version = IKEV2,
+		.local = "0.0.0.0",
+		.local_port = charon->socket->get_port(charon->socket, FALSE),
+		.remote = "0.0.0.0",
+		.remote_port = IKEV2_UDP_PORT,
+		.no_certreq = TRUE,
 	};
+	peer_cfg_create_t peer = {
+		.cert_policy = CERT_SEND_IF_ASKED,
+		.unique = UNIQUE_NO,
+		.keyingtries = 1,
+		.jitter_time = 1800,
+		.over_time = 900,
+		.dpd = 60,
+	};
+	child_cfg_create_t child = {
+		.lifetime = {
+			.time = {
+				.life = create_rekey(esp_rekey) + 300,
+				.rekey = create_rekey(esp_rekey),
+				.jitter = 300
+			},
+		},
+		.mode = MODE_TUNNEL,
+	};
+
+	VA_ARGS_VGET(args, cfg);
 
 	/* defaults */
 	name = "unnamed";
 	local_id = NULL;
 	remote_id = NULL;
-	local_addr = "0.0.0.0";
-	remote_addr = "0.0.0.0";
 	local_net = NULL;
 	remote_net = NULL;
 	ike_proposal = NULL;
@@ -148,22 +167,15 @@ METHOD(enumerator_t, peer_enumerator_enumerate, bool,
 	esp_rekey = NULL;
 
 	if (this->inner->enumerate(this->inner, &name, &local_id, &remote_id,
-			&local_addr, &remote_addr, &local_net, &remote_net,
+			&ike.local, &ike.remote, &local_net, &remote_net,
 			&ike_proposal, &esp_proposal, &ike_rekey, &esp_rekey))
 	{
+
 		DESTROY_IF(this->peer_cfg);
-		ike_cfg = ike_cfg_create(IKEV2, FALSE, FALSE, local_addr,
-								 charon->socket->get_port(charon->socket, FALSE),
-								 remote_addr, IKEV2_UDP_PORT,
-								 FRAGMENTATION_NO, 0);
+		ike_cfg = ike_cfg_create(&ike);
 		ike_cfg->add_proposal(ike_cfg, create_proposal(ike_proposal, PROTO_IKE));
-		this->peer_cfg = peer_cfg_create(
-					name, ike_cfg, CERT_SEND_IF_ASKED, UNIQUE_NO,
-					1, create_rekey(ike_rekey), 0,  /* keytries, rekey, reauth */
-					1800, 900,						/* jitter, overtime */
-					TRUE, FALSE, TRUE,			/* mobike, aggressive, pull */
-					60, 0,						/* DPD delay, timeout */
-					FALSE, NULL, NULL);			/* mediation, med by, peer id */
+		peer.rekey_time = create_rekey(ike_rekey);
+		this->peer_cfg = peer_cfg_create(name, ike_cfg, &peer);
 		auth = auth_cfg_create();
 		auth->add(auth, AUTH_RULE_AUTH_CLASS, AUTH_CLASS_PSK);
 		auth->add(auth, AUTH_RULE_IDENTITY,
@@ -179,9 +191,7 @@ METHOD(enumerator_t, peer_enumerator_enumerate, bool,
 		}
 		this->peer_cfg->add_auth_cfg(this->peer_cfg, auth, FALSE);
 
-		child_cfg = child_cfg_create(name, &lifetime, NULL, TRUE, MODE_TUNNEL,
-									 ACTION_NONE, ACTION_NONE, ACTION_NONE,
-									 FALSE, 0, 0, NULL, NULL, 0);
+		child_cfg = child_cfg_create(name, &child);
 		child_cfg->add_proposal(child_cfg, create_proposal(esp_proposal, PROTO_ESP));
 		child_cfg->add_traffic_selector(child_cfg, TRUE, create_ts(local_net));
 		child_cfg->add_traffic_selector(child_cfg, FALSE, create_ts(remote_net));
@@ -208,7 +218,8 @@ METHOD(backend_t, create_peer_cfg_enumerator, enumerator_t*,
 
 	INIT(e,
 		.public = {
-			.enumerate = (void*)_peer_enumerator_enumerate,
+			.enumerate = enumerator_enumerate_default,
+			.venumerate = _peer_enumerator_enumerate,
 			.destroy = _peer_enumerator_destroy,
 		},
 		.inner = this->parser->create_section_enumerator(this->parser,
@@ -237,23 +248,29 @@ typedef struct {
 } ike_enumerator_t;
 
 METHOD(enumerator_t, ike_enumerator_enumerate, bool,
-	ike_enumerator_t *this, ike_cfg_t **cfg)
+	ike_enumerator_t *this, va_list args)
 {
-	char *local_addr, *remote_addr, *ike_proposal;
+	ike_cfg_t **cfg;
+	ike_cfg_create_t ike = {
+		.version = IKEV2,
+		.local = "0.0.0.0",
+		.local_port = charon->socket->get_port(charon->socket, FALSE),
+		.remote = "0.0.0.0",
+		.remote_port = IKEV2_UDP_PORT,
+		.no_certreq = TRUE,
+	};
+	char *ike_proposal;
+
+	VA_ARGS_VGET(args, cfg);
 
 	/* defaults */
-	local_addr = "0.0.0.0";
-	remote_addr = "0.0.0.0";
 	ike_proposal = NULL;
 
 	if (this->inner->enumerate(this->inner, NULL,
-							   &local_addr, &remote_addr, &ike_proposal))
+							   &ike.local, &ike.remote, &ike_proposal))
 	{
 		DESTROY_IF(this->ike_cfg);
-		this->ike_cfg = ike_cfg_create(IKEV2, FALSE, FALSE, local_addr,
-								charon->socket->get_port(charon->socket, FALSE),
-								remote_addr, IKEV2_UDP_PORT,
-								FRAGMENTATION_NO, 0);
+		this->ike_cfg = ike_cfg_create(&ike);
 		this->ike_cfg->add_proposal(this->ike_cfg,
 									create_proposal(ike_proposal, PROTO_IKE));
 
@@ -278,7 +295,8 @@ METHOD(backend_t, create_ike_cfg_enumerator, enumerator_t*,
 
 	INIT(e,
 		.public = {
-			.enumerate = (void*)_ike_enumerator_enumerate,
+			.enumerate = enumerator_enumerate_default,
+			.venumerate = _ike_enumerator_enumerate,
 			.destroy = _ike_enumerator_destroy,
 		},
 		.inner = this->parser->create_section_enumerator(this->parser,

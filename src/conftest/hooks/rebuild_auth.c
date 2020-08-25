@@ -67,7 +67,7 @@ static bool rebuild_auth(private_rebuild_auth_t *this, ike_sa_t *ike_sa,
 	char reserved[3];
 	generator_t *generator;
 	chunk_t data;
-	u_int32_t *lenpos;
+	uint32_t *lenpos;
 
 	payload = message->get_payload(message,
 					message->get_request(message) ? PLV2_ID_INITIATOR : PLV2_ID_RESPONDER);
@@ -136,14 +136,14 @@ static bool rebuild_auth(private_rebuild_auth_t *this, ike_sa_t *ike_sa,
 			return FALSE;
 	}
 	keymat = (keymat_v2_t*)ike_sa->get_keymat(ike_sa);
-	if (!keymat->get_auth_octets(keymat, FALSE, this->ike_init,
-								 this->nonce, id, reserved, &octets))
+	if (!keymat->get_auth_octets(keymat, FALSE, this->ike_init, this->nonce,
+								 chunk_empty, id, reserved, &octets, NULL))
 	{
 		private->destroy(private);
 		id->destroy(id);
 		return FALSE;
 	}
-	if (!private->sign(private, scheme, octets, &auth_data))
+	if (!private->sign(private, scheme, NULL, octets, &auth_data))
 	{
 		chunk_free(&octets);
 		private->destroy(private);

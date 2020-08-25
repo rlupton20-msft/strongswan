@@ -1,6 +1,6 @@
 /*
  * Copyright (C) 2015 Tobias Brunner
- * Hochschule fuer Technik Rapperswil
+ * HSR Hochschule fuer Technik Rapperswil
  *
  * Copyright (C) 2011 Martin Willi
  * Copyright (C) 2011 revosec AG
@@ -81,7 +81,7 @@ METHOD(task_t, process_r, status_t,
 	payload_t *payload;
 	delete_payload_t *delete_payload;
 	ike_sa_id_t *id;
-	u_int64_t spi_i, spi_r;
+	uint64_t spi_i, spi_r;
 	bool found = FALSE;
 
 	/* some peers send DELETE payloads for other IKE_SAs, e.g. those for expired

@@ -117,7 +117,7 @@ static job_requeue_t rekey_child(char *config)
 	enumerator_t *enumerator, *children;
 	ike_sa_t *ike_sa;
 	child_sa_t *child_sa;
-	u_int32_t spi, proto;
+	uint32_t spi, proto;
 	host_t *dst = NULL;
 
 	enumerator = charon->controller->create_ike_sa_enumerator(
@@ -209,7 +209,8 @@ static job_requeue_t close_ike(char *config)
 	if (id)
 	{
 		DBG1(DBG_CFG, "closing IKE_SA '%s'", config);
-		charon->controller->terminate_ike(charon->controller, id, NULL, NULL, 0);
+		charon->controller->terminate_ike(charon->controller, id, FALSE, NULL,
+										  NULL, 0);
 	}
 	else
 	{

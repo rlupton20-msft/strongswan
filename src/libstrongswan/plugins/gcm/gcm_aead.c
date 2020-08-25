@@ -62,16 +62,16 @@ struct private_gcm_aead_t {
 };
 
 /**
- * Find a suiteable word size and network order conversion functions
+ * Find a suitable word size and network order conversion functions
  */
 #if ULONG_MAX == 18446744073709551615UL && defined(htobe64)
 #	define htobeword htobe64
 #	define bewordtoh be64toh
-#	define SHIFT_WORD_TYPE u_int64_t
+#	define SHIFT_WORD_TYPE uint64_t
 #else
 #	define htobeword htonl
 #	define bewordtoh ntohl
-#	define SHIFT_WORD_TYPE u_int32_t
+#	define SHIFT_WORD_TYPE uint32_t
 #endif
 
 /**

@@ -29,7 +29,7 @@ typedef struct private_ita_attr_settings_t private_ita_attr_settings_t;
 typedef struct entry_t entry_t;
 
 /**
- * Contains a settins name/value pair
+ * Contains a settings name/value pair
  */
 struct entry_t {
 	char *name;
@@ -169,10 +169,10 @@ METHOD(pa_tnc_attr_t, build, void,
 }
 
 METHOD(pa_tnc_attr_t, process, status_t,
-	private_ita_attr_settings_t *this, u_int32_t *offset)
+	private_ita_attr_settings_t *this, uint32_t *offset)
 {
 	bio_reader_t *reader;
-	u_int32_t count;
+	uint32_t count;
 	chunk_t name, value;
 	entry_t *entry;
 	status_t status = FAILED;
@@ -262,22 +262,29 @@ METHOD(ita_attr_settings_t, add, void,
 	this->list->insert_last(this->list, entry);
 }
 
-/**
- * Enumerate name/value pairs
- */
-static bool entry_filter(void *null, entry_t **entry, char **name,
-						 void *i2, chunk_t *value)
+CALLBACK(entry_filter, bool,
+	void *null, enumerator_t *orig, va_list args)
 {
-	*name = (*entry)->name;
-	*value = (*entry)->value;
-	return TRUE;
+	entry_t *entry;
+	chunk_t *value;
+	char **name;
+
+	VA_ARGS_VGET(args, name, value);
+
+	while (orig->enumerate(orig, &entry))
+	{
+		*name = entry->name;
+		*value = entry->value;
+		return TRUE;
+	}
+	return FALSE;
 }
 
 METHOD(ita_attr_settings_t, create_enumerator, enumerator_t*,
 	private_ita_attr_settings_t *this)
 {
 	return enumerator_create_filter(this->list->create_enumerator(this->list),
-								   (void*)entry_filter, NULL, NULL);
+									entry_filter, NULL, NULL);
 }
 
 /**

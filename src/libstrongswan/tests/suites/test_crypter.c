@@ -36,7 +36,8 @@ static crypter_oid_t oids[] = {
 	{ OID_AES256_CBC, ENCR_AES_CBC, 256 },
 	{ OID_CAMELLIA128_CBC, ENCR_CAMELLIA_CBC, 128 },
 	{ OID_CAMELLIA192_CBC, ENCR_CAMELLIA_CBC, 192 },
-	{ OID_CAMELLIA256_CBC, ENCR_CAMELLIA_CBC, 256 }
+	{ OID_CAMELLIA256_CBC, ENCR_CAMELLIA_CBC, 256 },
+	{ OID_BLOWFISH_CBC, ENCR_BLOWFISH, 0 }
 };
 
 START_TEST(test_crypter_from_oid)
@@ -77,7 +78,7 @@ static crypter_aead_t aead[] = {
 	{ ENCR_AES_CBC, FALSE },
 	{ ENCR_CAMELLIA_CBC, FALSE }
 };
-     
+
 START_TEST(test_crypter_is_aead)
 {
 	ck_assert(encryption_algorithm_is_aead(aead[_i].alg) == aead[_i].is_aead);

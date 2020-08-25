@@ -1,6 +1,6 @@
 /*
  * Copyright (C) 2012 Adrian-Ken Rueegsegger
- * Hochschule fuer Technik Rapperswil
+ * HSR Hochschule fuer Technik Rapperswil
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -38,7 +38,7 @@ struct nonce_gen_t {
 	 * @return			TRUE if nonce allocation was successful, FALSE otherwise
 	 */
 	bool (*get_nonce)(nonce_gen_t *this, size_t size,
-					  u_int8_t *buffer) __attribute__((warn_unused_result));
+					  uint8_t *buffer) __attribute__((warn_unused_result));
 
 	/**
 	 * Generates a nonce and allocates space for it.

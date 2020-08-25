@@ -2,7 +2,7 @@
  * Copyright (C) 2005-2010 Martin Willi
  * Copyright (C) 2010 revosec AG
  * Copyright (C) 2005 Jan Hutter
- * Hochschule fuer Technik Rapperswil
+ * HSR Hochschule fuer Technik Rapperswil
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -35,7 +35,7 @@ struct private_auth_payload_t {
 	/**
 	 * Next payload type.
 	 */
-	u_int8_t  next_payload;
+	uint8_t  next_payload;
 
 	/**
 	 * Critical flag.
@@ -50,17 +50,17 @@ struct private_auth_payload_t {
 	/**
 	 * Reserved bytes
 	 */
-	u_int8_t reserved_byte[3];
+	uint8_t reserved_byte[3];
 
 	/**
 	 * Length of this payload.
 	 */
-	u_int16_t payload_length;
+	uint16_t payload_length;
 
 	/**
 	 * Method of the AUTH Data.
 	 */
-	u_int8_t auth_method;
+	uint8_t auth_method;
 
 	/**
 	 * The contained auth data value.

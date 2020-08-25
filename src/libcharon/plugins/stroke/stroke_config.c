@@ -1,7 +1,7 @@
 /*
  * Copyright (C) 2012-2014 Tobias Brunner
  * Copyright (C) 2008 Martin Willi
- * Hochschule fuer Technik Rapperswil
+ * HSR Hochschule fuer Technik Rapperswil
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -68,13 +68,20 @@ METHOD(backend_t, create_peer_cfg_enumerator, enumerator_t*,
 									 (void*)this->mutex->unlock, this->mutex);
 }
 
-/**
- * filter function for ike configs
- */
-static bool ike_filter(void *data, peer_cfg_t **in, ike_cfg_t **out)
+CALLBACK(ike_filter, bool,
+	void *data, enumerator_t *orig, va_list args)
 {
-	*out = (*in)->get_ike_cfg(*in);
-	return TRUE;
+	peer_cfg_t *cfg;
+	ike_cfg_t **out;
+
+	VA_ARGS_VGET(args, out);
+
+	if (orig->enumerate(orig, &cfg))
+	{
+		*out = cfg->get_ike_cfg(cfg);
+		return TRUE;
+	}
+	return FALSE;
 }
 
 METHOD(backend_t, create_ike_cfg_enumerator, enumerator_t*,
@@ -82,7 +89,7 @@ METHOD(backend_t, create_ike_cfg_enumerator, enumerator_t*,
 {
 	this->mutex->lock(this->mutex);
 	return enumerator_create_filter(this->list->create_enumerator(this->list),
-									(void*)ike_filter, this->mutex,
+									ike_filter, this->mutex,
 									(void*)this->mutex->unlock);
 }
 
@@ -129,7 +136,7 @@ METHOD(backend_t, get_peer_cfg_by_name, peer_cfg_t*,
 /**
  * parse a proposal string, either into ike_cfg or child_cfg
  */
-static void add_proposals(private_stroke_config_t *this, char *string,
+static bool add_proposals(private_stroke_config_t *this, char *string,
 				ike_cfg_t *ike_cfg, child_cfg_t *child_cfg, protocol_id_t proto)
 {
 	if (string)
@@ -163,10 +170,11 @@ static void add_proposals(private_stroke_config_t *this, char *string,
 				continue;
 			}
 			DBG1(DBG_CFG, "skipped invalid proposal string: %s", single);
+			return FALSE;
 		}
 		if (strict)
 		{
-			return;
+			return TRUE;
 		}
 		/* add default porposal to the end if not strict */
 	}
@@ -180,6 +188,7 @@ static void add_proposals(private_stroke_config_t *this, char *string,
 		child_cfg->add_proposal(child_cfg, proposal_create_default(proto));
 		child_cfg->add_proposal(child_cfg, proposal_create_default_aead(proto));
 	}
+	return TRUE;
 }
 
 /**
@@ -251,38 +260,47 @@ static void swap_ends(stroke_msg_t *msg)
  */
 static ike_cfg_t *build_ike_cfg(private_stroke_config_t *this, stroke_msg_t *msg)
 {
+	ike_cfg_create_t ike;
 	ike_cfg_t *ike_cfg;
-	u_int16_t ikeport;
 	char me[256], other[256];
 
 	swap_ends(msg);
 
+	ike = (ike_cfg_create_t){
+		.version = msg->add_conn.version,
+		.local = msg->add_conn.me.address,
+		.local_port = msg->add_conn.me.ikeport,
+		.remote = msg->add_conn.other.address,
+		.remote_port = msg->add_conn.other.ikeport,
+		.no_certreq = msg->add_conn.other.sendcert == CERT_NEVER_SEND,
+		.force_encap = msg->add_conn.force_encap,
+		.fragmentation = msg->add_conn.fragmentation,
+		.dscp = msg->add_conn.ikedscp,
+	};
 	if (msg->add_conn.me.allow_any)
 	{
 		snprintf(me, sizeof(me), "%s,0.0.0.0/0,::/0",
 				 msg->add_conn.me.address);
+		ike.local = me;
 	}
 	if (msg->add_conn.other.allow_any)
 	{
 		snprintf(other, sizeof(other), "%s,0.0.0.0/0,::/0",
 				 msg->add_conn.other.address);
+		ike.remote = other;
 	}
-	ikeport = msg->add_conn.me.ikeport;
-	ikeport = (ikeport == IKEV2_UDP_PORT) ?
-			   charon->socket->get_port(charon->socket, FALSE) : ikeport;
-	ike_cfg = ike_cfg_create(msg->add_conn.version,
-							 msg->add_conn.other.sendcert != CERT_NEVER_SEND,
-							 msg->add_conn.force_encap,
-							 msg->add_conn.me.allow_any ?
-								me : msg->add_conn.me.address,
-							 ikeport,
-							 msg->add_conn.other.allow_any ?
-								other : msg->add_conn.other.address,
-							 msg->add_conn.other.ikeport,
-							 msg->add_conn.fragmentation,
-							 msg->add_conn.ikedscp);
+	if (ike.local_port == IKEV2_UDP_PORT)
+	{
+		ike.local_port = charon->socket->get_port(charon->socket, FALSE);
+	}
+	ike_cfg = ike_cfg_create(&ike);
 
-	add_proposals(this, msg->add_conn.algorithms.ike, ike_cfg, NULL, PROTO_IKE);
+	if (!add_proposals(this, msg->add_conn.algorithms.ike, ike_cfg,
+					   NULL, PROTO_IKE))
+	{
+		ike_cfg->destroy(ike_cfg);
+		return NULL;
+	}
 	return ike_cfg;
 }
 
@@ -407,10 +425,6 @@ static auth_cfg_t *build_auth_cfg(private_stroke_config_t *this,
 			certificate = this->cred->load_peer(this->cred, cert);
 			if (certificate)
 			{
-				if (local)
-				{
-					this->ca->check_for_hash_and_url(this->ca, certificate);
-				}
 				cfg->add(cfg, AUTH_RULE_SUBJECT_CERT, certificate);
 				if (!first)
 				{
@@ -505,7 +519,7 @@ static auth_cfg_t *build_auth_cfg(private_stroke_config_t *this,
 		enumerator->destroy(enumerator);
 	}
 
-	/* authentication metod (class, actually) */
+	/* authentication method (class, actually) */
 	if (strpfx(auth, "ike:") ||
 		strpfx(auth, "pubkey") ||
 		strpfx(auth, "rsa") ||
@@ -616,12 +630,17 @@ static mem_pool_t *create_pool_range(char *str)
 static peer_cfg_t *build_peer_cfg(private_stroke_config_t *this,
 								  stroke_msg_t *msg, ike_cfg_t *ike_cfg)
 {
-	identification_t *peer_id = NULL;
-	peer_cfg_t *mediated_by = NULL;
-	unique_policy_t unique;
-	u_int32_t rekey = 0, reauth = 0, over, jitter;
 	peer_cfg_t *peer_cfg;
 	auth_cfg_t *auth_cfg;
+	peer_cfg_create_t peer = {
+		.cert_policy = msg->add_conn.me.sendcert,
+		.keyingtries = msg->add_conn.rekey.tries,
+		.no_mobike = !msg->add_conn.mobike,
+		.aggressive = msg->add_conn.aggressive,
+		.push_mode = msg->add_conn.pushmode,
+		.dpd = msg->add_conn.dpd.delay,
+		.dpd_timeout = msg->add_conn.dpd.timeout,
+	};
 
 #ifdef ME
 	if (msg->add_conn.ikeme.mediation && msg->add_conn.ikeme.mediated_by)
@@ -633,80 +652,61 @@ static peer_cfg_t *build_peer_cfg(private_stroke_config_t *this,
 
 	if (msg->add_conn.ikeme.mediation)
 	{
+		peer.mediation = TRUE;
 		/* force unique connections for mediation connections */
 		msg->add_conn.unique = 1;
 	}
-
-	if (msg->add_conn.ikeme.mediated_by)
+	else if (msg->add_conn.ikeme.mediated_by)
 	{
-		mediated_by = charon->backends->get_peer_cfg_by_name(charon->backends,
-											msg->add_conn.ikeme.mediated_by);
-		if (!mediated_by)
-		{
-			DBG1(DBG_CFG, "mediation connection '%s' not found, aborting",
-				 msg->add_conn.ikeme.mediated_by);
-			return NULL;
-		}
-		if (!mediated_by->is_mediation(mediated_by))
-		{
-			DBG1(DBG_CFG, "connection '%s' as referred to by '%s' is "
-				 "no mediation connection, aborting",
-				 msg->add_conn.ikeme.mediated_by, msg->add_conn.name);
-			mediated_by->destroy(mediated_by);
-			return NULL;
-		}
+		peer.mediated_by = msg->add_conn.ikeme.mediated_by;
 		if (msg->add_conn.ikeme.peerid)
 		{
-			peer_id = identification_create_from_string(msg->add_conn.ikeme.peerid);
+			peer.peer_id = identification_create_from_string(
+												msg->add_conn.ikeme.peerid);
 		}
 		else if (msg->add_conn.other.id)
 		{
-			peer_id = identification_create_from_string(msg->add_conn.other.id);
+			peer.peer_id = identification_create_from_string(
+												msg->add_conn.other.id);
 		}
 	}
 #endif /* ME */
 
-	jitter = msg->add_conn.rekey.margin * msg->add_conn.rekey.fuzz / 100;
-	over = msg->add_conn.rekey.margin;
+	peer.jitter_time = msg->add_conn.rekey.margin * msg->add_conn.rekey.fuzz / 100;
+	peer.over_time = msg->add_conn.rekey.margin;
 	if (msg->add_conn.rekey.reauth)
 	{
-		reauth = msg->add_conn.rekey.ike_lifetime - over;
+		peer.reauth_time = msg->add_conn.rekey.ike_lifetime - peer.over_time;
 	}
 	else
 	{
-		rekey = msg->add_conn.rekey.ike_lifetime - over;
+		peer.rekey_time = msg->add_conn.rekey.ike_lifetime - peer.over_time;
 	}
 	switch (msg->add_conn.unique)
 	{
 		case 1: /* yes */
 		case 2: /* replace */
-			unique = UNIQUE_REPLACE;
+			peer.unique = UNIQUE_REPLACE;
 			break;
 		case 3: /* keep */
-			unique = UNIQUE_KEEP;
+			peer.unique = UNIQUE_KEEP;
 			break;
 		case 4: /* never */
-			unique = UNIQUE_NEVER;
+			peer.unique = UNIQUE_NEVER;
 			break;
 		default: /* no */
-			unique = UNIQUE_NO;
+			peer.unique = UNIQUE_NO;
 			break;
 	}
 	if (msg->add_conn.dpd.action == 0)
 	{	/* dpdaction=none disables DPD */
-		msg->add_conn.dpd.delay = 0;
+		peer.dpd = 0;
 	}
 
 	/* other.sourceip is managed in stroke_attributes. If it is set, we define
 	 * the pool name as the connection name, which the attribute provider
 	 * uses to serve pool addresses. */
-	peer_cfg = peer_cfg_create(msg->add_conn.name, ike_cfg,
-		msg->add_conn.me.sendcert, unique,
-		msg->add_conn.rekey.tries, rekey, reauth, jitter, over,
-		msg->add_conn.mobike, msg->add_conn.aggressive,
-		msg->add_conn.pushmode == 0,
-		msg->add_conn.dpd.delay, msg->add_conn.dpd.timeout,
-		msg->add_conn.ikeme.mediation, mediated_by, peer_id);
+	peer_cfg = peer_cfg_create(msg->add_conn.name, ike_cfg, &peer);
 
 	if (msg->add_conn.other.sourceip)
 	{
@@ -883,8 +883,8 @@ static peer_cfg_t *build_peer_cfg(private_stroke_config_t *this,
 /**
  * Parse a protoport specifier
  */
-static bool parse_protoport(char *token, u_int16_t *from_port,
-							u_int16_t *to_port, u_int8_t *protocol)
+static bool parse_protoport(char *token, uint16_t *from_port,
+							uint16_t *to_port, uint8_t *protocol)
 {
 	char *sep, *port = "", *endptr;
 	struct protoent *proto;
@@ -923,7 +923,7 @@ static bool parse_protoport(char *token, u_int16_t *from_port,
 			{
 				return FALSE;
 			}
-			*protocol = (u_int8_t)p;
+			*protocol = (uint8_t)p;
 		}
 	}
 	if (streq(port, "%any"))
@@ -977,73 +977,60 @@ static void add_ts(private_stroke_config_t *this,
 				   stroke_end_t *end, child_cfg_t *child_cfg, bool local)
 {
 	traffic_selector_t *ts;
+	bool ts_added = FALSE;
 
-	if (end->tohost)
+	if (end->subnets)
+	{
+		enumerator_t *enumerator;
+		char *subnet, *pos;
+		uint16_t from_port, to_port;
+		uint8_t proto;
+
+		enumerator = enumerator_create_token(end->subnets, ",", " ");
+		while (enumerator->enumerate(enumerator, &subnet))
+		{
+			from_port = end->from_port;
+			to_port = end->to_port;
+			proto = end->protocol;
+
+			pos = strchr(subnet, '[');
+			if (pos)
+			{
+				*(pos++) = '\0';
+				if (!parse_protoport(pos, &from_port, &to_port, &proto))
+				{
+					DBG1(DBG_CFG, "invalid proto/port: %s, skipped subnet",
+						 pos);
+					continue;
+				}
+			}
+			if (streq(subnet, "%dynamic"))
+			{
+				ts = traffic_selector_create_dynamic(proto,
+													 from_port, to_port);
+			}
+			else
+			{
+				ts = traffic_selector_create_from_cidr(subnet, proto,
+													   from_port, to_port);
+			}
+			if (ts)
+			{
+				child_cfg->add_traffic_selector(child_cfg, local, ts);
+				ts_added = TRUE;
+			}
+			else
+			{
+				DBG1(DBG_CFG, "invalid subnet: %s, skipped", subnet);
+			}
+		}
+		enumerator->destroy(enumerator);
+	}
+	if (!ts_added)
 	{
 		ts = traffic_selector_create_dynamic(end->protocol,
 											 end->from_port, end->to_port);
 		child_cfg->add_traffic_selector(child_cfg, local, ts);
-	}
-	else
-	{
-		if (!end->subnets)
-		{
-			host_t *net;
-
-			net = host_create_from_string(end->address, 0);
-			if (net)
-			{
-				ts = traffic_selector_create_from_subnet(net, 0, end->protocol,
-												end->from_port, end->to_port);
-				child_cfg->add_traffic_selector(child_cfg, local, ts);
-			}
-		}
-		else
-		{
-			enumerator_t *enumerator;
-			char *subnet, *pos;
-			u_int16_t from_port, to_port;
-			u_int8_t proto;
-
-			enumerator = enumerator_create_token(end->subnets, ",", " ");
-			while (enumerator->enumerate(enumerator, &subnet))
-			{
-				from_port = end->from_port;
-				to_port = end->to_port;
-				proto = end->protocol;
-
-				pos = strchr(subnet, '[');
-				if (pos)
-				{
-					*(pos++) = '\0';
-					if (!parse_protoport(pos, &from_port, &to_port, &proto))
-					{
-						DBG1(DBG_CFG, "invalid proto/port: %s, skipped subnet",
-							 pos);
-						continue;
-					}
-				}
-				if (streq(subnet, "%dynamic"))
-				{
-					ts = traffic_selector_create_dynamic(proto,
-														 from_port, to_port);
-				}
-				else
-				{
-					ts = traffic_selector_create_from_cidr(subnet, proto,
-														   from_port, to_port);
-				}
-				if (ts)
-				{
-					child_cfg->add_traffic_selector(child_cfg, local, ts);
-				}
-				else
-				{
-					DBG1(DBG_CFG, "invalid subnet: %s, skipped", subnet);
-				}
-			}
-			enumerator->destroy(enumerator);
-		}
 	}
 }
 
@@ -1070,57 +1057,69 @@ static child_cfg_t *build_child_cfg(private_stroke_config_t *this,
 									stroke_msg_t *msg)
 {
 	child_cfg_t *child_cfg;
-	lifetime_cfg_t lifetime = {
-		.time = {
-			.life = msg->add_conn.rekey.ipsec_lifetime,
-			.rekey = msg->add_conn.rekey.ipsec_lifetime - msg->add_conn.rekey.margin,
-			.jitter = msg->add_conn.rekey.margin * msg->add_conn.rekey.fuzz / 100
+	bool success;
+	child_cfg_create_t child = {
+		.lifetime = {
+			.time = {
+				.life = msg->add_conn.rekey.ipsec_lifetime,
+				.rekey = msg->add_conn.rekey.ipsec_lifetime - msg->add_conn.rekey.margin,
+				.jitter = msg->add_conn.rekey.margin * msg->add_conn.rekey.fuzz / 100
+			},
+			.bytes = {
+				.life = msg->add_conn.rekey.life_bytes,
+				.rekey = msg->add_conn.rekey.life_bytes - msg->add_conn.rekey.margin_bytes,
+				.jitter = msg->add_conn.rekey.margin_bytes * msg->add_conn.rekey.fuzz / 100
+			},
+			.packets = {
+				.life = msg->add_conn.rekey.life_packets,
+				.rekey = msg->add_conn.rekey.life_packets - msg->add_conn.rekey.margin_packets,
+				.jitter = msg->add_conn.rekey.margin_packets * msg->add_conn.rekey.fuzz / 100
+			},
 		},
-		.bytes = {
-			.life = msg->add_conn.rekey.life_bytes,
-			.rekey = msg->add_conn.rekey.life_bytes - msg->add_conn.rekey.margin_bytes,
-			.jitter = msg->add_conn.rekey.margin_bytes * msg->add_conn.rekey.fuzz / 100
+		.mark_in = {
+			.value = msg->add_conn.mark_in.value,
+			.mask = msg->add_conn.mark_in.mask
 		},
-		.packets = {
-			.life = msg->add_conn.rekey.life_packets,
-			.rekey = msg->add_conn.rekey.life_packets - msg->add_conn.rekey.margin_packets,
-			.jitter = msg->add_conn.rekey.margin_packets * msg->add_conn.rekey.fuzz / 100
-		}
-	};
-	mark_t mark_in = {
-		.value = msg->add_conn.mark_in.value,
-		.mask = msg->add_conn.mark_in.mask
-	};
-	mark_t mark_out = {
-		.value = msg->add_conn.mark_out.value,
-		.mask = msg->add_conn.mark_out.mask
+		.mark_out = {
+			.value = msg->add_conn.mark_out.value,
+			.mask = msg->add_conn.mark_out.mask
+		},
+		.reqid = msg->add_conn.reqid,
+		.mode = msg->add_conn.mode,
+		.options = (msg->add_conn.proxy_mode ? OPT_PROXY_MODE : 0) |
+				   (msg->add_conn.ipcomp ? OPT_IPCOMP : 0) |
+				   (msg->add_conn.me.hostaccess ? OPT_HOSTACCESS : 0) |
+				   (msg->add_conn.install_policy ? 0 : OPT_NO_POLICIES) |
+				   (msg->add_conn.sha256_96 ? OPT_SHA256_96 : 0),
+		.tfc = msg->add_conn.tfc,
+		.inactivity = msg->add_conn.inactivity,
+		.dpd_action = map_action(msg->add_conn.dpd.action),
+		.close_action = map_action(msg->add_conn.close_action),
+		.updown = msg->add_conn.me.updown,
 	};
 
-	child_cfg = child_cfg_create(
-				msg->add_conn.name, &lifetime, msg->add_conn.me.updown,
-				msg->add_conn.me.hostaccess, msg->add_conn.mode, ACTION_NONE,
-				map_action(msg->add_conn.dpd.action),
-				map_action(msg->add_conn.close_action), msg->add_conn.ipcomp,
-				msg->add_conn.inactivity, msg->add_conn.reqid,
-				&mark_in, &mark_out, msg->add_conn.tfc);
+	child_cfg = child_cfg_create(msg->add_conn.name, &child);
 	if (msg->add_conn.replay_window != -1)
 	{
 		child_cfg->set_replay_window(child_cfg, msg->add_conn.replay_window);
 	}
-	child_cfg->set_mipv6_options(child_cfg, msg->add_conn.proxy_mode,
-											msg->add_conn.install_policy);
 	add_ts(this, &msg->add_conn.me, child_cfg, TRUE);
 	add_ts(this, &msg->add_conn.other, child_cfg, FALSE);
 
 	if (msg->add_conn.algorithms.ah)
 	{
-		add_proposals(this, msg->add_conn.algorithms.ah,
-					  NULL, child_cfg, PROTO_AH);
+		success = add_proposals(this, msg->add_conn.algorithms.ah,
+								NULL, child_cfg, PROTO_AH);
 	}
 	else
 	{
-		add_proposals(this, msg->add_conn.algorithms.esp,
-					  NULL, child_cfg, PROTO_ESP);
+		success = add_proposals(this, msg->add_conn.algorithms.esp,
+								NULL, child_cfg, PROTO_ESP);
+	}
+	if (!success)
+	{
+		child_cfg->destroy(child_cfg);
+		return NULL;
 	}
 	return child_cfg;
 }

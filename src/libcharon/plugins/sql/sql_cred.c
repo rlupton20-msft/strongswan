@@ -1,7 +1,7 @@
 /*
- * Copyright (C) 2010 Tobias Brunner
+ * Copyright (C) 2010-2019 Tobias Brunner
  * Copyright (C) 2008 Martin Willi
- * Hochschule fuer Technik Rapperswil
+ * HSR Hochschule fuer Technik Rapperswil
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -52,10 +52,13 @@ typedef struct {
 } private_enumerator_t;
 
 METHOD(enumerator_t, private_enumerator_enumerate, bool,
-	   private_enumerator_t *this, private_key_t **key)
+	   private_enumerator_t *this, va_list args)
 {
+	private_key_t **key;
 	chunk_t blob;
 	int type;
+
+	VA_ARGS_VGET(args, key);
 
 	DESTROY_IF(this->current);
 	while (this->inner->enumerate(this->inner, &type, &blob))
@@ -88,7 +91,8 @@ METHOD(credential_set_t, create_private_enumerator, enumerator_t*,
 
 	INIT(e,
 		.public = {
-			.enumerate = (void*)_private_enumerator_enumerate,
+			.enumerate = enumerator_enumerate_default,
+			.venumerate = _private_enumerator_enumerate,
 			.destroy = _private_enumerator_destroy,
 		},
 	);
@@ -106,7 +110,8 @@ METHOD(credential_set_t, create_private_enumerator, enumerator_t*,
 	else
 	{
 		e->inner = this->db->query(this->db,
-				"SELECT type, data FROM private_keys WHERE (? OR type = ?)",
+				"SELECT p.type, p.data FROM private_keys AS p "
+				"WHERE (? OR p.type = ?)",
 				DB_INT, type == KEY_ANY, DB_INT, type,
 				DB_INT, DB_BLOB);
 	}
@@ -132,10 +137,13 @@ typedef struct {
 } cert_enumerator_t;
 
 METHOD(enumerator_t, cert_enumerator_enumerate, bool,
-	   cert_enumerator_t *this, certificate_t **cert)
+	   cert_enumerator_t *this, va_list args)
 {
+	certificate_t **cert;
 	chunk_t blob;
 	int type;
+
+	VA_ARGS_VGET(args, cert);
 
 	DESTROY_IF(this->current);
 	while (this->inner->enumerate(this->inner, &type, &blob))
@@ -169,7 +177,8 @@ METHOD(credential_set_t, create_cert_enumerator, enumerator_t*,
 
 	INIT(e,
 		.public = {
-			.enumerate = (void*)_cert_enumerator_enumerate,
+			.enumerate = enumerator_enumerate_default,
+			.venumerate = _cert_enumerator_enumerate,
 			.destroy = _cert_enumerator_destroy,
 		},
 	);
@@ -189,8 +198,8 @@ METHOD(credential_set_t, create_cert_enumerator, enumerator_t*,
 	else
 	{
 		e->inner = this->db->query(this->db,
-				"SELECT type, data FROM certificates WHERE "
-				"(? OR type = ?) AND (? OR keytype = ?)",
+				"SELECT c.type, c.data FROM certificates AS c WHERE "
+				"(? OR c.type = ?) AND (? OR c.keytype = ?)",
 				DB_INT, cert == CERT_ANY, DB_INT, cert,
 				DB_INT, key == KEY_ANY, DB_INT, key,
 				DB_INT, DB_BLOB);
@@ -212,20 +221,23 @@ typedef struct {
 	enumerator_t public;
 	/** inner SQL enumerator */
 	enumerator_t *inner;
-	/** own identity */
-	identification_t *me;
-	/** remote identity */
-	identification_t *other;
+	/** own identity is defined */
+	bool me_defined;
+	/** remote identity is defined */
+	bool other_defined;
 	/** currently enumerated private key */
 	shared_key_t *current;
 } shared_enumerator_t;
 
 METHOD(enumerator_t, shared_enumerator_enumerate, bool,
-	   shared_enumerator_t *this, shared_key_t **shared,
-	   id_match_t *me, id_match_t *other)
+	   shared_enumerator_t *this, va_list args)
 {
+	shared_key_t **shared;
+	id_match_t *me, *other;
 	chunk_t blob;
 	int type;
+
+	VA_ARGS_VGET(args, shared, me, other);
 
 	DESTROY_IF(this->current);
 	while (this->inner->enumerate(this->inner, &type, &blob))
@@ -236,11 +248,11 @@ METHOD(enumerator_t, shared_enumerator_enumerate, bool,
 			*shared = this->current;
 			if (me)
 			{
-				*me = this->me ? ID_MATCH_PERFECT : ID_MATCH_ANY;
+				*me = this->me_defined ? ID_MATCH_PERFECT : ID_MATCH_ANY;
 			}
 			if (other)
 			{
-				*other = this->other ? ID_MATCH_PERFECT : ID_MATCH_ANY;
+				*other = this->other_defined ? ID_MATCH_PERFECT : ID_MATCH_ANY;
 			}
 			return TRUE;
 		}
@@ -262,23 +274,29 @@ METHOD(credential_set_t, create_shared_enumerator, enumerator_t*,
 	   identification_t *me, identification_t *other)
 {
 	shared_enumerator_t *e;
+	bool me_defined, other_defined;
+
+	me_defined = me && me->get_type(me) != ID_ANY;
+	other_defined = other && other->get_type(other) != ID_ANY;
 
 	INIT(e,
 		.public = {
-			.enumerate = (void*)_shared_enumerator_enumerate,
+			.enumerate = enumerator_enumerate_default,
+			.venumerate = _shared_enumerator_enumerate,
 			.destroy = _shared_enumerator_destroy,
 		},
-		.me = me,
-		.other = other,
+		.me_defined = me_defined,
+		.other_defined = other_defined,
 	);
-	if (!me && !other)
+	if (!me_defined && !other_defined)
 	{
 		e->inner = this->db->query(this->db,
-				"SELECT type, data FROM shared_secrets WHERE  (? OR type = ?)",
+				"SELECT s.type, s.data FROM shared_secrets AS s "
+				"WHERE (? OR s.type = ?)",
 				DB_INT, type == SHARED_ANY, DB_INT, type,
 				DB_INT, DB_BLOB);
 	}
-	else if (me && other)
+	else if (me_defined && other_defined)
 	{
 		e->inner = this->db->query(this->db,
 				"SELECT s.type, s.data FROM shared_secrets AS s "
@@ -295,7 +313,7 @@ METHOD(credential_set_t, create_shared_enumerator, enumerator_t*,
 	}
 	else
 	{
-		identification_t *id = me ? me : other;
+		identification_t *id = me_defined ? me : other;
 
 		e->inner = this->db->query(this->db,
 				"SELECT s.type, s.data FROM shared_secrets AS s "
@@ -340,9 +358,11 @@ typedef enum {
 } cdp_type_t;
 
 METHOD(enumerator_t, cdp_enumerator_enumerate, bool,
-	   cdp_enumerator_t *this, char **uri)
+	   cdp_enumerator_t *this, va_list args)
 {
-	char *text;
+	char *text, **uri;
+
+	VA_ARGS_VGET(args, uri);
 
 	free(this->current);
 	while (this->inner->enumerate(this->inner, &text))
@@ -384,7 +404,8 @@ METHOD(credential_set_t, create_cdp_enumerator, enumerator_t*,
 	}
 	INIT(e,
 		.public = {
-			.enumerate = (void*)_cdp_enumerator_enumerate,
+			.enumerate = enumerator_enumerate_default,
+			.venumerate = _cdp_enumerator_enumerate,
 			.destroy = _cdp_enumerator_destroy,
 		},
 	);
@@ -452,4 +473,3 @@ sql_cred_t *sql_cred_create(database_t *db)
 
 	return &this->public;
 }
-

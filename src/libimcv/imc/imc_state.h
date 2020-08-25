@@ -72,14 +72,14 @@ struct imc_state_t {
 	 *
 	 * @param max_msg_len	maximum size of a PA-TNC message
 	 */
-	void (*set_max_msg_len)(imc_state_t *this, u_int32_t max_msg_len);
+	void (*set_max_msg_len)(imc_state_t *this, uint32_t max_msg_len);
 
 	/**
 	 * Get the maximum size of a PA-TNC message for this TNCCS connection
 	 *
 	 * @return				maximum size of a PA-TNC message
 	 */
-	u_int32_t (*get_max_msg_len)(imc_state_t *this);
+	uint32_t (*get_max_msg_len)(imc_state_t *this);
 
 	/**
 	 * Get attribute segmentation contracts associated with TNCCS Connection
@@ -92,8 +92,10 @@ struct imc_state_t {
 	 * Change the connection state
 	 *
 	 * @param new_state		new connection state
+	 * @return				old connection state
 	 */
-	void (*change_state)(imc_state_t *this, TNC_ConnectionState new_state);
+	TNC_ConnectionState (*change_state)(imc_state_t *this,
+						 TNC_ConnectionState new_state);
 
 	/**
 	 * Set the Assessment/Evaluation Result
@@ -113,6 +115,11 @@ struct imc_state_t {
 	 */
 	bool (*get_result)(imc_state_t *this, TNC_IMCID id,
 										  TNC_IMV_Evaluation_Result *result);
+
+	/**
+	 * Resets the state for a new measurement cycle triggered by a SRETRY batch
+	 */
+	void (*reset)(imc_state_t *this);
 
 	/**
 	 * Destroys an imc_state_t object

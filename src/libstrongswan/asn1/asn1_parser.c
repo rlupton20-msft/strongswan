@@ -111,7 +111,7 @@ METHOD(asn1_parser_t, iterate, bool,
 		}
 		else
 		{
- 			this->loopAddr[obj.level] = 0;		 /* exit loop */
+			this->loopAddr[obj.level] = 0;		 /* exit loop */
 
 			if (obj.flags & ASN1_CHOICE) /* end of choices */
 			{
@@ -249,7 +249,7 @@ METHOD(asn1_parser_t, iterate, bool,
 		}
 	}
 
- 	/* In case of a "CHOICE" start to scan for exactly one valid choice */
+	/* In case of a "CHOICE" start to scan for exactly one valid choice */
 	if (obj.flags & ASN1_CHOICE)
 	{
 		if (blob1->len == 0)

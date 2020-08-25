@@ -1,8 +1,8 @@
 /*
- * Copyright (C) 2008 Tobias Brunner
+ * Copyright (C) 2008-2019 Tobias Brunner
  * Copyright (C) 2005-2008 Martin Willi
  * Copyright (C) 2005 Jan Hutter
- * Hochschule fuer Technik Rapperswil
+ * HSR Hochschule fuer Technik Rapperswil
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -29,7 +29,7 @@
 #include <encoding/payloads/delete_payload.h>
 #include <processing/jobs/delete_ike_sa_job.h>
 #include <processing/jobs/inactivity_job.h>
-
+#include <processing/jobs/initiate_tasks_job.h>
 
 typedef struct private_child_create_t private_child_create_t;
 
@@ -151,37 +151,27 @@ struct private_child_create_t {
 	/**
 	 * Own allocated SPI
 	 */
-	u_int32_t my_spi;
+	uint32_t my_spi;
 
 	/**
 	 * SPI received in proposal
 	 */
-	u_int32_t other_spi;
+	uint32_t other_spi;
 
 	/**
 	 * Own allocated Compression Parameter Index (CPI)
 	 */
-	u_int16_t my_cpi;
+	uint16_t my_cpi;
 
 	/**
 	 * Other Compression Parameter Index (CPI), received via IPCOMP_SUPPORTED
 	 */
-	u_int16_t other_cpi;
+	uint16_t other_cpi;
 
 	/**
-	 * reqid to use if we are rekeying
+	 * Data collected to create the CHILD_SA
 	 */
-	u_int32_t reqid;
-
-	/**
-	 * Explicit inbound mark value
-	 */
-	u_int mark_in;
-
-	/**
-	 * Explicit outbound mark value
-	 */
-	u_int mark_out;
+	child_sa_create_t child;
 
 	/**
 	 * CHILD_SA which gets established
@@ -203,6 +193,28 @@ struct private_child_create_t {
 	 */
 	bool retry;
 };
+
+/**
+ * Schedule a retry if creating the CHILD_SA temporary failed
+ */
+static void schedule_delayed_retry(private_child_create_t *this)
+{
+	child_create_t *task;
+	uint32_t retry;
+
+	retry = RETRY_INTERVAL - (random() % RETRY_JITTER);
+
+	task = child_create_create(this->ike_sa,
+							   this->config->get_ref(this->config), FALSE,
+							   this->packet_tsi, this->packet_tsr);
+	task->use_reqid(task, this->child.reqid);
+	task->use_marks(task, this->child.mark_in, this->child.mark_out);
+	task->use_if_ids(task, this->child.if_id_in, this->child.if_id_out);
+
+	DBG1(DBG_IKE, "creating CHILD_SA failed, trying again in %d seconds",
+		 retry);
+	this->ike_sa->queue_task_delayed(this->ike_sa, (task_t*)task, retry);
+}
 
 /**
  * get the nonce from a message
@@ -258,11 +270,10 @@ static bool ts_list_is_host(linked_list_t *list, host_t *host)
 }
 
 /**
- * Allocate SPIs and update proposals
+ * Allocate local SPI
  */
 static bool allocate_spi(private_child_create_t *this)
 {
-	enumerator_t *enumerator;
 	proposal_t *proposal;
 
 	if (this->initiator)
@@ -281,24 +292,51 @@ static bool allocate_spi(private_child_create_t *this)
 		this->proto = this->proposal->get_protocol(this->proposal);
 	}
 	this->my_spi = this->child_sa->alloc_spi(this->child_sa, this->proto);
-	if (this->my_spi)
+	return this->my_spi != 0;
+}
+
+/**
+ * Update the proposals with the allocated SPIs as initiator and check the DH
+ * group and promote it if necessary
+ */
+static bool update_and_check_proposals(private_child_create_t *this)
+{
+	enumerator_t *enumerator;
+	proposal_t *proposal;
+	linked_list_t *other_dh_groups;
+	bool found = FALSE;
+
+	other_dh_groups = linked_list_create();
+	enumerator = this->proposals->create_enumerator(this->proposals);
+	while (enumerator->enumerate(enumerator, &proposal))
 	{
-		if (this->initiator)
-		{
-			enumerator = this->proposals->create_enumerator(this->proposals);
-			while (enumerator->enumerate(enumerator, &proposal))
+		proposal->set_spi(proposal, this->my_spi);
+
+		/* move the selected DH group to the front, if any */
+		if (this->dh_group != MODP_NONE)
+		{	/* proposals that don't contain the selected group are
+			 * moved to the back */
+			if (!proposal->promote_dh_group(proposal, this->dh_group))
 			{
-				proposal->set_spi(proposal, this->my_spi);
+				this->proposals->remove_at(this->proposals, enumerator);
+				other_dh_groups->insert_last(other_dh_groups, proposal);
 			}
-			enumerator->destroy(enumerator);
+			else
+			{
+				found = TRUE;
+			}
 		}
-		else
-		{
-			this->proposal->set_spi(this->proposal, this->my_spi);
-		}
-		return TRUE;
 	}
-	return FALSE;
+	enumerator->destroy(enumerator);
+	enumerator = other_dh_groups->create_enumerator(other_dh_groups);
+	while (enumerator->enumerate(enumerator, (void**)&proposal))
+	{	/* no need to remove from the list as we destroy it anyway*/
+		this->proposals->insert_last(this->proposals, proposal);
+	}
+	enumerator->destroy(enumerator);
+	other_dh_groups->destroy(other_dh_groups);
+
+	return this->dh_group == MODP_NONE || found;
 }
 
 /**
@@ -306,7 +344,7 @@ static bool allocate_spi(private_child_create_t *this)
  */
 static void schedule_inactivity_timeout(private_child_create_t *this)
 {
-	u_int32_t timeout, id;
+	uint32_t timeout, id;
 	bool close_ike;
 
 	timeout = this->config->get_inactivity(this->config);
@@ -377,7 +415,7 @@ static linked_list_t *get_dynamic_hosts(ike_sa_t *ike_sa, bool local)
 }
 
 /**
- * Substitude any host address with NATed address in traffic selector
+ * Substitute any host address with NATed address in traffic selector
  */
 static linked_list_t* get_transport_nat_ts(private_child_create_t *this,
 										   bool local, linked_list_t *in)
@@ -386,7 +424,7 @@ static linked_list_t* get_transport_nat_ts(private_child_create_t *this,
 	linked_list_t *out;
 	traffic_selector_t *ts;
 	host_t *ike, *first = NULL;
-	u_int8_t mask;
+	uint8_t mask;
 
 	if (local)
 	{
@@ -436,12 +474,14 @@ static linked_list_t* narrow_ts(private_child_create_t *this, bool local,
 		this->ike_sa->has_condition(this->ike_sa, cond))
 	{
 		nat = get_transport_nat_ts(this, local, in);
-		ts = this->config->get_traffic_selectors(this->config, local, nat, hosts);
+		ts = this->config->get_traffic_selectors(this->config, local, nat,
+												 hosts, TRUE);
 		nat->destroy_offset(nat, offsetof(traffic_selector_t, destroy));
 	}
 	else
 	{
-		ts = this->config->get_traffic_selectors(this->config, local, in, hosts);
+		ts = this->config->get_traffic_selectors(this->config, local, in,
+												 hosts, TRUE);
 	}
 
 	hosts->destroy(hosts);
@@ -450,21 +490,61 @@ static linked_list_t* narrow_ts(private_child_create_t *this, bool local,
 }
 
 /**
+ * Check if requested mode is acceptable
+ */
+static bool check_mode(private_child_create_t *this, host_t *i, host_t *r)
+{
+	switch (this->mode)
+	{
+		case MODE_TRANSPORT:
+			if (!this->config->has_option(this->config, OPT_PROXY_MODE) &&
+				   (!ts_list_is_host(this->tsi, i) ||
+					!ts_list_is_host(this->tsr, r))
+			   )
+			{
+				DBG1(DBG_IKE, "not using transport mode, not host-to-host");
+				return FALSE;
+			}
+			if (this->config->get_mode(this->config) != MODE_TRANSPORT)
+			{
+				return FALSE;
+			}
+			break;
+		case MODE_BEET:
+			if (!ts_list_is_host(this->tsi, NULL) ||
+				!ts_list_is_host(this->tsr, NULL))
+			{
+				DBG1(DBG_IKE, "not using BEET mode, not host-to-host");
+				return FALSE;
+			}
+			if (this->config->get_mode(this->config) != MODE_BEET)
+			{
+				return FALSE;
+			}
+			break;
+		default:
+			break;
+	}
+	return TRUE;
+}
+
+/**
  * Install a CHILD_SA for usage, return value:
  * - FAILED: no acceptable proposal
- * - INVALID_ARG: diffie hellman group inacceptable
- * - NOT_FOUND: TS inacceptable
+ * - INVALID_ARG: diffie hellman group unacceptable
+ * - NOT_FOUND: TS unacceptable
  */
 static status_t select_and_install(private_child_create_t *this,
 								   bool no_dh, bool ike_auth)
 {
 	status_t status, status_i, status_o;
+	child_sa_outbound_state_t out_state;
 	chunk_t nonce_i, nonce_r;
 	chunk_t encr_i = chunk_empty, encr_r = chunk_empty;
 	chunk_t integ_i = chunk_empty, integ_r = chunk_empty;
 	linked_list_t *my_ts, *other_ts;
 	host_t *me, *other;
-	bool private;
+	proposal_selection_flag_t flags = 0;
 
 	if (this->proposals == NULL)
 	{
@@ -480,9 +560,21 @@ static status_t select_and_install(private_child_create_t *this,
 	me = this->ike_sa->get_my_host(this->ike_sa);
 	other = this->ike_sa->get_other_host(this->ike_sa);
 
-	private = this->ike_sa->supports_extension(this->ike_sa, EXT_STRONGSWAN);
+	if (no_dh)
+	{
+		flags |= PROPOSAL_SKIP_DH;
+	}
+	if (!this->ike_sa->supports_extension(this->ike_sa, EXT_STRONGSWAN))
+	{
+		flags |= PROPOSAL_SKIP_PRIVATE;
+	}
+	if (!lib->settings->get_bool(lib->settings,
+							"%s.prefer_configured_proposals", TRUE, lib->ns))
+	{
+		flags |= PROPOSAL_PREFER_SUPPLIED;
+	}
 	this->proposal = this->config->select_proposal(this->config,
-											this->proposals, no_dh, private);
+												   this->proposals, flags);
 	if (this->proposal == NULL)
 	{
 		DBG1(DBG_IKE, "no acceptable proposal found");
@@ -492,21 +584,26 @@ static status_t select_and_install(private_child_create_t *this,
 	}
 	this->other_spi = this->proposal->get_spi(this->proposal);
 
-	if (!this->initiator && !allocate_spi(this))
-	{	/* responder has no SPI allocated yet */
-		DBG1(DBG_IKE, "allocating SPI failed");
-		return FAILED;
+	if (!this->initiator)
+	{
+		if (!allocate_spi(this))
+		{
+			/* responder has no SPI allocated yet */
+			DBG1(DBG_IKE, "allocating SPI failed");
+			return FAILED;
+		}
+		this->proposal->set_spi(this->proposal, this->my_spi);
 	}
 	this->child_sa->set_proposal(this->child_sa, this->proposal);
 
 	if (!this->proposal->has_dh_group(this->proposal, this->dh_group))
 	{
-		u_int16_t group;
+		uint16_t group;
 
 		if (this->proposal->get_algorithm(this->proposal, DIFFIE_HELLMAN_GROUP,
 										  &group, NULL))
 		{
-			DBG1(DBG_IKE, "DH group %N inacceptable, requesting %N",
+			DBG1(DBG_IKE, "DH group %N unacceptable, requesting %N",
 				 diffie_hellman_group_names, this->dh_group,
 				 diffie_hellman_group_names, group);
 			this->dh_group = group;
@@ -568,47 +665,53 @@ static status_t select_and_install(private_child_create_t *this,
 	{
 		this->tsi = my_ts;
 		this->tsr = other_ts;
+
+		if (!check_mode(this, me, other))
+		{
+			DBG1(DBG_IKE, "%N mode requested by responder is unacceptable",
+				 ipsec_mode_names, this->mode);
+			return FAILED;
+		}
 	}
 	else
 	{
 		this->tsr = my_ts;
 		this->tsi = other_ts;
+
+		if (!check_mode(this, other, me))
+		{
+			this->mode = MODE_TUNNEL;
+		}
 	}
 
 	if (!this->initiator)
 	{
-		/* check if requested mode is acceptable, downgrade if required */
-		switch (this->mode)
+		/* use a copy of the traffic selectors, as the POST hook should not
+		 * change payloads */
+		my_ts = this->tsr->clone_offset(this->tsr,
+										offsetof(traffic_selector_t, clone));
+		other_ts = this->tsi->clone_offset(this->tsi,
+										offsetof(traffic_selector_t, clone));
+		charon->bus->narrow(charon->bus, this->child_sa,
+							NARROW_RESPONDER_POST, my_ts, other_ts);
+
+		if (my_ts->get_count(my_ts) == 0 ||	other_ts->get_count(other_ts) == 0)
 		{
-			case MODE_TRANSPORT:
-				if (!this->config->use_proxy_mode(this->config) &&
-					   (!ts_list_is_host(this->tsi, other) ||
-						!ts_list_is_host(this->tsr, me))
-				   )
-				{
-					this->mode = MODE_TUNNEL;
-					DBG1(DBG_IKE, "not using transport mode, not host-to-host");
-				}
-				if (this->config->get_mode(this->config) != MODE_TRANSPORT)
-				{
-					this->mode = MODE_TUNNEL;
-				}
-				break;
-			case MODE_BEET:
-				if (!ts_list_is_host(this->tsi, NULL) ||
-					!ts_list_is_host(this->tsr, NULL))
-				{
-					this->mode = MODE_TUNNEL;
-					DBG1(DBG_IKE, "not using BEET mode, not host-to-host");
-				}
-				if (this->config->get_mode(this->config) != MODE_BEET)
-				{
-					this->mode = MODE_TUNNEL;
-				}
-				break;
-			default:
-				break;
+			my_ts->destroy_offset(my_ts,
+								  offsetof(traffic_selector_t, destroy));
+			other_ts->destroy_offset(other_ts,
+								  offsetof(traffic_selector_t, destroy));
+			return NOT_FOUND;
 		}
+	}
+
+	this->child_sa->set_policies(this->child_sa, my_ts, other_ts);
+	if (!this->initiator)
+	{
+		my_ts->destroy_offset(my_ts,
+							  offsetof(traffic_selector_t, destroy));
+		other_ts->destroy_offset(other_ts,
+							  offsetof(traffic_selector_t, destroy));
 	}
 
 	this->child_sa->set_state(this->child_sa, CHILD_INSTALLING);
@@ -630,25 +733,45 @@ static status_t select_and_install(private_child_create_t *this,
 		{
 			status_i = this->child_sa->install(this->child_sa, encr_r, integ_r,
 							this->my_spi, this->my_cpi, this->initiator,
-							TRUE, this->tfcv3, my_ts, other_ts);
-			status_o = this->child_sa->install(this->child_sa, encr_i, integ_i,
-							this->other_spi, this->other_cpi, this->initiator,
-							FALSE, this->tfcv3, my_ts, other_ts);
+							TRUE, this->tfcv3);
 		}
 		else
 		{
 			status_i = this->child_sa->install(this->child_sa, encr_i, integ_i,
 							this->my_spi, this->my_cpi, this->initiator,
-							TRUE, this->tfcv3, my_ts, other_ts);
+							TRUE, this->tfcv3);
+		}
+		if (this->rekey)
+		{	/* during rekeyings we install the outbound SA and/or policies
+			 * separately: as responder when we receive the delete for the old
+			 * SA, as initiator pretty much immediately in the ike-rekey task,
+			 * unless there was a rekey collision that we lost */
+			if (this->initiator)
+			{
+				status_o = this->child_sa->register_outbound(this->child_sa,
+							encr_i, integ_i, this->other_spi, this->other_cpi,
+							this->tfcv3);
+			}
+			else
+			{
+				status_o = this->child_sa->register_outbound(this->child_sa,
+							encr_r, integ_r, this->other_spi, this->other_cpi,
+							this->tfcv3);
+			}
+		}
+		else if (this->initiator)
+		{
+			status_o = this->child_sa->install(this->child_sa, encr_i, integ_i,
+							this->other_spi, this->other_cpi, this->initiator,
+							FALSE, this->tfcv3);
+		}
+		else
+		{
 			status_o = this->child_sa->install(this->child_sa, encr_r, integ_r,
 							this->other_spi, this->other_cpi, this->initiator,
-							FALSE, this->tfcv3, my_ts, other_ts);
+							FALSE, this->tfcv3);
 		}
 	}
-	chunk_clear(&integ_i);
-	chunk_clear(&integ_r);
-	chunk_clear(&encr_i);
-	chunk_clear(&encr_r);
 
 	if (status_i != SUCCESS || status_o != SUCCESS)
 	{
@@ -658,68 +781,62 @@ static status_t select_and_install(private_child_create_t *this,
 			(status_o != SUCCESS) ? "outbound " : "");
 		charon->bus->alert(charon->bus, ALERT_INSTALL_CHILD_SA_FAILED,
 						   this->child_sa);
-		return FAILED;
-	}
-
-	if (this->initiator)
-	{
-		status = this->child_sa->add_policies(this->child_sa, my_ts, other_ts);
+		status = FAILED;
 	}
 	else
 	{
-		/* use a copy of the traffic selectors, as the POST hook should not
-		 * change payloads */
-		my_ts = this->tsr->clone_offset(this->tsr,
-										offsetof(traffic_selector_t, clone));
-		other_ts = this->tsi->clone_offset(this->tsi,
-										offsetof(traffic_selector_t, clone));
-		charon->bus->narrow(charon->bus, this->child_sa,
-							NARROW_RESPONDER_POST, my_ts, other_ts);
-		if (my_ts->get_count(my_ts) == 0 || other_ts->get_count(other_ts) == 0)
+		status = this->child_sa->install_policies(this->child_sa);
+
+		if (status != SUCCESS)
 		{
-			status = FAILED;
+			DBG1(DBG_IKE, "unable to install IPsec policies (SPD) in kernel");
+			charon->bus->alert(charon->bus, ALERT_INSTALL_CHILD_POLICY_FAILED,
+							   this->child_sa);
+			status = NOT_FOUND;
 		}
 		else
 		{
-			status = this->child_sa->add_policies(this->child_sa,
-												   my_ts, other_ts);
+			charon->bus->child_derived_keys(charon->bus, this->child_sa,
+											this->initiator, encr_i, encr_r,
+											integ_i, integ_r);
 		}
-		my_ts->destroy_offset(my_ts, offsetof(traffic_selector_t, destroy));
-		other_ts->destroy_offset(other_ts, offsetof(traffic_selector_t, destroy));
 	}
+	chunk_clear(&integ_i);
+	chunk_clear(&integ_r);
+	chunk_clear(&encr_i);
+	chunk_clear(&encr_r);
+
 	if (status != SUCCESS)
 	{
-		DBG1(DBG_IKE, "unable to install IPsec policies (SPD) in kernel");
-		charon->bus->alert(charon->bus, ALERT_INSTALL_CHILD_POLICY_FAILED,
-						   this->child_sa);
-		return NOT_FOUND;
+		return status;
 	}
 
 	charon->bus->child_keys(charon->bus, this->child_sa, this->initiator,
 							this->dh, nonce_i, nonce_r);
 
-	/* add to IKE_SA, and remove from task */
+	my_ts = linked_list_create_from_enumerator(
+				this->child_sa->create_ts_enumerator(this->child_sa, TRUE));
+	other_ts = linked_list_create_from_enumerator(
+				this->child_sa->create_ts_enumerator(this->child_sa, FALSE));
+	out_state = this->child_sa->get_outbound_state(this->child_sa);
+
+	DBG0(DBG_IKE, "%sCHILD_SA %s{%d} established "
+		 "with SPIs %.8x_i %.8x_o and TS %#R === %#R",
+		 (out_state == CHILD_OUTBOUND_INSTALLED) ? "" : "inbound ",
+		 this->child_sa->get_name(this->child_sa),
+		 this->child_sa->get_unique_id(this->child_sa),
+		 ntohl(this->child_sa->get_spi(this->child_sa, TRUE)),
+		 ntohl(this->child_sa->get_spi(this->child_sa, FALSE)),
+		 my_ts, other_ts);
+
+	my_ts->destroy(my_ts);
+	other_ts->destroy(other_ts);
+
 	this->child_sa->set_state(this->child_sa, CHILD_INSTALLED);
 	this->ike_sa->add_child_sa(this->ike_sa, this->child_sa);
 	this->established = TRUE;
 
 	schedule_inactivity_timeout(this);
-
-	my_ts = linked_list_create_from_enumerator(
-				this->child_sa->create_ts_enumerator(this->child_sa, TRUE));
-	other_ts = linked_list_create_from_enumerator(
-				this->child_sa->create_ts_enumerator(this->child_sa, FALSE));
-
-	DBG0(DBG_IKE, "CHILD_SA %s{%d} established "
-		 "with SPIs %.8x_i %.8x_o and TS %#R === %#R",
-		 this->child_sa->get_name(this->child_sa),
-		 this->child_sa->get_unique_id(this->child_sa),
-		 ntohl(this->child_sa->get_spi(this->child_sa, TRUE)),
-		 ntohl(this->child_sa->get_spi(this->child_sa, FALSE)), my_ts, other_ts);
-
-	my_ts->destroy(my_ts);
-	other_ts->destroy(other_ts);
-
 	return SUCCESS;
 }
 
@@ -798,7 +915,7 @@ static bool build_payloads(private_child_create_t *this, message_t *message)
  * Adds an IPCOMP_SUPPORTED notify to the message, allocating a CPI
  */
 static void add_ipcomp_notify(private_child_create_t *this,
-								  message_t *message, u_int8_t ipcomp)
+								  message_t *message, uint8_t ipcomp)
 {
 	this->my_cpi = this->child_sa->alloc_cpi(this->child_sa);
 	if (this->my_cpi)
@@ -838,11 +955,11 @@ static void handle_notify(private_child_create_t *this, notify_payload_t *notify
 		case IPCOMP_SUPPORTED:
 		{
 			ipcomp_transform_t ipcomp;
-			u_int16_t cpi;
+			uint16_t cpi;
 			chunk_t data;
 
 			data = notify->get_notification_data(notify);
-			cpi = *(u_int16_t*)data.ptr;
+			cpi = *(uint16_t*)data.ptr;
 			ipcomp = (ipcomp_transform_t)(*(data.ptr + 2));
 			switch (ipcomp)
 			{
@@ -901,7 +1018,12 @@ static void process_payloads(private_child_create_t *this, message_t *message)
 					this->dh = this->keymat->keymat.create_dh(
 										&this->keymat->keymat, this->dh_group);
 				}
-				if (this->dh)
+				else if (this->dh)
+				{
+					this->dh_failed = this->dh->get_dh_group(this->dh) !=
+									ke_payload->get_dh_group_number(ke_payload);
+				}
+				if (this->dh && !this->dh_failed)
 				{
 					this->dh_failed = !this->dh->set_other_public_value(this->dh,
 								ke_payload->get_key_exchange_data(ke_payload));
@@ -925,6 +1047,31 @@ static void process_payloads(private_child_create_t *this, message_t *message)
 	enumerator->destroy(enumerator);
 }
 
+/**
+ * Check if we should defer the creation of this CHILD_SA until after the
+ * IKE_SA has been established childless.
+ */
+static status_t defer_child_sa(private_child_create_t *this)
+{
+	ike_cfg_t *ike_cfg;
+
+	ike_cfg = this->ike_sa->get_ike_cfg(this->ike_sa);
+
+	if (this->ike_sa->supports_extension(this->ike_sa, EXT_IKE_CHILDLESS))
+	{
+		if (ike_cfg->childless(ike_cfg) == CHILDLESS_FORCE)
+		{
+			return NEED_MORE;
+		}
+	}
+	else if (ike_cfg->childless(ike_cfg) == CHILDLESS_FORCE)
+	{
+		DBG1(DBG_IKE, "peer does not support childless IKE_SA initiation");
+		return DESTROY_ME;
+	}
+	return NOT_SUPPORTED;
+}
+
 METHOD(task_t, build_i, status_t,
 	private_child_create_t *this, message_t *message)
 {
@@ -944,8 +1091,8 @@ METHOD(task_t, build_i, status_t,
 									chunk_empty);
 				return SUCCESS;
 			}
-			if (!this->retry)
-			{
+			if (!this->retry && this->dh_group == MODP_NONE)
+			{	/* during a rekeying the group might already be set */
 				this->dh_group = this->config->get_dh_group(this->config);
 			}
 			break;
@@ -955,20 +1102,22 @@ METHOD(task_t, build_i, status_t,
 				/* send only in the first request, not in subsequent rounds */
 				return NEED_MORE;
 			}
+			switch (defer_child_sa(this))
+			{
+				case DESTROY_ME:
+					/* config mismatch */
+					return DESTROY_ME;
+				case NEED_MORE:
+					/* defer until after IKE_SA has been established */
+					chunk_free(&this->my_nonce);
+					return NEED_MORE;
+				default:
+					/* just continue to establish the CHILD_SA */
+					break;
+			}
 			break;
 		default:
 			break;
-	}
-
-	if (this->reqid)
-	{
-		DBG0(DBG_IKE, "establishing CHILD_SA %s{%d}",
-			 this->config->get_name(this->config), this->reqid);
-	}
-	else
-	{
-		DBG0(DBG_IKE, "establishing CHILD_SA %s",
-			 this->config->get_name(this->config));
 	}
 
 	/* check if we want a virtual IP, but don't have one */
@@ -988,7 +1137,7 @@ METHOD(task_t, build_i, status_t,
 	if (list->get_count(list))
 	{
 		this->tsi = this->config->get_traffic_selectors(this->config,
-														TRUE, NULL, list);
+														TRUE, NULL, list, TRUE);
 		list->destroy_offset(list, offsetof(host_t, destroy));
 	}
 	else
@@ -996,12 +1145,12 @@ METHOD(task_t, build_i, status_t,
 		list->destroy(list);
 		list = get_dynamic_hosts(this->ike_sa, TRUE);
 		this->tsi = this->config->get_traffic_selectors(this->config,
-														TRUE, NULL, list);
+														TRUE, NULL, list, TRUE);
 		list->destroy(list);
 	}
 	list = get_dynamic_hosts(this->ike_sa, FALSE);
 	this->tsr = this->config->get_traffic_selectors(this->config,
-													FALSE, NULL, list);
+													FALSE, NULL, list, TRUE);
 	list->destroy(list);
 
 	if (this->packet_tsi)
@@ -1018,14 +1167,37 @@ METHOD(task_t, build_i, status_t,
 												  this->dh_group == MODP_NONE);
 	this->mode = this->config->get_mode(this->config);
 
+	this->child.if_id_in_def = this->ike_sa->get_if_id(this->ike_sa, TRUE);
+	this->child.if_id_out_def = this->ike_sa->get_if_id(this->ike_sa, FALSE);
+	this->child.encap = this->ike_sa->has_condition(this->ike_sa, COND_NAT_ANY);
 	this->child_sa = child_sa_create(this->ike_sa->get_my_host(this->ike_sa),
-			this->ike_sa->get_other_host(this->ike_sa), this->config, this->reqid,
-			this->ike_sa->has_condition(this->ike_sa, COND_NAT_ANY),
-			this->mark_in, this->mark_out);
+									 this->ike_sa->get_other_host(this->ike_sa),
+									 this->config, &this->child);
+
+	if (this->child.reqid)
+	{
+		DBG0(DBG_IKE, "establishing CHILD_SA %s{%d} reqid %d",
+			 this->child_sa->get_name(this->child_sa),
+			 this->child_sa->get_unique_id(this->child_sa), this->child.reqid);
+	}
+	else
+	{
+		DBG0(DBG_IKE, "establishing CHILD_SA %s{%d}",
+			 this->child_sa->get_name(this->child_sa),
+			 this->child_sa->get_unique_id(this->child_sa));
+	}
 
 	if (!allocate_spi(this))
 	{
 		DBG1(DBG_IKE, "unable to allocate SPIs from kernel");
+		return FAILED;
+	}
+
+	if (!update_and_check_proposals(this))
+	{
+		DBG1(DBG_IKE, "requested DH group %N not contained in any of our "
+			 "proposals",
+			 diffie_hellman_group_names, this->dh_group);
 		return FAILED;
 	}
 
@@ -1035,7 +1207,7 @@ METHOD(task_t, build_i, status_t,
 												  this->dh_group);
 	}
 
-	if (this->config->use_ipcomp(this->config))
+	if (this->config->has_option(this->config, OPT_IPCOMP))
 	{
 		/* IPCOMP_DEFLATE is the only transform we support at the moment */
 		add_ipcomp_notify(this, message, IPCOMP_DEFLATE);
@@ -1188,6 +1360,37 @@ static child_cfg_t* select_child_cfg(private_child_create_t *this)
 	return child_cfg;
 }
 
+/**
+ * Check how to handle a possibly childless IKE_SA
+ */
+static status_t handle_childless(private_child_create_t *this)
+{
+	ike_cfg_t *ike_cfg;
+
+	ike_cfg = this->ike_sa->get_ike_cfg(this->ike_sa);
+
+	if (!this->proposals && !this->tsi && !this->tsr)
+	{
+		/* looks like a childless IKE_SA, check if we allow it */
+		if (ike_cfg->childless(ike_cfg) == CHILDLESS_NEVER)
+		{
+			/* we don't allow childless initiation */
+			DBG1(DBG_IKE, "peer tried to initiate a childless IKE_SA");
+			return INVALID_STATE;
+		}
+		return SUCCESS;
+	}
+
+	/* the peer apparently wants to create a regular IKE_SA */
+	if (ike_cfg->childless(ike_cfg) == CHILDLESS_FORCE)
+	{
+		/* reject it if we only allow childless initiation */
+		DBG1(DBG_IKE, "peer did not initiate a childless IKE_SA");
+		return INVALID_STATE;
+	}
+	return NOT_SUPPORTED;
+}
+
 METHOD(task_t, build_r, status_t,
 	private_child_create_t *this, message_t *message)
 {
@@ -1224,6 +1427,19 @@ METHOD(task_t, build_r, status_t,
 			{	/* no CHILD_SA is created for redirected SAs */
 				return SUCCESS;
 			}
+			switch (handle_childless(this))
+			{
+				case SUCCESS:
+					/* no CHILD_SA built */
+					return SUCCESS;
+				case INVALID_STATE:
+					message->add_notify(message, FALSE, INVALID_SYNTAX,
+										chunk_empty);
+					return FAILED;
+				default:
+					/* continue with regular initiation */
+					break;
+			}
 			ike_auth = TRUE;
 		default:
 			break;
@@ -1232,13 +1448,13 @@ METHOD(task_t, build_r, status_t,
 	if (this->ike_sa->get_state(this->ike_sa) == IKE_REKEYING)
 	{
 		DBG1(DBG_IKE, "unable to create CHILD_SA while rekeying IKE_SA");
-		message->add_notify(message, TRUE, NO_ADDITIONAL_SAS, chunk_empty);
+		message->add_notify(message, TRUE, TEMPORARY_FAILURE, chunk_empty);
 		return SUCCESS;
 	}
 	if (this->ike_sa->get_state(this->ike_sa) == IKE_DELETING)
 	{
 		DBG1(DBG_IKE, "unable to create CHILD_SA while deleting IKE_SA");
-		message->add_notify(message, TRUE, NO_ADDITIONAL_SAS, chunk_empty);
+		message->add_notify(message, TRUE, TEMPORARY_FAILURE, chunk_empty);
 		return SUCCESS;
 	}
 
@@ -1248,7 +1464,7 @@ METHOD(task_t, build_r, status_t,
 	}
 	if (this->config == NULL)
 	{
-		DBG1(DBG_IKE, "traffic selectors %#R === %#R inacceptable",
+		DBG1(DBG_IKE, "traffic selectors %#R === %#R unacceptable",
 			 this->tsr, this->tsi);
 		charon->bus->alert(charon->bus, ALERT_TS_MISMATCH, this->tsi, this->tsr);
 		message->add_notify(message, FALSE, TS_UNACCEPTABLE, chunk_empty);
@@ -1282,14 +1498,16 @@ METHOD(task_t, build_r, status_t,
 	}
 	enumerator->destroy(enumerator);
 
+	this->child.if_id_in_def = this->ike_sa->get_if_id(this->ike_sa, TRUE);
+	this->child.if_id_out_def = this->ike_sa->get_if_id(this->ike_sa, FALSE);
+	this->child.encap = this->ike_sa->has_condition(this->ike_sa, COND_NAT_ANY);
 	this->child_sa = child_sa_create(this->ike_sa->get_my_host(this->ike_sa),
-			this->ike_sa->get_other_host(this->ike_sa), this->config, this->reqid,
-			this->ike_sa->has_condition(this->ike_sa, COND_NAT_ANY),
-			this->mark_in, this->mark_out);
+									 this->ike_sa->get_other_host(this->ike_sa),
+									 this->config, &this->child);
 
 	if (this->ipcomp_received != IPCOMP_NONE)
 	{
-		if (this->config->use_ipcomp(this->config))
+		if (this->config->has_option(this->config, OPT_IPCOMP))
 		{
 			add_ipcomp_notify(this, message, this->ipcomp_received);
 		}
@@ -1310,10 +1528,9 @@ METHOD(task_t, build_r, status_t,
 			return SUCCESS;
 		case INVALID_ARG:
 		{
-			u_int16_t group = htons(this->dh_group);
+			uint16_t group = htons(this->dh_group);
 			message->add_notify(message, FALSE, INVALID_KE_PAYLOAD,
 								chunk_from_thing(group));
-			handle_child_sa_failure(this, message);
 			return SUCCESS;
 		}
 		case FAILED:
@@ -1408,6 +1625,11 @@ METHOD(task_t, process_i, status_t,
 			{	/* wait until all authentication round completed */
 				return NEED_MORE;
 			}
+			if (defer_child_sa(this) == NEED_MORE)
+			{	/* defer until after IKE_SA has been established */
+				chunk_free(&this->other_nonce);
+				return NEED_MORE;
+			}
 			ike_auth = TRUE;
 		default:
 			break;
@@ -1441,16 +1663,36 @@ METHOD(task_t, process_i, status_t,
 					/* an error in CHILD_SA creation is not critical */
 					return SUCCESS;
 				}
+				case TEMPORARY_FAILURE:
+				{
+					DBG1(DBG_IKE, "received %N notify, will retry later",
+						 notify_type_names, type);
+					enumerator->destroy(enumerator);
+					if (!this->rekey)
+					{	/* the rekey task will retry itself if necessary */
+						schedule_delayed_retry(this);
+					}
+					return SUCCESS;
+				}
 				case INVALID_KE_PAYLOAD:
 				{
 					chunk_t data;
-					u_int16_t group = MODP_NONE;
+					uint16_t group = MODP_NONE;
 
 					data = notify->get_notification_data(notify);
 					if (data.len == sizeof(group))
 					{
 						memcpy(&group, data.ptr, data.len);
 						group = ntohs(group);
+					}
+					if (this->retry)
+					{
+						DBG1(DBG_IKE, "already retried with DH group %N, "
+							 "ignore requested %N", diffie_hellman_group_names,
+							 this->dh_group, diffie_hellman_group_names, group);
+						handle_child_sa_failure(this, message);
+						/* an error in CHILD_SA creation is not critical */
+						return SUCCESS;
 					}
 					DBG1(DBG_IKE, "peer didn't accept DH group %N, "
 						 "it requested %N", diffie_hellman_group_names,
@@ -1529,16 +1771,29 @@ METHOD(task_t, process_i, status_t,
 }
 
 METHOD(child_create_t, use_reqid, void,
-	private_child_create_t *this, u_int32_t reqid)
+	private_child_create_t *this, uint32_t reqid)
 {
-	this->reqid = reqid;
+	this->child.reqid = reqid;
 }
 
 METHOD(child_create_t, use_marks, void,
-	private_child_create_t *this, u_int in, u_int out)
+	private_child_create_t *this, uint32_t in, uint32_t out)
 {
-	this->mark_in = in;
-	this->mark_out = out;
+	this->child.mark_in = in;
+	this->child.mark_out = out;
+}
+
+METHOD(child_create_t, use_if_ids, void,
+	private_child_create_t *this, uint32_t in, uint32_t out)
+{
+	this->child.if_id_in = in;
+	this->child.if_id_out = out;
+}
+
+METHOD(child_create_t, use_dh_group, void,
+	private_child_create_t *this, diffie_hellman_group_t dh_group)
+{
+	this->dh_group = dh_group;
 }
 
 METHOD(child_create_t, get_child, child_sa_t*,
@@ -1610,10 +1865,8 @@ METHOD(task_t, migrate, void,
 	this->ipcomp = IPCOMP_NONE;
 	this->ipcomp_received = IPCOMP_NONE;
 	this->other_cpi = 0;
-	this->reqid = 0;
-	this->mark_in = 0;
-	this->mark_out = 0;
 	this->established = FALSE;
+	this->child = (child_sa_create_t){};
 }
 
 METHOD(task_t, destroy, void,
@@ -1641,7 +1894,6 @@ METHOD(task_t, destroy, void,
 	{
 		this->proposals->destroy_offset(this->proposals, offsetof(proposal_t, destroy));
 	}
-
 	DESTROY_IF(this->config);
 	DESTROY_IF(this->nonceg);
 	free(this);
@@ -1663,6 +1915,8 @@ child_create_t *child_create_create(ike_sa_t *ike_sa,
 			.get_lower_nonce = _get_lower_nonce,
 			.use_reqid = _use_reqid,
 			.use_marks = _use_marks,
+			.use_if_ids = _use_if_ids,
+			.use_dh_group = _use_dh_group,
 			.task = {
 				.get_type = _get_type,
 				.migrate = _migrate,

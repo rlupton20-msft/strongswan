@@ -57,7 +57,7 @@ static void copy_proposal_algs(proposal_t *from, proposal_t *to,
 							   transform_type_t type)
 {
 	enumerator_t *enumerator;
-	u_int16_t alg, key_size;
+	uint16_t alg, key_size;
 
 	enumerator = from->create_enumerator(from, type);
 	while (enumerator->enumerate(enumerator, &alg, &key_size))
@@ -122,7 +122,7 @@ METHOD(listener_t, message, bool,
 			enumerator->destroy(enumerator);
 		}
 		sa = sa_payload_create_from_proposals_v2(updated);
-		list->destroy_offset(list, offsetof(proposal_t, destroy));
+		DESTROY_OFFSET_IF(list, offsetof(proposal_t, destroy));
 		updated->destroy_offset(updated, offsetof(proposal_t, destroy));
 		message->add_payload(message, (payload_t*)sa);
 	}

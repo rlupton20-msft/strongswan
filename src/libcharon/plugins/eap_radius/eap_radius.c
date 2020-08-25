@@ -1,6 +1,7 @@
 /*
+ * Copyright (C) 2012-2018 Tobias Brunner
  * Copyright (C) 2009 Martin Willi
- * Hochschule fuer Technik Rapperswil
+ * HSR Hochschule fuer Technik Rapperswil
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -55,12 +56,12 @@ struct private_eap_radius_t {
 	/**
 	 * EAP vendor, if any
 	 */
-	u_int32_t vendor;
+	uint32_t vendor;
 
 	/**
 	 * EAP message identifier
 	 */
-	u_int8_t identifier;
+	uint8_t identifier;
 
 	/**
 	 * RADIUS client instance
@@ -86,15 +87,15 @@ static void add_eap_identity(private_eap_radius_t *this,
 {
 	struct {
 		/** EAP code (REQUEST/RESPONSE) */
-		u_int8_t code;
+		uint8_t code;
 		/** unique message identifier */
-		u_int8_t identifier;
+		uint8_t identifier;
 		/** length of whole message */
-		u_int16_t length;
+		uint16_t length;
 		/** EAP type */
-		u_int8_t type;
+		uint8_t type;
 		/** identity data */
-		u_int8_t data[];
+		uint8_t data[];
 	} __attribute__((__packed__)) *hdr;
 	chunk_t id, prefix;
 	size_t len;
@@ -155,8 +156,8 @@ void eap_radius_build_attributes(radius_message_t *request)
 {
 	ike_sa_t *ike_sa;
 	host_t *host;
-	char buf[40], *station_id_fmt;;
-	u_int32_t value;
+	char buf[40], *station_id_fmt, *session_id;
+	uint32_t value;
 	chunk_t chunk;
 
 	/* virtual NAS-Port-Type */
@@ -201,6 +202,14 @@ void eap_radius_build_attributes(radius_message_t *request)
 		host = ike_sa->get_other_host(ike_sa);
 		snprintf(buf, sizeof(buf), station_id_fmt, host);
 		request->add(request, RAT_CALLING_STATION_ID, chunk_from_str(buf));
+
+		session_id = eap_radius_accounting_session_id(ike_sa);
+		if (session_id)
+		{
+			request->add(request, RAT_ACCT_SESSION_ID,
+						 chunk_from_str(session_id));
+			free(session_id);
+		}
 	}
 }
 
@@ -271,36 +280,46 @@ METHOD(eap_method_t, initiate, status_t,
 }
 
 /**
- * Handle the Class attribute as group membership information
+ * Handle the Class attribute
  */
 static void process_class(radius_message_t *msg)
 {
 	enumerator_t *enumerator;
+	ike_sa_t *ike_sa;
+	identification_t *id;
+	auth_cfg_t *auth;
 	chunk_t data;
+	bool class_group, class_send;
 	int type;
+
+	class_group = lib->settings->get_bool(lib->settings,
+				"%s.plugins.eap-radius.class_group", FALSE, lib->ns);
+	class_send = lib->settings->get_bool(lib->settings,
+				"%s.plugins.eap-radius.accounting_send_class", FALSE, lib->ns);
+	ike_sa = charon->bus->get_sa(charon->bus);
+
+	if ((!class_group && !class_send) || !ike_sa)
+	{
+		return;
+	}
 
 	enumerator = msg->create_enumerator(msg);
 	while (enumerator->enumerate(enumerator, &type, &data))
 	{
 		if (type == RAT_CLASS)
 		{
-			identification_t *id;
-			ike_sa_t *ike_sa;
-			auth_cfg_t *auth;
-
-			if (data.len >= 44)
+			if (class_group && data.len < 44)
 			{	/* quirk: ignore long class attributes, these are used for
 				 * other purposes by some RADIUS servers (such as NPS). */
-				continue;
-			}
-
-			ike_sa = charon->bus->get_sa(charon->bus);
-			if (ike_sa)
-			{
 				auth = ike_sa->get_auth_cfg(ike_sa, FALSE);
 				id = identification_create_from_data(data);
-				DBG1(DBG_CFG, "received group membership '%Y' from RADIUS", id);
+				DBG1(DBG_CFG, "received group membership '%Y' from RADIUS",
+					 id);
 				auth->add(auth, AUTH_RULE_GROUP, id);
+			}
+			if (class_send)
+			{
+				eap_radius_accounting_add_class(ike_sa, data);
 			}
 		}
 	}
@@ -314,8 +333,8 @@ static void process_filter_id(radius_message_t *msg)
 {
 	enumerator_t *enumerator;
 	int type;
-	u_int8_t tunnel_tag;
-	u_int32_t tunnel_type;
+	uint8_t tunnel_tag;
+	uint32_t tunnel_type;
 	chunk_t filter_id = chunk_empty, data;
 	bool is_esp_tunnel = FALSE;
 
@@ -395,7 +414,7 @@ static void process_timeout(radius_message_t *msg)
 /**
  * Add a Cisco Unity configuration attribute
  */
-static void add_unity_attribute(eap_radius_provider_t *provider, u_int32_t id,
+static void add_unity_attribute(eap_radius_provider_t *provider, uint32_t id,
 								int type, chunk_t data)
 {
 	switch (type)
@@ -417,7 +436,7 @@ static void add_unity_attribute(eap_radius_provider_t *provider, u_int32_t id,
  * Add a DNS/NBNS configuration attribute
  */
 static void add_nameserver_attribute(eap_radius_provider_t *provider,
-									 u_int32_t id, int type, chunk_t data)
+									 uint32_t id, int type, chunk_t data)
 {
 	/* these are from different vendors, but there is currently no conflict */
 	switch (type)
@@ -444,7 +463,7 @@ static void add_nameserver_attribute(eap_radius_provider_t *provider,
  * Add a UNITY_LOCAL_LAN or UNITY_SPLIT_INCLUDE attribute
  */
 static void add_unity_split_attribute(eap_radius_provider_t *provider,
-							u_int32_t id, configuration_attribute_type_t type,
+							uint32_t id, configuration_attribute_type_t type,
 							chunk_t data)
 {
 	enumerator_t *enumerator;
@@ -631,11 +650,7 @@ static void process_cfg_attributes(radius_message_t *msg)
  */
 void eap_radius_process_attributes(radius_message_t *message)
 {
-	if (lib->settings->get_bool(lib->settings,
-						"%s.plugins.eap-radius.class_group", FALSE, lib->ns))
-	{
-		process_class(message);
-	}
+	process_class(message);
 	if (lib->settings->get_bool(lib->settings,
 						"%s.plugins.eap-radius.filter_id", FALSE, lib->ns))
 	{
@@ -701,7 +716,7 @@ METHOD(eap_method_t, process, status_t,
 }
 
 METHOD(eap_method_t, get_type, eap_type_t,
-	private_eap_radius_t *this, u_int32_t *vendor)
+	private_eap_radius_t *this, uint32_t *vendor)
 {
 	*vendor = this->vendor;
 	return this->type;
@@ -721,14 +736,14 @@ METHOD(eap_method_t, get_msk, status_t,
 	return FAILED;
 }
 
-METHOD(eap_method_t, get_identifier, u_int8_t,
+METHOD(eap_method_t, get_identifier, uint8_t,
 	private_eap_radius_t *this)
 {
 	return this->identifier;
 }
 
 METHOD(eap_method_t, set_identifier, void,
-	private_eap_radius_t *this, u_int8_t identifier)
+	private_eap_radius_t *this, uint8_t identifier)
 {
 	this->identifier = identifier;
 }

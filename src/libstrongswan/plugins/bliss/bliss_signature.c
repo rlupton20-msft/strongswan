@@ -32,7 +32,7 @@ struct private_bliss_signature_t {
 	/**
 	 * BLISS signature parameter set
 	 */
-	bliss_param_set_t *set;
+	const bliss_param_set_t *set;
 
 	/**
 	 * BLISS signature vector z1 of size n
@@ -102,7 +102,7 @@ METHOD(bliss_signature_t, get_encoding, chunk_t,
 	encoding = packer->extract_buf(packer);
 
 	DBG2(DBG_LIB, "efficiency of Huffman coder is %6.4f bits/tuple (%u bits)",
-				   coder->get_bits(coder)/(double)(this->set->n), 
+				   coder->get_bits(coder)/(double)(this->set->n),
 				   coder->get_bits(coder));
 	DBG2(DBG_LIB, "generated BLISS signature (%u bits encoded in %u bytes)",
 				   packer->get_bits(packer), encoding.len);
@@ -134,7 +134,7 @@ METHOD(bliss_signature_t, destroy, void,
 /**
  * See header.
  */
-bliss_signature_t *bliss_signature_create(bliss_param_set_t *set)
+bliss_signature_t *bliss_signature_create(const bliss_param_set_t *set)
 {
 	private_bliss_signature_t *this;
 
@@ -156,7 +156,7 @@ bliss_signature_t *bliss_signature_create(bliss_param_set_t *set)
 /**
  * See header.
  */
-bliss_signature_t *bliss_signature_create_from_data(bliss_param_set_t *set,
+bliss_signature_t *bliss_signature_create_from_data(const bliss_param_set_t *set,
 													chunk_t encoding)
 {
 	private_bliss_signature_t *this;

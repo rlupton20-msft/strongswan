@@ -1,7 +1,7 @@
 /*
- * Copyright (C) 2011-2015 Tobias Brunner
+ * Copyright (C) 2011-2016 Tobias Brunner
  * Copyright (C) 2009 Martin Willi
- * Hochschule fuer Technik Rapperswil
+ * HSR Hochschule fuer Technik Rapperswil
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -84,15 +84,29 @@ struct listener_t {
 	 * @param ike_sa	IKE_SA this keymat belongs to
 	 * @param dh		diffie hellman shared secret
 	 * @param dh_other	others DH public value (IKEv1 only)
-	 * @param nonce_i	initiators nonce
-	 * @param nonce_r	responders nonce
+	 * @param nonce_i	initiator's nonce
+	 * @param nonce_r	responder's nonce
 	 * @param rekey		IKE_SA we are rekeying, if any (IKEv2 only)
 	 * @param shared	shared key used for key derivation (IKEv1-PSK only)
+	 * @param method	auth method for key derivation (IKEv1-non-PSK only)
 	 * @return			TRUE to stay registered, FALSE to unregister
 	 */
 	bool (*ike_keys)(listener_t *this, ike_sa_t *ike_sa, diffie_hellman_t *dh,
 					 chunk_t dh_other, chunk_t nonce_i, chunk_t nonce_r,
-					 ike_sa_t *rekey, shared_key_t *shared);
+					 ike_sa_t *rekey, shared_key_t *shared,
+					 auth_method_t method);
+
+	/**
+	 * Hook called with derived IKE_SA keys.
+	 *
+	 * @param ike_sa	IKE_SA these keys belong to
+	 * @param sk_ei		SK_ei, or Ka for IKEv1
+	 * @param sk_er		SK_er
+	 * @param sk_ai		SK_ai, or SKEYID_a for IKEv1
+	 * @param sk_ar		SK_ar
+	 */
+	bool (*ike_derived_keys)(listener_t *this, ike_sa_t *ike_sa, chunk_t sk_ei,
+							 chunk_t sk_er, chunk_t sk_ai, chunk_t sk_ar);
 
 	/**
 	 * Hook called with CHILD_SA key material.
@@ -101,13 +115,29 @@ struct listener_t {
 	 * @param child_sa	CHILD_SA this keymat is used for
 	 * @param initiator	initiator of the CREATE_CHILD_SA exchange
 	 * @param dh		diffie hellman shared secret
-	 * @param nonce_i	initiators nonce
-	 * @param nonce_r	responders nonce
+	 * @param nonce_i	initiator's nonce
+	 * @param nonce_r	responder's nonce
 	 * @return			TRUE to stay registered, FALSE to unregister
 	 */
 	bool (*child_keys)(listener_t *this, ike_sa_t *ike_sa, child_sa_t *child_sa,
 					   bool initiator, diffie_hellman_t *dh,
 					   chunk_t nonce_i, chunk_t nonce_r);
+
+	/**
+	 * Hook called with derived CHILD_SA keys.
+	 *
+	 * @param ike_sa	IKE_SA the child sa belongs to
+	 * @param child_sa	CHILD_SA these keys are used for
+	 * @param initiator	initiator of the CREATE_CHILD_SA exchange
+	 * @param encr_i	initiator's encryption key
+	 * @param encr_o	responder's encryption key
+	 * @param integ_i	initiator's integrity key
+	 * @param integ_r	responder's integrity key
+	 */
+	bool (*child_derived_keys)(listener_t *this, ike_sa_t *ike_sa,
+							   child_sa_t *child_sa, bool initiator,
+							   chunk_t encr_i, chunk_t encr_r,
+							   chunk_t integ_i, chunk_t integ_r);
 
 	/**
 	 * Hook called if an IKE_SA gets up or down.
@@ -200,7 +230,7 @@ struct listener_t {
 	 * @return			TRUE to stay registered, FALSE to unregister
 	 */
 	bool (*children_migrate)(listener_t *this, ike_sa_t *ike_sa,
-							 ike_sa_id_t *new, u_int32_t unique);
+							 ike_sa_id_t *new, uint32_t unique);
 
 	/**
 	 * Hook called to invoke additional authorization rules.

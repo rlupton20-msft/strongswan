@@ -1,8 +1,8 @@
 /*
- * Copyright (C) 2007-2015 Tobias Brunner
+ * Copyright (C) 2007-2019 Tobias Brunner
  * Copyright (C) 2005-2009 Martin Willi
  * Copyright (C) 2005 Jan Hutter
- * Hochschule fuer Technik Rapperswil
+ * HSR Hochschule fuer Technik Rapperswil
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -26,12 +26,13 @@
 typedef enum cert_policy_t cert_policy_t;
 typedef enum unique_policy_t unique_policy_t;
 typedef struct peer_cfg_t peer_cfg_t;
+typedef struct peer_cfg_create_t peer_cfg_create_t;
 
 #include <library.h>
 #include <utils/identification.h>
 #include <collections/enumerator.h>
 #include <selectors/traffic_selector.h>
-#include <config/proposal.h>
+#include <crypto/proposal/proposal.h>
 #include <config/ike_cfg.h>
 #include <config/child_cfg.h>
 #include <credentials/auth_cfg.h>
@@ -156,11 +157,9 @@ struct peer_cfg_t {
 	/**
 	 * Replace the CHILD configs with those in the given PEER config.
 	 *
-	 * Configs that are equal are not replaced.
-	 *
 	 * The enumerator enumerates the removed and added CHILD configs
 	 * (child_cfg_t*, bool), where the flag is FALSE for removed configs and
-	 * TRUE for added configs.
+	 * TRUE for added configs. Configs that are equal are not enumerated.
 	 *
 	 * @param other			other config to get CHILD configs from
 	 * @return				an enumerator over removed/added CHILD configs
@@ -222,30 +221,30 @@ struct peer_cfg_t {
 	 *
 	 * @return			max number retries
 	 */
-	u_int32_t (*get_keyingtries) (peer_cfg_t *this);
+	uint32_t (*get_keyingtries) (peer_cfg_t *this);
 
 	/**
 	 * Get a time to start rekeying.
 	 *
-	 * @param jitter	remove a jitter value to randomize time
+	 * @param jitter	subtract a jitter value to randomize time
 	 * @return			time in s when to start rekeying, 0 disables rekeying
 	 */
-	u_int32_t (*get_rekey_time)(peer_cfg_t *this, bool jitter);
+	uint32_t (*get_rekey_time)(peer_cfg_t *this, bool jitter);
 
 	/**
 	 * Get a time to start reauthentication.
 	 *
-	 * @param jitter	remove a jitter value to randomize time
+	 * @param jitter	subtract a jitter value to randomize time
 	 * @return			time in s when to start reauthentication, 0 disables it
 	 */
-	u_int32_t (*get_reauth_time)(peer_cfg_t *this, bool jitter);
+	uint32_t (*get_reauth_time)(peer_cfg_t *this, bool jitter);
 
 	/**
 	 * Get the timeout of a rekeying/reauthenticating SA.
 	 *
 	 * @return			timeout in s
 	 */
-	u_int32_t (*get_over_time)(peer_cfg_t *this);
+	uint32_t (*get_over_time)(peer_cfg_t *this);
 
 	/**
 	 * Use MOBIKE (RFC4555) if peer supports it?
@@ -273,14 +272,14 @@ struct peer_cfg_t {
 	 *
 	 * @return			dpd_delay in seconds
 	 */
-	u_int32_t (*get_dpd) (peer_cfg_t *this);
+	uint32_t (*get_dpd) (peer_cfg_t *this);
 
 	/**
 	 * Get the DPD timeout interval (IKEv1 only)
 	 *
 	 * @return			dpd_timeout in seconds
 	 */
-	u_int32_t (*get_dpd_timeout) (peer_cfg_t *this);
+	uint32_t (*get_dpd_timeout) (peer_cfg_t *this);
 
 	/**
 	 * Add a virtual IP to request as initiator.
@@ -312,20 +311,42 @@ struct peer_cfg_t {
 	 */
 	enumerator_t* (*create_pool_enumerator)(peer_cfg_t *this);
 
+	/**
+	 * Optional interface ID to set on policies/SAs.
+	 *
+	 * @param inbound		TRUE for inbound, FALSE for outbound
+	 * @return				interface ID
+	 */
+	uint32_t (*get_if_id)(peer_cfg_t *this, bool inbound);
+
+	/**
+	 * Get the PPK ID to use with this peer.
+	 *
+	 * @return				PPK id
+	 */
+	identification_t *(*get_ppk_id)(peer_cfg_t *this);
+
+	/**
+	 * Whether a PPK is required with this peer.
+	 *
+	 * @return				TRUE, if a PPK is required
+	 */
+	bool (*ppk_required)(peer_cfg_t *this);
+
 #ifdef ME
 	/**
 	 * Is this a mediation connection?
 	 *
 	 * @return				TRUE, if this is a mediation connection
 	 */
-	bool (*is_mediation) (peer_cfg_t *this);
+	bool (*is_mediation)(peer_cfg_t *this);
 
 	/**
-	 * Get peer_cfg of the connection this one is mediated through.
+	 * Get name of the connection this one is mediated through.
 	 *
-	 * @return				the peer_cfg of the mediation connection
+	 * @return				the name of the mediation connection
 	 */
-	peer_cfg_t* (*get_mediated_by) (peer_cfg_t *this);
+	char* (*get_mediated_by)(peer_cfg_t *this);
 
 	/**
 	 * Get the id of the other peer at the mediation server.
@@ -337,7 +358,7 @@ struct peer_cfg_t {
 	 *
 	 * @return				the id of the other peer
 	 */
-	identification_t* (*get_peer_id) (peer_cfg_t *this);
+	identification_t* (*get_peer_id)(peer_cfg_t *this);
 #endif /* ME */
 
 	/**
@@ -367,42 +388,60 @@ struct peer_cfg_t {
 };
 
 /**
+ * Data passed to the constructor of a peer_cfg_t object.
+ */
+struct peer_cfg_create_t {
+	/** Whether to send a certificate payload */
+	cert_policy_t cert_policy;
+	/** Uniqueness of an IKE_SA */
+	unique_policy_t unique;
+	/** How many keying tries should be done before giving up */
+	uint32_t keyingtries;
+	/** Timeout in seconds before starting rekeying */
+	uint32_t rekey_time;
+	/** Timeout in seconds before starting reauthentication */
+	uint32_t reauth_time;
+	/** Time range in seconds to randomly subtract from rekey/reauth time */
+	uint32_t jitter_time;
+	/** Maximum overtime in seconds before closing a rekeying/reauth SA */
+	uint32_t over_time;
+	/** Disable MOBIKE (RFC4555) */
+	bool no_mobike;
+	/** Use/accept aggressive mode with IKEv1 */
+	bool aggressive;
+	/** TRUE to use modeconfig push, FALSE for pull */
+	bool push_mode;
+	/** DPD check interval, 0 to disable */
+	uint32_t dpd;
+	/** DPD timeout interval (IKEv1 only), if 0 default applies */
+	uint32_t dpd_timeout;
+	/** Optional inbound interface ID */
+	uint32_t if_id_in;
+	/** Optional outbound interface ID */
+	uint32_t if_id_out;
+	/** Postquantum Preshared Key ID (adopted) */
+	identification_t *ppk_id;
+	/** TRUE if a PPK is required, FALSE if it's optional */
+	bool ppk_required;
+#ifdef ME
+	/** TRUE if this is a mediation connection */
+	bool mediation;
+	/** peer_cfg_t of the mediation connection to mediate through (cloned) */
+	char *mediated_by;
+	/** ID that identifies our peer at the mediation server (adopted) */
+	identification_t *peer_id;
+#endif /* ME */
+};
+
+/**
  * Create a configuration object for IKE_AUTH and later.
  *
- * name-string gets cloned, ID's not.
- * Virtual IPs are used if they are != NULL. A %any host means the virtual
- * IP should be obtained from the other peer.
- * Lifetimes are in seconds. To prevent to peers to start rekeying at the
- * same time, a jitter may be specified. Rekeying of an SA starts at
- * (rekeylifetime - random(0, jitter)).
- *
- * @param name				name of the peer_cfg
- * @param ike_cfg			IKE config to use when acting as initiator
- * @param cert_policy		should we send a certificate payload?
- * @param unique			uniqueness of an IKE_SA
- * @param keyingtries		how many keying tries should be done before giving up
- * @param rekey_time		timeout before starting rekeying
- * @param reauth_time		timeout before starting reauthentication
- * @param jitter_time		timerange to randomly subtract from rekey/reauth time
- * @param over_time			maximum overtime before closing a rekeying/reauth SA
- * @param mobike			use MOBIKE (RFC4555) if peer supports it
- * @param aggressive		use/accept aggressive mode with IKEv1
- * @param pull_mode			TRUE to use modeconfig pull, FALSE for push
- * @param dpd				DPD check interval, 0 to disable
- * @param dpd_timeout		DPD timeout interval (IKEv1 only), if 0 default applies
- * @param mediation			TRUE if this is a mediation connection
- * @param mediated_by		peer_cfg_t of the mediation connection to mediate through
- * @param peer_id			ID that identifies our peer at the mediation server
+ * @param name				name of the peer_cfg (cloned)
+ * @param ike_cfg			IKE config to use when acting as initiator (adopted)
+ * @param data				data for this peer_cfg
  * @return					peer_cfg_t object
  */
-peer_cfg_t *peer_cfg_create(char *name,
-							ike_cfg_t *ike_cfg, cert_policy_t cert_policy,
-							unique_policy_t unique, u_int32_t keyingtries,
-							u_int32_t rekey_time, u_int32_t reauth_time,
-							u_int32_t jitter_time, u_int32_t over_time,
-							bool mobike, bool aggressive, bool pull_mode,
-							u_int32_t dpd, u_int32_t dpd_timeout,
-							bool mediation, peer_cfg_t *mediated_by,
-							identification_t *peer_id);
+peer_cfg_t *peer_cfg_create(char *name, ike_cfg_t *ike_cfg,
+							peer_cfg_create_t *data);
 
 #endif /** PEER_CFG_H_ @}*/

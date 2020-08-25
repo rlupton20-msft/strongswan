@@ -1,6 +1,6 @@
 /*
  * Copyright (C) 2012 Tobias Brunner
- * Hochschule fuer Technik Rapperswil
+ * HSR Hochschule fuer Technik Rapperswil
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -134,7 +134,7 @@ METHOD(proposal_keywords_t, get_token, const proposal_token_t*,
 
 METHOD(proposal_keywords_t, register_token, void,
 	private_proposal_keywords_t *this, const char *name, transform_type_t type,
-	u_int16_t algorithm, u_int16_t keysize)
+	uint16_t algorithm, uint16_t keysize)
 {
 	proposal_token_t *token;
 
@@ -154,7 +154,7 @@ METHOD(proposal_keywords_t, register_algname_parser, void,
 	private_proposal_keywords_t *this, proposal_algname_parser_t parser)
 {
 	this->lock->write_lock(this->lock);
-	this->tokens->insert_first(this->parsers, parser);
+	this->parsers->insert_first(this->parsers, parser);
 	this->lock->unlock(this->lock);
 }
 

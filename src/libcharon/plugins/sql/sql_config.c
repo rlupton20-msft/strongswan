@@ -1,7 +1,7 @@
 /*
  * Copyright (C) 2006-2008 Martin Willi
  * Copyright (C) 2010 Andreas Steffen
- * Hochschule fuer Technik Rapperswil
+ * HSR Hochschule fuer Technik Rapperswil
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -102,10 +102,11 @@ static void add_traffic_selectors(private_sql_config_t *this,
 	bool local;
 
 	e = this->db->query(this->db,
-			"SELECT kind, type, protocol, "
-			"start_addr, end_addr, start_port, end_port "
-			"FROM traffic_selectors JOIN child_config_traffic_selector "
-			"ON id = traffic_selector WHERE child_cfg = ?",
+			"SELECT ct.kind, t.type, t.protocol, "
+			"t.start_addr, t.end_addr, t.start_port, t.end_port "
+			"FROM traffic_selectors AS t "
+			"JOIN child_config_traffic_selector AS ct "
+			"ON t.id = ct.traffic_selector WHERE ct.child_cfg = ?",
 			DB_INT, id,
 			DB_INT, DB_INT, DB_INT,
 			DB_BLOB, DB_BLOB, DB_INT, DB_INT);
@@ -131,9 +132,9 @@ static void add_esp_proposals(private_sql_config_t *this,
 	bool use_default = TRUE;
 
 	e = this->db->query(this->db,
-			"SELECT proposal "
-			"FROM proposals JOIN child_config_proposal ON id = prop "
-			"WHERE child_cfg = ? ORDER BY prio",
+			"SELECT p.proposal "
+			"FROM proposals AS p JOIN child_config_proposal AS cp "
+			"ON p.id = cp.prop WHERE cp.child_cfg = ? ORDER BY cp.prio",
 			DB_INT, id, DB_TEXT);
 	if (e)
 	{
@@ -170,12 +171,22 @@ static child_cfg_t *build_child_cfg(private_sql_config_t *this, enumerator_t *e)
 	if (e->enumerate(e, &id, &name, &lifetime, &rekeytime, &jitter, &updown,
 						&hostaccess, &mode, &start, &dpd, &close, &ipcomp, &reqid))
 	{
-		lifetime_cfg_t lft = {
-			.time = { .life = lifetime, .rekey = rekeytime, .jitter = jitter }
+		child_cfg_create_t child = {
+			.mode = mode,
+			.reqid = reqid,
+			.options = (ipcomp ? OPT_IPCOMP : 0) |
+					   (hostaccess ? OPT_HOSTACCESS : 0),
+			.lifetime = {
+				.time = {
+					.life = lifetime, .rekey = rekeytime, .jitter = jitter
+				},
+			},
+			.start_action = start,
+			.dpd_action = dpd,
+			.close_action = close,
+			.updown = updown,
 		};
-		child_cfg = child_cfg_create(name, &lft, updown, hostaccess, mode,
-									 start, dpd, close, ipcomp, 0, reqid,
-									 NULL, NULL, 0);
+		child_cfg = child_cfg_create(name, &child);
 		add_esp_proposals(this, child_cfg, id);
 		add_traffic_selectors(this, child_cfg, id);
 		return child_cfg;
@@ -192,10 +203,11 @@ static void add_child_cfgs(private_sql_config_t *this, peer_cfg_t *peer, int id)
 	child_cfg_t *child_cfg;
 
 	e = this->db->query(this->db,
-			"SELECT id, name, lifetime, rekeytime, jitter, updown, hostaccess, "
-			"mode, start_action, dpd_action, close_action, ipcomp, reqid "
-			"FROM child_configs JOIN peer_config_child_config ON id = child_cfg "
-			"WHERE peer_cfg = ?",
+			"SELECT c.id, c.name, c.lifetime, c.rekeytime, c.jitter, c.updown, "
+			"c.hostaccess, c.mode, c.start_action, c.dpd_action, "
+			"c.close_action, c.ipcomp, c.reqid "
+			"FROM child_configs AS c JOIN peer_config_child_config AS pc "
+			"ON c.id = pc.child_cfg WHERE pc.peer_cfg = ?",
 			DB_INT, id,
 			DB_INT, DB_TEXT, DB_INT, DB_INT, DB_INT, DB_TEXT, DB_INT,
 			DB_INT, DB_INT, DB_INT, DB_INT, DB_INT, DB_INT);
@@ -221,9 +233,10 @@ static void add_ike_proposals(private_sql_config_t *this,
 	bool use_default = TRUE;
 
 	e = this->db->query(this->db,
-			"SELECT proposal "
-			"FROM proposals JOIN ike_config_proposal ON id = prop "
-			"WHERE ike_cfg = ? ORDER BY prio",
+			"SELECT p.proposal "
+			"FROM proposals AS p "
+			"JOIN ike_config_proposal AS ip ON p.id = ip.prop "
+			"WHERE ip.ike_cfg = ? ORDER BY ip.prio",
 			DB_INT, id, DB_TEXT);
 	if (e)
 	{
@@ -259,10 +272,18 @@ static ike_cfg_t *build_ike_cfg(private_sql_config_t *this, enumerator_t *e,
 	while (e->enumerate(e, &id, &certreq, &force_encap, &local, &remote))
 	{
 		ike_cfg_t *ike_cfg;
+		ike_cfg_create_t ike = {
+			.version = IKEV2,
+			.local = local,
+			.local_port = charon->socket->get_port(charon->socket, FALSE),
+			.remote = remote,
+			.remote_port = IKEV2_UDP_PORT,
+			.no_certreq = !certreq,
+			.force_encap = force_encap,
+			.fragmentation = FRAGMENTATION_YES,
+		};
 
-		ike_cfg = ike_cfg_create(IKEV2, certreq, force_encap, local,
-								 charon->socket->get_port(charon->socket, FALSE),
-								 remote, IKEV2_UDP_PORT, FRAGMENTATION_NO, 0);
+		ike_cfg = ike_cfg_create(&ike);
 		add_ike_proposals(this, ike_cfg, id);
 		return ike_cfg;
 	}
@@ -278,8 +299,8 @@ static ike_cfg_t* get_ike_cfg_by_id(private_sql_config_t *this, int id)
 	ike_cfg_t *ike_cfg = NULL;
 
 	e = this->db->query(this->db,
-			"SELECT id, certreq, force_encap, local, remote "
-			"FROM ike_configs WHERE id = ?",
+			"SELECT c.id, c.certreq, c.force_encap, c.local, c.remote "
+			"FROM ike_configs AS c WHERE c.id = ?",
 			DB_INT, id,
 			DB_INT, DB_INT, DB_INT, DB_TEXT, DB_TEXT);
 	if (e)
@@ -290,6 +311,7 @@ static ike_cfg_t* get_ike_cfg_by_id(private_sql_config_t *this, int id)
 	return ike_cfg;
 }
 
+#ifdef ME
 /**
  * Query a peer config by its id
  */
@@ -299,16 +321,16 @@ static peer_cfg_t *get_peer_cfg_by_id(private_sql_config_t *this, int id)
 	peer_cfg_t *peer_cfg = NULL;
 
 	e = this->db->query(this->db,
-			"SELECT c.id, name, ike_cfg, l.type, l.data, r.type, r.data, "
-			"cert_policy, uniqueid, auth_method, eap_type, eap_vendor, "
-			"keyingtries, rekeytime, reauthtime, jitter, overtime, mobike, "
-			"dpd_delay, virtual, pool, "
-			"mediation, mediated_by, COALESCE(p.type, 0), p.data "
+			"SELECT c.id, c.name, c.ike_cfg, l.type, l.data, r.type, r.data, "
+			"c.cert_policy, c.uniqueid, c.auth_method, c.eap_type, "
+			"c.eap_vendor, c.keyingtries, c.rekeytime, c.reauthtime, c.jitter, "
+			"c.overtime, c.mobike, c.dpd_delay, c.virtual, c.pool, "
+			"c.mediation, c.mediated_by, COALESCE(p.type, 0), p.data "
 			"FROM peer_configs AS c "
-			"JOIN identities AS l ON local_id = l.id "
-			"JOIN identities AS r ON remote_id = r.id "
-			"LEFT JOIN identities AS p ON peer_id = p.id "
-			"WHERE id = ?",
+			"JOIN identities AS l ON c.local_id = l.id "
+			"JOIN identities AS r ON c.remote_id = r.id "
+			"LEFT JOIN identities AS p ON c.peer_id = p.id "
+			"WHERE c.id = ?",
 			DB_INT, id,
 			DB_INT, DB_TEXT, DB_INT, DB_INT, DB_BLOB, DB_INT, DB_BLOB,
 			DB_INT, DB_INT, DB_INT, DB_INT, DB_INT,
@@ -322,6 +344,7 @@ static peer_cfg_t *get_peer_cfg_by_id(private_sql_config_t *this, int id)
 	}
 	return peer_cfg;
 }
+#endif /* ME */
 
 /**
  * Check if the two IDs match (the first one is optional)
@@ -353,7 +376,7 @@ static peer_cfg_t *build_peer_cfg(private_sql_config_t *this, enumerator_t *e,
 			&mediation, &mediated_by, &p_type, &p_data))
 	{
 		identification_t *local_id, *remote_id, *peer_id = NULL;
-		peer_cfg_t *peer_cfg, *mediated_cfg;
+		peer_cfg_t *peer_cfg, *mediated_cfg = NULL;
 		ike_cfg_t *ike;
 		host_t *vip = NULL;
 		auth_cfg_t *auth;
@@ -367,22 +390,41 @@ static peer_cfg_t *build_peer_cfg(private_sql_config_t *this, enumerator_t *e,
 			continue;
 		}
 		ike = get_ike_cfg_by_id(this, ike_cfg);
-		mediated_cfg = mediated_by ? get_peer_cfg_by_id(this, mediated_by) : NULL;
+
+#ifdef ME
+		mediated_cfg = mediated_by ? get_peer_cfg_by_id(this, mediated_by)
+								   : NULL;
 		if (p_type)
 		{
 			peer_id = identification_create_from_encoding(p_type, p_data);
 		}
+#endif /* ME */
+
 		if (virtual)
 		{
 			vip = host_create_from_string(virtual, 0);
 		}
 		if (ike)
 		{
-			peer_cfg = peer_cfg_create(
-					name, ike, cert_policy, uniqueid,
-					keyingtries, rekeytime, reauthtime, jitter, overtime,
-					mobike, FALSE, TRUE, dpd_delay, 0,
-					mediation, mediated_cfg, peer_id);
+			peer_cfg_create_t peer = {
+				.cert_policy = cert_policy,
+				.unique = uniqueid,
+				.keyingtries = keyingtries,
+				.rekey_time = rekeytime,
+				.reauth_time = reauthtime,
+				.jitter_time = jitter,
+				.over_time = overtime,
+				.no_mobike = !mobike,
+				.dpd = dpd_delay,
+#ifdef ME
+				.mediation = mediation,
+				.mediated_by = mediated_cfg ?
+									mediated_cfg->get_name(mediated_cfg) : NULL,
+				.peer_id = peer_id,
+#endif /* ME */
+			};
+
+			peer_cfg = peer_cfg_create(name, ike, &peer);
 			if (vip)
 			{
 				peer_cfg->add_virtual_ip(peer_cfg, vip);
@@ -415,6 +457,7 @@ static peer_cfg_t *build_peer_cfg(private_sql_config_t *this, enumerator_t *e,
 			}
 			peer_cfg->add_auth_cfg(peer_cfg, auth, FALSE);
 			add_child_cfgs(this, peer_cfg, id);
+			DESTROY_IF(mediated_cfg);
 			return peer_cfg;
 		}
 		DESTROY_IF(ike);
@@ -433,16 +476,16 @@ METHOD(backend_t, get_peer_cfg_by_name, peer_cfg_t*,
 	peer_cfg_t *peer_cfg = NULL;
 
 	e = this->db->query(this->db,
-			"SELECT c.id, name, ike_cfg, l.type, l.data, r.type, r.data, "
-			"cert_policy, uniqueid, auth_method, eap_type, eap_vendor, "
-			"keyingtries, rekeytime, reauthtime, jitter, overtime, mobike, "
-			"dpd_delay, virtual, pool, "
-			"mediation, mediated_by, COALESCE(p.type, 0), p.data "
+			"SELECT c.id, c.name, c.ike_cfg, l.type, l.data, r.type, r.data, "
+			"c.cert_policy, c.uniqueid, c.auth_method, c.eap_type, "
+			"c.eap_vendor, c.keyingtries, c.rekeytime, c.reauthtime, c.jitter, "
+			"c.overtime, c.mobike, c.dpd_delay, c.virtual, c.pool, "
+			"c.mediation, c.mediated_by, COALESCE(p.type, 0), p.data "
 			"FROM peer_configs AS c "
-			"JOIN identities AS l ON local_id = l.id "
-			"JOIN identities AS r ON remote_id = r.id "
-			"LEFT JOIN identities AS p ON peer_id = p.id "
-			"WHERE ike_version = ? AND name = ?",
+			"JOIN identities AS l ON c.local_id = l.id "
+			"JOIN identities AS r ON c.remote_id = r.id "
+			"LEFT JOIN identities AS p ON c.peer_id = p.id "
+			"WHERE c.ike_version = ? AND c.name = ?",
 			DB_INT, 2, DB_TEXT, name,
 			DB_INT, DB_TEXT, DB_INT, DB_INT, DB_BLOB, DB_INT, DB_BLOB,
 			DB_INT, DB_INT, DB_INT, DB_INT, DB_INT,
@@ -472,11 +515,12 @@ typedef struct {
 	ike_cfg_t *current;
 } ike_enumerator_t;
 
-/**
- * Implementation of ike_enumerator_t.public.enumerate
- */
-static bool ike_enumerator_enumerate(ike_enumerator_t *this, ike_cfg_t **cfg)
+METHOD(enumerator_t, ike_enumerator_enumerate, bool,
+	ike_enumerator_t *this, va_list args)
 {
+	ike_cfg_t **cfg;
+
+	VA_ARGS_VGET(args, cfg);
 	DESTROY_IF(this->current);
 	this->current = build_ike_cfg(this->this, this->inner, this->me, this->other);
 	if (this->current)
@@ -487,10 +531,8 @@ static bool ike_enumerator_enumerate(ike_enumerator_t *this, ike_cfg_t **cfg)
 	return FALSE;
 }
 
-/**
- * Implementation of ike_enumerator_t.public.destroy
- */
-static void ike_enumerator_destroy(ike_enumerator_t *this)
+METHOD(enumerator_t, ike_enumerator_destroy, void,
+	ike_enumerator_t *this)
 {
 	DESTROY_IF(this->current);
 	this->inner->destroy(this->inner);
@@ -500,19 +542,22 @@ static void ike_enumerator_destroy(ike_enumerator_t *this)
 METHOD(backend_t, create_ike_cfg_enumerator, enumerator_t*,
 	private_sql_config_t *this, host_t *me, host_t *other)
 {
-	ike_enumerator_t *e = malloc_thing(ike_enumerator_t);
+	ike_enumerator_t *e;
 
-	e->this = this;
-	e->me = me;
-	e->other = other;
-	e->current = NULL;
-	e->public.enumerate = (void*)ike_enumerator_enumerate;
-	e->public.destroy = (void*)ike_enumerator_destroy;
-
+	INIT(e,
+		.public = {
+			.enumerate = enumerator_enumerate_default,
+			.venumerate = _ike_enumerator_enumerate,
+			.destroy = _ike_enumerator_destroy,
+		},
+		.this = this,
+		.me = me,
+		.other = other,
+	);
 	e->inner = this->db->query(this->db,
-			"SELECT id, certreq, force_encap, local, remote "
-			"FROM ike_configs",
-			DB_INT, DB_INT, DB_INT, DB_TEXT, DB_TEXT);
+							   "SELECT c.id, c.certreq, c.force_encap, "
+							   "c.local, c.remote FROM ike_configs AS c",
+							   DB_INT, DB_INT, DB_INT, DB_TEXT, DB_TEXT);
 	if (!e->inner)
 	{
 		free(e);
@@ -537,11 +582,12 @@ typedef struct {
 	peer_cfg_t *current;
 } peer_enumerator_t;
 
-/**
- * Implementation of peer_enumerator_t.public.enumerate
- */
-static bool peer_enumerator_enumerate(peer_enumerator_t *this, peer_cfg_t **cfg)
+METHOD(enumerator_t, peer_enumerator_enumerate, bool,
+	peer_enumerator_t *this, va_list args)
 {
+	peer_cfg_t **cfg;
+
+	VA_ARGS_VGET(args, cfg);
 	DESTROY_IF(this->current);
 	this->current = build_peer_cfg(this->this, this->inner, this->me, this->other);
 	if (this->current)
@@ -552,10 +598,8 @@ static bool peer_enumerator_enumerate(peer_enumerator_t *this, peer_cfg_t **cfg)
 	return FALSE;
 }
 
-/**
- * Implementation of peer_enumerator_t.public.destroy
- */
-static void peer_enumerator_destroy(peer_enumerator_t *this)
+METHOD(enumerator_t, peer_enumerator_destroy, void,
+	peer_enumerator_t *this)
 {
 	DESTROY_IF(this->current);
 	this->inner->destroy(this->inner);
@@ -565,27 +609,31 @@ static void peer_enumerator_destroy(peer_enumerator_t *this)
 METHOD(backend_t, create_peer_cfg_enumerator, enumerator_t*,
 	private_sql_config_t *this, identification_t *me, identification_t *other)
 {
-	peer_enumerator_t *e = malloc_thing(peer_enumerator_t);
+	peer_enumerator_t *e;
 
-	e->this = this;
-	e->me = me;
-	e->other = other;
-	e->current = NULL;
-	e->public.enumerate = (void*)peer_enumerator_enumerate;
-	e->public.destroy = (void*)peer_enumerator_destroy;
+	INIT(e,
+		.public = {
+			.enumerate = enumerator_enumerate_default,
+			.venumerate = _peer_enumerator_enumerate,
+			.destroy = _peer_enumerator_destroy,
+		},
+		.this = this,
+		.me = me,
+		.other = other,
+	);
 
 	/* TODO: only get configs whose IDs match exactly or contain wildcards */
 	e->inner = this->db->query(this->db,
-			"SELECT c.id, name, ike_cfg, l.type, l.data, r.type, r.data, "
-			"cert_policy, uniqueid, auth_method, eap_type, eap_vendor, "
-			"keyingtries, rekeytime, reauthtime, jitter, overtime, mobike, "
-			"dpd_delay, virtual, pool, "
-			"mediation, mediated_by, COALESCE(p.type, 0), p.data "
+			"SELECT c.id, c.name, c.ike_cfg, l.type, l.data, r.type, r.data, "
+			"c.cert_policy, c.uniqueid, c.auth_method, c.eap_type, "
+			"c.eap_vendor, c.keyingtries, c.rekeytime, c.reauthtime, c.jitter, "
+			"c.overtime, c.mobike, c.dpd_delay, c.virtual, c.pool, "
+			"c.mediation, c.mediated_by, COALESCE(p.type, 0), p.data "
 			"FROM peer_configs AS c "
-			"JOIN identities AS l ON local_id = l.id "
-			"JOIN identities AS r ON remote_id = r.id "
-			"LEFT JOIN identities AS p ON peer_id = p.id "
-			"WHERE ike_version = ?",
+			"JOIN identities AS l ON c.local_id = l.id "
+			"JOIN identities AS r ON c.remote_id = r.id "
+			"LEFT JOIN identities AS p ON c.peer_id = p.id "
+			"WHERE c.ike_version = ?",
 			DB_INT, 2,
 			DB_INT, DB_TEXT, DB_INT, DB_INT, DB_BLOB, DB_INT, DB_BLOB,
 			DB_INT, DB_INT, DB_INT, DB_INT, DB_INT,

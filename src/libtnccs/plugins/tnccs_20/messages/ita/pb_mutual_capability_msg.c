@@ -19,11 +19,13 @@
 #include <bio/bio_reader.h>
 #include <utils/debug.h>
 
-ENUM(pb_tnc_mutual_protocol_type_names, PB_MUTUAL_HALF_DUPLEX,
-										PB_MUTUAL_FULL_DUPLEX,
-	"half duplex",
-	"full duplex"
-);
+ENUM_BEGIN(pb_tnc_mutual_protocol_type_names, PB_MUTUAL_FULL_DUPLEX,
+		   PB_MUTUAL_FULL_DUPLEX,
+	"full duplex");
+ENUM_NEXT(pb_tnc_mutual_protocol_type_names, PB_MUTUAL_HALF_DUPLEX,
+		  PB_MUTUAL_HALF_DUPLEX, PB_MUTUAL_FULL_DUPLEX,
+	"half duplex");
+ENUM_END(pb_tnc_mutual_protocol_type_names, PB_MUTUAL_HALF_DUPLEX);
 
 typedef struct private_pb_mutual_capability_msg_t private_pb_mutual_capability_msg_t;
 
@@ -95,7 +97,7 @@ METHOD(pb_tnc_msg_t, build, void,
 }
 
 METHOD(pb_tnc_msg_t, process, status_t,
-	private_pb_mutual_capability_msg_t *this, u_int32_t *offset)
+	private_pb_mutual_capability_msg_t *this, uint32_t *offset)
 {
 	bio_reader_t *reader;
 

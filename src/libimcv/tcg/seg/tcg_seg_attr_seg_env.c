@@ -119,7 +119,7 @@ METHOD(pa_tnc_attr_t, build, void,
 }
 
 METHOD(pa_tnc_attr_t, process, status_t,
-	private_tcg_seg_attr_seg_env_t *this, u_int32_t *offset)
+	private_tcg_seg_attr_seg_env_t *this, uint32_t *offset)
 {
 	bio_reader_t *reader;
 
@@ -219,7 +219,7 @@ pa_tnc_attr_t* tcg_seg_attr_seg_env_create(chunk_t segment, uint8_t flags,
 	*this->value.ptr = flags;
 	memcpy(this->value.ptr + TCG_SEG_ATTR_SEG_ENV_HEADER,
 		   segment.ptr, segment.len);
-	
+
 	return &this->public.pa_tnc_attribute;
 }
 

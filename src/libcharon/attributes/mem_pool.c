@@ -1,7 +1,7 @@
 /*
  * Copyright (C) 2010 Tobias Brunner
  * Copyright (C) 2008-2010 Martin Willi
- * Hochschule fuer Technik Rapperswil
+ * HSR Hochschule fuer Technik Rapperswil
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -142,7 +142,7 @@ static host_t* offset2host(private_mem_pool_t *pool, int offset)
 {
 	chunk_t addr;
 	host_t *host;
-	u_int32_t *pos;
+	uint32_t *pos;
 
 	offset--;
 	if (offset > pool->size)
@@ -153,11 +153,11 @@ static host_t* offset2host(private_mem_pool_t *pool, int offset)
 	addr = chunk_clone(pool->base->get_address(pool->base));
 	if (pool->base->get_family(pool->base) == AF_INET6)
 	{
-		pos = (u_int32_t*)(addr.ptr + 12);
+		pos = (uint32_t*)(addr.ptr + 12);
 	}
 	else
 	{
-		pos = (u_int32_t*)addr.ptr;
+		pos = (uint32_t*)addr.ptr;
 	}
 	*pos = htonl(offset + ntohl(*pos));
 	host = host_create_from_chunk(pool->base->get_family(pool->base), addr, 0);
@@ -171,7 +171,7 @@ static host_t* offset2host(private_mem_pool_t *pool, int offset)
 static int host2offset(private_mem_pool_t *pool, host_t *addr)
 {
 	chunk_t host, base;
-	u_int32_t hosti, basei;
+	uint32_t hosti, basei;
 
 	if (addr->get_family(addr) != pool->base->get_family(pool->base))
 	{
@@ -189,8 +189,8 @@ static int host2offset(private_mem_pool_t *pool, host_t *addr)
 		host = chunk_skip(host, 12);
 		base = chunk_skip(base, 12);
 	}
-	hosti = ntohl(*(u_int32_t*)(host.ptr));
-	basei = ntohl(*(u_int32_t*)(base.ptr));
+	hosti = ntohl(*(uint32_t*)(host.ptr));
+	basei = ntohl(*(uint32_t*)(base.ptr));
 	if (hosti > basei + pool->size)
 	{
 		return -1;
@@ -512,10 +512,15 @@ typedef struct {
 } lease_enumerator_t;
 
 METHOD(enumerator_t, lease_enumerate, bool,
-	lease_enumerator_t *this, identification_t **id, host_t **addr, bool *online)
+	lease_enumerator_t *this, va_list args)
 {
-	u_int *offset;
+	identification_t **id;
 	unique_lease_t *lease;
+	host_t **addr;
+	u_int *offset;
+	bool *online;
+
+	VA_ARGS_VGET(args, id, addr, online);
 
 	DESTROY_IF(this->addr);
 	this->addr = NULL;
@@ -570,7 +575,8 @@ METHOD(mem_pool_t, create_lease_enumerator, enumerator_t*,
 	this->mutex->lock(this->mutex);
 	INIT(enumerator,
 		.public = {
-			.enumerate = (void*)_lease_enumerate,
+			.enumerate = enumerator_enumerate_default,
+			.venumerate = _lease_enumerate,
 			.destroy = _lease_enumerator_destroy,
 		},
 		.pool = this,
@@ -634,7 +640,7 @@ static private_mem_pool_t *create_generic(char *name)
  */
 static u_int network_id_diff(host_t *host, int hostbits)
 {
-	u_int32_t last;
+	uint32_t last;
 	chunk_t addr;
 
 	if (!hostbits)
@@ -705,7 +711,7 @@ mem_pool_t *mem_pool_create_range(char *name, host_t *from, host_t *to)
 {
 	private_mem_pool_t *this;
 	chunk_t fromaddr, toaddr;
-	u_int32_t diff;
+	uint32_t diff;
 
 	fromaddr = from->get_address(from);
 	toaddr = to->get_address(to);

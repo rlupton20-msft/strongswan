@@ -1,7 +1,7 @@
 /*
- * Copyright (C) 2013-2014 Tobias Brunner
+ * Copyright (C) 2013-2018 Tobias Brunner
  * Copyright (C) 2006-2013 Martin Willi
- * Hochschule fuer Technik Rapperswil
+ * HSR Hochschule fuer Technik Rapperswil
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -120,17 +120,17 @@ struct memory_header_t {
 	/**
 	 * Padding to make sizeof(memory_header_t) == 32
 	 */
-	u_int32_t padding[sizeof(void*) == sizeof(u_int32_t) ? 3 : 0];
+	uint32_t padding[sizeof(void*) == sizeof(uint32_t) ? 3 : 0];
 
 	/**
 	 * Number of bytes following after the header
 	 */
-	u_int32_t bytes;
+	uint32_t bytes;
 
 	/**
 	 * magic bytes to detect bad free or heap underflow, MEMORY_HEADER_MAGIC
 	 */
-	u_int32_t magic;
+	uint32_t magic;
 
 }__attribute__((__packed__));
 
@@ -142,7 +142,7 @@ struct memory_tail_t {
 	/**
 	 * Magic bytes to detect heap overflow, MEMORY_TAIL_MAGIC
 	 */
-	u_int32_t magic;
+	uint32_t magic;
 
 }__attribute__((__packed__));
 
@@ -162,7 +162,12 @@ static spinlock_t *lock;
 /**
  * Is leak detection currently enabled?
  */
-static bool enabled = FALSE;
+static bool enabled;
+
+/**
+ * Whether to report calls to free() with memory not allocated by us
+ */
+static bool ignore_unknown;
 
 /**
  * Is leak detection disabled for the current thread?
@@ -494,7 +499,7 @@ static bool register_hooks()
  * List of functions using static allocation buffers or should be suppressed
  * otherwise on leak report.
  */
-char *whitelist[] = {
+static char *whitelist[] = {
 	/* backtraces, including own */
 	"backtrace_create",
 	"strerror_safe",
@@ -522,6 +527,7 @@ char *whitelist[] = {
 	"vsyslog",
 	"__syslog_chk",
 	"__vsyslog_chk",
+	"__fprintf_chk",
 	"getaddrinfo",
 	"setlocale",
 	"getpass",
@@ -532,6 +538,7 @@ char *whitelist[] = {
 	"getpwuid_r",
 	"initgroups",
 	"tzset",
+	"_IO_file_doallocate",
 	/* ignore dlopen, as we do not dlclose to get proper leak reports */
 	"dlopen",
 	"dlerror",
@@ -549,6 +556,15 @@ char *whitelist[] = {
 	"xmlInitParserCtxt",
 	/* libcurl */
 	"Curl_client_write",
+	/* libsoup */
+	"soup_message_headers_append",
+	"soup_message_headers_clear",
+	"soup_message_headers_get_list",
+	"soup_message_headers_get_one",
+	"soup_session_abort",
+	"soup_session_get_type",
+	/* libldap */
+	"ldap_int_initialize",
 	/* ClearSilver */
 	"nerr_init",
 	/* libgcrypt */
@@ -562,6 +578,20 @@ char *whitelist[] = {
 	"ECDSA_do_sign_ex",
 	"ECDSA_verify",
 	"RSA_new_method",
+	/* OpenSSL 1.1.0 does not cleanup anymore until the library is unloaded */
+	"OPENSSL_init_crypto",
+	"CRYPTO_THREAD_lock_new",
+	"ERR_add_error_data",
+	"ERR_set_mark",
+	"ENGINE_load_builtin_engines",
+	"OPENSSL_load_builtin_modules",
+	"CONF_modules_load_file",
+	"CONF_module_add",
+	"RAND_DRBG_bytes",
+	"RAND_DRBG_generate",
+	"RAND_DRBG_get0_master",
+	"RAND_DRBG_get0_private",
+	"RAND_DRBG_get0_public",
 	/* OpenSSL libssl */
 	"SSL_COMP_get_compression_methods",
 	/* NSPR */
@@ -569,17 +599,36 @@ char *whitelist[] = {
 	/* libapr */
 	"apr_pool_create_ex",
 	/* glib */
+	"g_output_stream_write",
+	"g_resolver_lookup_by_name",
+	"g_signal_connect_data",
+	"g_socket_connection_factory_lookup_type",
 	"g_type_init_with_debug_flags",
 	"g_type_register_static",
 	"g_type_class_ref",
 	"g_type_create_instance",
 	"g_type_add_interface_static",
 	"g_type_interface_add_prerequisite",
-	"g_socket_connection_factory_lookup_type",
+	"g_private_set",
+	"g_queue_pop_tail",
 	/* libgpg */
 	"gpg_err_init",
 	/* gnutls */
 	"gnutls_global_init",
+	/* Ada runtime */
+	"system__tasking__initialize",
+	"system__tasking__initialization__abort_defer",
+	"system__tasking__stages__create_task",
+	/* in case external threads call into our code */
+	"thread_current_id",
+	/* FHH IMCs and IMVs */
+	"TNC_IMC_NotifyConnectionChange",
+	"TNC_IMV_NotifyConnectionChange",
+	/* Botan */
+	"botan_public_key_load",
+	"botan_privkey_create",
+	"botan_privkey_load_ecdh",
+	"botan_privkey_load",
 };
 
 /**
@@ -634,7 +683,8 @@ static int print_traces(private_leak_detective_t *this,
 	int leaks = 0;
 	memory_header_t *hdr;
 	enumerator_t *enumerator;
-	hashtable_t *entries;
+	hashtable_t *entries, *ignored = NULL;
+	backtrace_t *bt;
 	struct {
 		/** associated backtrace */
 		backtrace_t *backtrace;
@@ -649,15 +699,32 @@ static int print_traces(private_leak_detective_t *this,
 
 	entries = hashtable_create((hashtable_hash_t)hash,
 							   (hashtable_equals_t)equals, 1024);
+	if (whitelisted)
+	{
+		ignored = hashtable_create((hashtable_hash_t)hash,
+								   (hashtable_equals_t)equals, 1024);
+	}
+
 	lock->lock(lock);
 	for (hdr = first_header.next; hdr != NULL; hdr = hdr->next)
 	{
-		if (whitelisted &&
-			hdr->backtrace->contains_function(hdr->backtrace,
-											  whitelist, countof(whitelist)))
+		if (whitelisted)
 		{
-			(*whitelisted)++;
-			continue;
+			bt = ignored->get(ignored, hdr->backtrace);
+			if (!bt)
+			{
+				if (hdr->backtrace->contains_function(hdr->backtrace, whitelist,
+													  countof(whitelist)))
+				{
+					bt = hdr->backtrace;
+					ignored->put(ignored, bt, bt);
+				}
+			}
+			if (bt)
+			{
+				(*whitelisted)++;
+				continue;
+			}
 		}
 		entry = entries->get(entries, hdr->backtrace);
 		if (entry)
@@ -681,6 +748,7 @@ static int print_traces(private_leak_detective_t *this,
 		leaks++;
 	}
 	lock->unlock(lock);
+	DESTROY_IF(ignored);
 
 	enumerator = entries->create_enumerator(entries);
 	while (enumerator->enumerate(enumerator, NULL, &entry))
@@ -808,10 +876,11 @@ HOOK(void*, malloc, size_t bytes)
 HOOK(void*, calloc, size_t nmemb, size_t size)
 {
 	void *ptr;
+	volatile size_t total;
 
-	size *= nmemb;
-	ptr = malloc(size);
-	memset(ptr, 0, size);
+	total = nmemb * size;
+	ptr = malloc(total);
+	memset(ptr, 0, total);
 
 	return ptr;
 }
@@ -837,11 +906,23 @@ HOOK(void, free, void *ptr)
 
 	if (!enabled || thread_disabled->get(thread_disabled))
 	{
+		/* after deinitialization we might have to free stuff we allocated
+		 * while we were enabled */
+		if (!first_header.magic && ptr)
+		{
+			hdr = ptr - sizeof(memory_header_t);
+			tail = ptr + hdr->bytes;
+			if (hdr->magic == MEMORY_HEADER_MAGIC &&
+				tail->magic == MEMORY_TAIL_MAGIC)
+			{
+				ptr = hdr;
+			}
+		}
 		real_free(ptr);
 		return;
 	}
 	/* allow freeing of NULL */
-	if (ptr == NULL)
+	if (!ptr)
 	{
 		return;
 	}
@@ -852,21 +933,47 @@ HOOK(void, free, void *ptr)
 	if (hdr->magic != MEMORY_HEADER_MAGIC ||
 		tail->magic != MEMORY_TAIL_MAGIC)
 	{
+		bool bt = TRUE;
+
+		/* check if memory appears to be allocated by our hooks */
 		if (has_hdr(hdr))
 		{
-			/* memory was allocated by our hooks but is corrupted */
 			fprintf(stderr, "freeing corrupted memory (%p): "
-					"header magic 0x%x, tail magic 0x%x:\n",
-					ptr, hdr->magic, tail->magic);
+					"%u bytes, header magic 0x%x, tail magic 0x%x:\n",
+					ptr, hdr->bytes, hdr->magic, tail->magic);
+			remove_hdr(hdr);
+
+			if (hdr->magic == MEMORY_HEADER_MAGIC)
+			{	/* only access the old backtrace if header magic is valid */
+				hdr->backtrace->log(hdr->backtrace, stderr, TRUE);
+				hdr->backtrace->destroy(hdr->backtrace);
+			}
+			else
+			{
+				fprintf(stderr, " header magic invalid, ignore backtrace of "
+						"allocation\n");
+			}
 		}
 		else
 		{
-			/* memory was not allocated by our hooks */
-			fprintf(stderr, "freeing invalid memory (%p)\n", ptr);
+			/* just free this block of unknown memory */
+			hdr = ptr;
+
+			if (ignore_unknown)
+			{
+				bt = FALSE;
+			}
+			else
+			{
+				fprintf(stderr, "freeing unknown memory (%p):\n", ptr);
+			}
 		}
-		backtrace = backtrace_create(2);
-		backtrace->log(backtrace, stderr, TRUE);
-		backtrace->destroy(backtrace);
+		if (bt)
+		{
+			backtrace = backtrace_create(2);
+			backtrace->log(backtrace, stderr, TRUE);
+			backtrace->destroy(backtrace);
+		}
 	}
 	else
 	{
@@ -874,12 +981,11 @@ HOOK(void, free, void *ptr)
 
 		hdr->backtrace->destroy(hdr->backtrace);
 
-		/* clear MAGIC, set mem to something remarkable */
+		/* set mem to something remarkable */
 		memset(hdr, MEMORY_FREE_PATTERN,
 			   sizeof(memory_header_t) + hdr->bytes + sizeof(memory_tail_t));
-
-		real_free(hdr);
 	}
+	real_free(hdr);
 	enable_thread(before);
 }
 
@@ -891,19 +997,19 @@ HOOK(void*, realloc, void *old, size_t bytes)
 	memory_header_t *hdr;
 	memory_tail_t *tail;
 	backtrace_t *backtrace;
-	bool before;
+	bool before, have_backtrace = TRUE;
 
 	if (!enabled || thread_disabled->get(thread_disabled))
 	{
 		return real_realloc(old, bytes);
 	}
 	/* allow reallocation of NULL */
-	if (old == NULL)
+	if (!old)
 	{
 		return malloc(bytes);
 	}
 	/* handle zero size as a free() */
-	if (bytes == 0)
+	if (!bytes)
 	{
 		free(old);
 		return NULL;
@@ -912,22 +1018,64 @@ HOOK(void*, realloc, void *old, size_t bytes)
 	hdr = old - sizeof(memory_header_t);
 	tail = old + hdr->bytes;
 
-	remove_hdr(hdr);
-
+	before = enable_thread(FALSE);
 	if (hdr->magic != MEMORY_HEADER_MAGIC ||
 		tail->magic != MEMORY_TAIL_MAGIC)
 	{
-		fprintf(stderr, "reallocating invalid memory (%p):\n"
-				"header magic 0x%x:\n", old, hdr->magic);
-		backtrace = backtrace_create(2);
-		backtrace->log(backtrace, stderr, TRUE);
-		backtrace->destroy(backtrace);
+		bool bt = TRUE;
+
+		/* check if memory appears to be allocated by our hooks */
+		if (has_hdr(hdr))
+		{
+			fprintf(stderr, "reallocating corrupted memory (%p, %u bytes): "
+					"%zu bytes, header magic 0x%x, tail magic 0x%x:\n",
+					old, hdr->bytes, bytes, hdr->magic, tail->magic);
+			remove_hdr(hdr);
+
+			if (hdr->magic == MEMORY_HEADER_MAGIC)
+			{	/* only access header fields (backtrace, bytes) if header magic
+				 * is still valid */
+				hdr->backtrace->log(hdr->backtrace, stderr, TRUE);
+				memset(&tail->magic, MEMORY_ALLOC_PATTERN, sizeof(tail->magic));
+			}
+			else
+			{
+				fprintf(stderr, " header magic invalid, ignore backtrace of "
+						"allocation\n");
+				have_backtrace = FALSE;
+				hdr->magic = MEMORY_HEADER_MAGIC;
+			}
+		}
+		else
+		{
+			/* adopt this block of unknown memory */
+			hdr = old;
+			have_backtrace = FALSE;
+
+			if (ignore_unknown)
+			{
+				bt = FALSE;
+			}
+			else
+			{
+				fprintf(stderr, "reallocating unknown memory (%p): %zu bytes:\n",
+						old, bytes);
+			}
+		}
+		if (bt)
+		{
+			backtrace = backtrace_create(2);
+			backtrace->log(backtrace, stderr, TRUE);
+			backtrace->destroy(backtrace);
+		}
 	}
 	else
 	{
+		remove_hdr(hdr);
 		/* clear tail magic, allocate, set tail magic */
 		memset(&tail->magic, MEMORY_ALLOC_PATTERN, sizeof(tail->magic));
 	}
+
 	hdr = real_realloc(hdr,
 					   sizeof(memory_header_t) + bytes + sizeof(memory_tail_t));
 	tail = ((void*)hdr) + bytes + sizeof(memory_header_t);
@@ -936,8 +1084,10 @@ HOOK(void*, realloc, void *old, size_t bytes)
 	/* update statistics */
 	hdr->bytes = bytes;
 
-	before = enable_thread(FALSE);
-	hdr->backtrace->destroy(hdr->backtrace);
+	if (have_backtrace)
+	{
+		hdr->backtrace->destroy(hdr->backtrace);
+	}
 	hdr->backtrace = backtrace_create(2);
 	enable_thread(before);
 
@@ -953,6 +1103,7 @@ METHOD(leak_detective_t, destroy, void,
 	lock->destroy(lock);
 	thread_disabled->destroy(thread_disabled);
 	free(this);
+	first_header.magic = 0;
 	first_header.next = NULL;
 }
 
@@ -979,6 +1130,7 @@ leak_detective_t *leak_detective_create()
 		free(this);
 		return NULL;
 	}
+	ignore_unknown = getenv("LEAK_DETECTIVE_IGNORE_UNKNOWN") != NULL;
 
 	lock = spinlock_create();
 	thread_disabled = thread_value_create(NULL);

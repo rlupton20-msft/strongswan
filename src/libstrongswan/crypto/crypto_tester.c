@@ -1,6 +1,7 @@
 /*
  * Copyright (C) 2009-2010 Martin Willi
- * Hochschule fuer Technik Rapperswil
+ * Copyright (C) 2016-2019 Andreas Steffen
+ * HSR Hochschule fuer Technik Rapperswil
  * Copyright (C) 2010 revosec AG
  *
  * This program is free software; you can redistribute it and/or modify it
@@ -24,6 +25,7 @@
 
 #include <utils/debug.h>
 #include <collections/linked_list.h>
+#include <crypto/rngs/rng_tester.h>
 
 typedef struct private_crypto_tester_t private_crypto_tester_t;
 
@@ -61,6 +63,16 @@ struct private_crypto_tester_t {
 	 * List of PRF test vectors
 	 */
 	linked_list_t *prf;
+
+	/**
+	 * List of XOF test vectors
+	 */
+	linked_list_t *xof;
+
+	/**
+	 * List of DRBG test vectors
+	 */
+	linked_list_t *drbg;
 
 	/**
 	 * List of RNG test vectors
@@ -1035,6 +1047,272 @@ failure:
 }
 
 /**
+ * Benchmark an XOF
+ */
+static u_int bench_xof(private_crypto_tester_t *this,
+					   ext_out_function_t alg, xof_constructor_t create)
+{
+	xof_t *xof;
+
+	xof = create(alg);
+	if (xof)
+	{
+		char seed[xof->get_seed_size(xof)];
+		char bytes[xof->get_block_size(xof)];
+		struct timespec start;
+		u_int runs;
+
+		memset(seed, 0x56, xof->get_seed_size(xof));
+		if (!xof->set_seed(xof, chunk_create(seed, xof->get_seed_size(xof))))
+		{
+			xof->destroy(xof);
+			return 0;
+		}
+
+		runs = 0;
+		start_timing(&start);
+		while (end_timing(&start) < this->bench_time)
+		{
+			if (xof->get_bytes(xof, xof->get_block_size(xof), bytes))
+			{
+				runs++;
+			}
+		}
+		xof->destroy(xof);
+
+		return runs;
+	}
+	return 0;
+}
+
+METHOD(crypto_tester_t, test_xof, bool,
+	private_crypto_tester_t *this, ext_out_function_t alg,
+	xof_constructor_t create, u_int *speed, const char *plugin_name)
+{
+	enumerator_t *enumerator;
+	xof_test_vector_t *vector;
+	bool failed = FALSE;
+	u_int tested = 0;
+
+	enumerator = this->xof->create_enumerator(this->xof);
+	while (enumerator->enumerate(enumerator, &vector))
+	{
+		xof_t *xof;
+		chunk_t seed, out = chunk_empty;
+
+		if (vector->alg != alg)
+		{
+			continue;
+		}
+
+		tested++;
+		failed = TRUE;
+		xof = create(alg);
+		if (!xof)
+		{
+			DBG1(DBG_LIB, "disabled %N[%s]: creating instance failed",
+				 ext_out_function_names, alg, plugin_name);
+			break;
+		}
+
+		seed = chunk_create(vector->seed, vector->len);
+		if (!xof->set_seed(xof, seed))
+		{
+			goto failure;
+		}
+		/* allocated bytes */
+		if (!xof->allocate_bytes(xof, vector->out_len, &out))
+		{
+			goto failure;
+		}
+		if (out.len != vector->out_len)
+		{
+			goto failure;
+		}
+		if (!memeq(vector->out, out.ptr, out.len))
+		{
+			goto failure;
+		}
+		/* bytes to existing buffer */
+		memset(out.ptr, 0, out.len);
+		if (!xof->set_seed(xof, seed))
+		{
+			goto failure;
+		}
+		if (!xof->get_bytes(xof, vector->out_len, out.ptr))
+		{
+			goto failure;
+		}
+		if (!memeq(vector->out, out.ptr, vector->out_len))
+		{
+			goto failure;
+		}
+		/* bytes to existing buffer, using append mode */
+		/* TODO */
+
+		failed = FALSE;
+failure:
+		xof->destroy(xof);
+		chunk_free(&out);
+		if (failed)
+		{
+			DBG1(DBG_LIB, "disabled %N[%s]: %s test vector failed",
+				 ext_out_function_names, alg, plugin_name, get_name(vector));
+			break;
+		}
+	}
+	enumerator->destroy(enumerator);
+	if (!tested)
+	{
+		DBG1(DBG_LIB, "%s %N[%s]: no test vectors found",
+			 this->required ? "disabled" : "enabled ",
+			 ext_out_function_names, alg, plugin_name);
+		return !this->required;
+	}
+	if (!failed)
+	{
+		if (speed)
+		{
+			*speed = bench_xof(this, alg, create);
+			DBG1(DBG_LIB, "enabled  %N[%s]: passed %u test vectors, %d points",
+				 ext_out_function_names, alg, plugin_name, tested, *speed);
+		}
+		else
+		{
+			DBG1(DBG_LIB, "enabled  %N[%s]: passed %u test vectors",
+				 ext_out_function_names, alg, plugin_name, tested);
+		}
+	}
+	return !failed;
+}
+
+/**
+ * Benchmark a DRBG
+ */
+static u_int bench_drbg(private_crypto_tester_t *this,
+						drbg_type_t type, drbg_constructor_t create)
+{
+	drbg_t *drbg;
+	rng_t *entropy;
+	uint32_t strength = 128;
+	chunk_t seed = chunk_alloca(48);
+
+	memset(seed.ptr, 0x81, seed.len);
+	entropy = rng_tester_create(seed);
+
+	drbg = create(type, strength, entropy, chunk_empty);
+	if (drbg)
+	{
+		struct timespec start;
+		u_int runs = 0;
+		size_t out_len = 128;
+		char out_buf[out_len];
+
+		start_timing(&start);
+		while (end_timing(&start) < this->bench_time)
+		{
+			if (drbg->generate(drbg, out_len, out_buf))
+			{
+				runs++;
+			}
+		}
+		drbg->destroy(drbg);
+
+		return runs;
+	}
+	return 0;
+}
+
+METHOD(crypto_tester_t, test_drbg, bool,
+	private_crypto_tester_t *this, drbg_type_t type,
+	drbg_constructor_t create, u_int *speed, const char *plugin_name)
+{
+	enumerator_t *enumerator;
+	drbg_test_vector_t *vector;
+	bool failed = FALSE;
+	u_int tested = 0;
+
+	enumerator = this->drbg->create_enumerator(this->drbg);
+	while (enumerator->enumerate(enumerator, &vector))
+	{
+		drbg_t *drbg;
+		rng_t *entropy;
+		chunk_t out = chunk_empty;
+
+		if (vector->type != type)
+		{
+			continue;
+		}
+		tested++;
+		failed = TRUE;
+
+		entropy = rng_tester_create(vector->entropy);
+		out = chunk_alloc(vector->out.len);
+
+		drbg = create(type, vector->strength, entropy,
+					  vector->personalization_str);
+		if (!drbg)
+		{
+			DBG1(DBG_LIB, "disabled %N[%s]: creating instance failed",
+				 drbg_type_names, type, plugin_name);
+			entropy->destroy(entropy);
+			chunk_free(&out);
+			break;
+		}
+		if (!drbg->reseed(drbg))
+		{
+			goto failure;
+		}
+		if (!drbg->generate(drbg, out.len, out.ptr))
+		{
+			goto failure;
+		}
+		if (!drbg->generate(drbg, out.len, out.ptr))
+		{
+			goto failure;
+		}
+		if (!chunk_equals(out, vector->out))
+		{
+			goto failure;
+		}
+		failed = FALSE;
+
+failure:
+		drbg->destroy(drbg);
+		chunk_free(&out);
+		if (failed)
+		{
+			DBG1(DBG_LIB, "disabled %N[%s]: %s test vector failed",
+				 drbg_type_names, type, plugin_name, get_name(vector));
+			break;
+		}
+	}
+	enumerator->destroy(enumerator);
+	if (!tested)
+	{
+		DBG1(DBG_LIB, "%s %N[%s]: no test vectors found",
+			 this->required ? "disabled" : "enabled ",
+			 drbg_type_names, type, plugin_name);
+		return !this->required;
+	}
+	if (!failed)
+	{
+		if (speed)
+		{
+			*speed = bench_drbg(this, type, create);
+			DBG1(DBG_LIB, "enabled  %N[%s]: passed %u test vectors, %d points",
+				 drbg_type_names, type, plugin_name, tested, *speed);
+		}
+		else
+		{
+			DBG1(DBG_LIB, "enabled  %N[%s]: passed %u test vectors",
+				 drbg_type_names, type, plugin_name, tested);
+		}
+	}
+	return !failed;
+}
+
+/**
  * Benchmark a RNG
  */
 static u_int bench_rng(private_crypto_tester_t *this,
@@ -1338,6 +1616,18 @@ METHOD(crypto_tester_t, add_prf_vector, void,
 	this->prf->insert_last(this->prf, vector);
 }
 
+METHOD(crypto_tester_t, add_xof_vector, void,
+	private_crypto_tester_t *this, xof_test_vector_t *vector)
+{
+	this->xof->insert_last(this->xof, vector);
+}
+
+METHOD(crypto_tester_t, add_drbg_vector, void,
+	private_crypto_tester_t *this, drbg_test_vector_t *vector)
+{
+	this->drbg->insert_last(this->drbg, vector);
+}
+
 METHOD(crypto_tester_t, add_rng_vector, void,
 	private_crypto_tester_t *this, rng_test_vector_t *vector)
 {
@@ -1358,6 +1648,8 @@ METHOD(crypto_tester_t, destroy, void,
 	this->signer->destroy(this->signer);
 	this->hasher->destroy(this->hasher);
 	this->prf->destroy(this->prf);
+	this->xof->destroy(this->xof);
+	this->drbg->destroy(this->drbg);
 	this->rng->destroy(this->rng);
 	this->dh->destroy(this->dh);
 	free(this);
@@ -1377,6 +1669,8 @@ crypto_tester_t *crypto_tester_create()
 			.test_signer = _test_signer,
 			.test_hasher = _test_hasher,
 			.test_prf = _test_prf,
+			.test_xof = _test_xof,
+			.test_drbg = _test_drbg,
 			.test_rng = _test_rng,
 			.test_dh = _test_dh,
 			.add_crypter_vector = _add_crypter_vector,
@@ -1384,6 +1678,8 @@ crypto_tester_t *crypto_tester_create()
 			.add_signer_vector = _add_signer_vector,
 			.add_hasher_vector = _add_hasher_vector,
 			.add_prf_vector = _add_prf_vector,
+			.add_xof_vector = _add_xof_vector,
+			.add_drbg_vector = _add_drbg_vector,
 			.add_rng_vector = _add_rng_vector,
 			.add_dh_vector = _add_dh_vector,
 			.destroy = _destroy,
@@ -1393,6 +1689,8 @@ crypto_tester_t *crypto_tester_create()
 		.signer = linked_list_create(),
 		.hasher = linked_list_create(),
 		.prf = linked_list_create(),
+		.xof = linked_list_create(),
+		.drbg = linked_list_create(),
 		.rng = linked_list_create(),
 		.dh = linked_list_create(),
 

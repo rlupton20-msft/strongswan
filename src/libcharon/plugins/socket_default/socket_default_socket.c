@@ -3,7 +3,7 @@
  * Copyright (C) 2006 Daniel Roethlisberger
  * Copyright (C) 2005-2010 Martin Willi
  * Copyright (C) 2005 Jan Hutter
- * Hochschule fuer Technik Rapperswil
+ * HSR Hochschule fuer Technik Rapperswil
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -84,12 +84,12 @@ struct private_socket_default_socket_t {
 	/**
 	 * Configured port (or random, if initially 0)
 	 */
-	u_int16_t port;
+	uint16_t port;
 
 	/**
 	 * Configured port for NAT-T (or random, if initially 0)
 	 */
-	u_int16_t natt;
+	uint16_t natt;
 
 	/**
 	 * IPv4 socket (500 or port)
@@ -114,22 +114,22 @@ struct private_socket_default_socket_t {
 	/**
 	 * DSCP value set on IPv4 socket
 	 */
-	u_int8_t dscp4;
+	uint8_t dscp4;
 
 	/**
 	 * DSCP value set on IPv4 socket for NAT-T (4500 or natt)
 	 */
-	u_int8_t dscp4_natt;
+	uint8_t dscp4_natt;
 
 	/**
 	 * DSCP value set on IPv6 socket (500 or port)
 	 */
-	u_int8_t dscp6;
+	uint8_t dscp6;
 
 	/**
 	 * DSCP value set on IPv6 socket for NAT-T (4500 or natt)
 	 */
-	u_int8_t dscp6_natt;
+	uint8_t dscp6_natt;
 
 	/**
 	 * Maximum packet size to receive
@@ -140,6 +140,11 @@ struct private_socket_default_socket_t {
 	 * TRUE if the source address should be set on outbound packets
 	 */
 	bool set_source;
+
+	/**
+	 * TRUE to force sending source interface on outbound packetrs
+	 */
+	bool set_sourceif;
 
 	/**
 	 * A counter to implement round-robin selection of read sockets
@@ -153,7 +158,7 @@ struct private_socket_default_socket_t {
  */
 #ifdef IP_PKTINFO
 
-static host_t *get_dst_v4(struct cmsghdr *cmsgptr, u_int16_t port)
+static host_t *get_dst_v4(struct cmsghdr *cmsgptr, uint16_t port)
 {
 	struct sockaddr_in dst = {
 		.sin_family = AF_INET,
@@ -174,7 +179,7 @@ static host_t *get_dst_v4(struct cmsghdr *cmsgptr, u_int16_t port)
 
 #elif defined(IP_RECVDSTADDR)
 
-static host_t *get_dst_v4(struct cmsghdr *cmsgptr, u_int16_t port)
+static host_t *get_dst_v4(struct cmsghdr *cmsgptr, uint16_t port)
 {
 	struct sockaddr_in dst = {
 		.sin_family = AF_INET,
@@ -193,7 +198,7 @@ static host_t *get_dst_v4(struct cmsghdr *cmsgptr, u_int16_t port)
 
 #else /* IP_PKTINFO || IP_RECVDSTADDR */
 
-static host_t *get_dst_v4(struct cmsghdr *cmsgptr, u_int16_t port)
+static host_t *get_dst_v4(struct cmsghdr *cmsgptr, uint16_t port)
 {
 	return NULL;
 }
@@ -206,7 +211,7 @@ static host_t *get_dst_v4(struct cmsghdr *cmsgptr, u_int16_t port)
  */
 #ifdef HAVE_IN6_PKTINFO
 
-static host_t *get_dst_v6(struct cmsghdr *cmsgptr, u_int16_t port)
+static host_t *get_dst_v6(struct cmsghdr *cmsgptr, uint16_t port)
 {
 	struct in6_pktinfo *pktinfo;
 	struct sockaddr_in6 dst = {
@@ -225,7 +230,7 @@ static host_t *get_dst_v6(struct cmsghdr *cmsgptr, u_int16_t port)
 
 #else /* HAVE_IN6_PKTINFO */
 
-static host_t *get_dst_v6(struct cmsghdr *cmsgptr, u_int16_t port)
+static host_t *get_dst_v6(struct cmsghdr *cmsgptr, uint16_t port)
 {
 	return NULL;
 }
@@ -241,7 +246,7 @@ METHOD(socket_t, receiver, status_t,
 	host_t *source = NULL, *dest = NULL;
 	int i, rr, index, bytes_read = 0, selected = -1;
 	bool oldstate;
-	u_int16_t port = 0;
+	uint16_t port = 0;
 	struct pollfd pfd[] = {
 		{ .fd = this->ipv4,			.events = POLLIN },
 		{ .fd = this->ipv4_natt,	.events = POLLIN },
@@ -362,12 +367,33 @@ static ssize_t send_msg_generic(int skt, struct msghdr *msg)
 	return sendmsg(skt, msg, 0);
 }
 
+#if defined(IP_PKTINFO) || defined(HAVE_IN6_PKTINFO)
+
+/**
+ * Find the interface index a source address is installed on
+ */
+static int find_srcif(host_t *src)
+{
+	char *ifname;
+	int idx = 0;
+
+	if (charon->kernel->get_interface(charon->kernel, src, &ifname))
+	{
+		idx = if_nametoindex(ifname);
+		free(ifname);
+	}
+	return idx;
+}
+
+#endif /* IP_PKTINFO || HAVE_IN6_PKTINFO */
+
 /**
  * Send a message with the IPv4 source address set, if possible.
  */
 #ifdef IP_PKTINFO
 
-static ssize_t send_msg_v4(int skt, struct msghdr *msg, host_t *src)
+static ssize_t send_msg_v4(private_socket_default_socket_t *this, int skt,
+						   struct msghdr *msg, host_t *src)
 {
 	char buf[CMSG_SPACE(sizeof(struct in_pktinfo))] = {};
 	struct cmsghdr *cmsg;
@@ -383,6 +409,10 @@ static ssize_t send_msg_v4(int skt, struct msghdr *msg, host_t *src)
 	cmsg->cmsg_len = CMSG_LEN(sizeof(struct in_pktinfo));
 
 	pktinfo = (struct in_pktinfo*)CMSG_DATA(cmsg);
+	if (this->set_sourceif)
+	{
+		pktinfo->ipi_ifindex = find_srcif(src);
+	}
 	addr = &pktinfo->ipi_spec_dst;
 
 	sin = (struct sockaddr_in*)src->get_sockaddr(src);
@@ -392,7 +422,8 @@ static ssize_t send_msg_v4(int skt, struct msghdr *msg, host_t *src)
 
 #elif defined(IP_SENDSRCADDR)
 
-static ssize_t send_msg_v4(int skt, struct msghdr *msg, host_t *src)
+static ssize_t send_msg_v4(private_socket_default_socket_t *this, int skt,
+						   struct msghdr *msg, host_t *src)
 {
 	char buf[CMSG_SPACE(sizeof(struct in_addr))] = {};
 	struct cmsghdr *cmsg;
@@ -415,7 +446,8 @@ static ssize_t send_msg_v4(int skt, struct msghdr *msg, host_t *src)
 
 #else /* IP_PKTINFO || IP_RECVDSTADDR */
 
-static ssize_t send_msg_v4(int skt, struct msghdr *msg, host_t *src)
+static ssize_t send_msg_v4(private_socket_default_socket_t *this,
+						   int skt, struct msghdr *msg, host_t *src)
 {
 	return send_msg_generic(skt, msg);
 }
@@ -427,7 +459,8 @@ static ssize_t send_msg_v4(int skt, struct msghdr *msg, host_t *src)
  */
 #ifdef HAVE_IN6_PKTINFO
 
-static ssize_t send_msg_v6(int skt, struct msghdr *msg, host_t *src)
+static ssize_t send_msg_v6(private_socket_default_socket_t *this, int skt,
+						   struct msghdr *msg, host_t *src)
 {
 	char buf[CMSG_SPACE(sizeof(struct in6_pktinfo))] = {};
 	struct cmsghdr *cmsg;
@@ -441,6 +474,10 @@ static ssize_t send_msg_v6(int skt, struct msghdr *msg, host_t *src)
 	cmsg->cmsg_type = IPV6_PKTINFO;
 	cmsg->cmsg_len = CMSG_LEN(sizeof(struct in6_pktinfo));
 	pktinfo = (struct in6_pktinfo*)CMSG_DATA(cmsg);
+	if (this->set_sourceif)
+	{
+		pktinfo->ipi6_ifindex = find_srcif(src);
+	}
 	sin = (struct sockaddr_in6*)src->get_sockaddr(src);
 	memcpy(&pktinfo->ipi6_addr, &sin->sin6_addr, sizeof(struct in6_addr));
 	return send_msg_generic(skt, msg);
@@ -448,7 +485,8 @@ static ssize_t send_msg_v6(int skt, struct msghdr *msg, host_t *src)
 
 #else /* HAVE_IN6_PKTINFO */
 
-static ssize_t send_msg_v6(int skt, struct msghdr *msg, host_t *src)
+static ssize_t send_msg_v6(private_socket_default_socket_t *this,
+						   int skt, struct msghdr *msg, host_t *src)
 {
 	return send_msg_generic(skt, msg);
 }
@@ -464,7 +502,7 @@ METHOD(socket_t, sender, status_t,
 	host_t *src, *dst;
 	struct msghdr msg;
 	struct iovec iov;
-	u_int8_t *dscp;
+	uint8_t *dscp;
 
 	src = packet->get_source(packet);
 	dst = packet->get_destination(packet);
@@ -521,7 +559,11 @@ METHOD(socket_t, sender, status_t,
 	{
 		if (family == AF_INET)
 		{
-			u_int8_t ds4;
+#ifdef __FreeBSD__
+			int ds4;
+#else
+			uint8_t ds4;
+#endif
 
 			ds4 = packet->get_dscp(packet) << 2;
 			if (setsockopt(skt, SOL_IP, IP_TOS, &ds4, sizeof(ds4)) == 0)
@@ -564,11 +606,11 @@ METHOD(socket_t, sender, status_t,
 	{
 		if (family == AF_INET)
 		{
-			bytes_sent = send_msg_v4(skt, &msg, src);
+			bytes_sent = send_msg_v4(this, skt, &msg, src);
 		}
 		else
 		{
-			bytes_sent = send_msg_v6(skt, &msg, src);
+			bytes_sent = send_msg_v6(this, skt, &msg, src);
 		}
 	}
 	else
@@ -584,7 +626,7 @@ METHOD(socket_t, sender, status_t,
 	return SUCCESS;
 }
 
-METHOD(socket_t, get_port, u_int16_t,
+METHOD(socket_t, get_port, uint16_t,
 	private_socket_default_socket_t *this, bool nat_t)
 {
 	return nat_t ? this->natt : this->port;
@@ -610,7 +652,7 @@ METHOD(socket_t, supported_families, socket_family_t,
  * open a socket to send and receive packets
  */
 static int open_socket(private_socket_default_socket_t *this,
-					   int family, u_int16_t *port)
+					   int family, uint16_t *port)
 {
 	int on = TRUE;
 	union {
@@ -707,7 +749,7 @@ static int open_socket(private_socket_default_socket_t *this,
 
 		fwmark = lib->settings->get_str(lib->settings,
 							"%s.plugins.socket-default.fwmark", NULL, lib->ns);
-		if (fwmark && mark_from_string(fwmark, &mark))
+		if (fwmark && mark_from_string(fwmark, MARK_OP_NONE, &mark))
 		{
 			if (setsockopt(skt, SOL_SOCKET, SO_MARK, &mark.value,
 						   sizeof(mark.value)) < 0)
@@ -830,6 +872,9 @@ socket_default_socket_t *socket_default_socket_create()
 							"%s.max_packet", PACKET_MAX_DEFAULT, lib->ns),
 		.set_source = lib->settings->get_bool(lib->settings,
 							"%s.plugins.socket-default.set_source", TRUE,
+							lib->ns),
+		.set_sourceif = lib->settings->get_bool(lib->settings,
+							"%s.plugins.socket-default.set_sourceif", FALSE,
 							lib->ns),
 	);
 

@@ -2,7 +2,7 @@
  * Copyright (C) 2012 Tobias Brunner
  * Copyright (C) 2005-2006 Martin Willi
  * Copyright (C) 2005 Jan Hutter
- * Hochschule fuer Technik Rapperswil
+ * HSR Hochschule fuer Technik Rapperswil
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -38,7 +38,7 @@ struct private_mac_t {
 	/**
 	 * Block size, as in RFC.
 	 */
-	u_int8_t b;
+	uint8_t b;
 
 	/**
 	 * Hash function.
@@ -57,7 +57,7 @@ struct private_mac_t {
 };
 
 METHOD(mac_t, get_mac, bool,
-	private_mac_t *this, chunk_t data, u_int8_t *out)
+	private_mac_t *this, chunk_t data, uint8_t *out)
 {
 	/* H(K XOR opad, H(K XOR ipad, text))
 	 *
@@ -66,7 +66,7 @@ METHOD(mac_t, get_mac, bool,
 	 *
 	 */
 
-	u_int8_t buffer[this->h->get_hash_size(this->h)];
+	uint8_t buffer[this->h->get_hash_size(this->h)];
 	chunk_t inner;
 
 	if (out == NULL)
@@ -96,7 +96,7 @@ METHOD(mac_t, set_key, bool,
 	private_mac_t *this, chunk_t key)
 {
 	int i;
-	u_int8_t buffer[this->b];
+	uint8_t buffer[this->b];
 
 	memset(buffer, 0, this->b);
 

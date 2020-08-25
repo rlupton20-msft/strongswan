@@ -1,6 +1,6 @@
 /*
  * Copyright (C) 2013-2015 Tobias Brunner
- * Hochschule fuer Technik Rapperswil
+ * HSR Hochschule fuer Technik Rapperswil
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -115,15 +115,63 @@ START_TEST(test_timeval_add_ms)
 END_TEST
 
 /*******************************************************************************
+ * timespan_from_string
+ */
+
+static struct {
+	char *s;
+	char *u;
+	bool v;
+	time_t t;
+} ts_data[] = {
+	{NULL,	NULL,	FALSE,	0},
+	{"",	NULL,	FALSE,	0},
+	{"a",	NULL,	FALSE,	0},
+	{"0",	NULL,	TRUE,	0},
+	{"5",	NULL,	TRUE,	5},
+	{"5s",	NULL,	TRUE,	5},
+	{"5m",	NULL,	TRUE,	300},
+	{"5ms",	NULL,	TRUE,	300},
+	{"5h",	NULL,	TRUE,	18000},
+	{"5d",	NULL,	TRUE,	432000},
+	{"5x",	NULL,	FALSE,	0},
+	{"5",	"",		TRUE,	5},
+	{"5",	"m",	TRUE,	300},
+	{"5",	"ms",	TRUE,	300},
+	{"5",	"x",	FALSE,	0},
+	{"5x",	"m",	FALSE,	0},
+	{"18446744073709551616",	NULL,	FALSE,	0},
+};
+
+START_TEST(test_timespan_from_string)
+{
+	time_t val = 42;
+
+	ck_assert(timespan_from_string(ts_data[_i].s, ts_data[_i].u,
+								   NULL) == ts_data[_i].v);
+	ck_assert(timespan_from_string(ts_data[_i].s, ts_data[_i].u,
+								   &val) == ts_data[_i].v);
+	if (ts_data[_i].v)
+	{
+		ck_assert_int_eq(val, ts_data[_i].t);
+	}
+	else
+	{
+		ck_assert_int_eq(val, 42);
+	}
+}
+END_TEST
+
+/*******************************************************************************
  * htoun/untoh
  */
 
 START_TEST(test_htoun)
 {
 	chunk_t net64, expected;
-	u_int16_t host16 = 513;
-	u_int32_t net16 = 0, host32 = 67305985;
-	u_int64_t net32 = 0, host64 = 578437695752307201ULL;
+	uint16_t host16 = 513;
+	uint32_t net16 = 0, host32 = 67305985;
+	uint64_t net32 = 0, host64 = 578437695752307201ULL;
 
 	net64 = chunk_alloca(16);
 	memset(net64.ptr, 0, net64.len);
@@ -133,14 +181,14 @@ START_TEST(test_htoun)
 	ck_assert(chunk_equals(expected, chunk_from_thing(net16)));
 
 	expected = chunk_from_chars(0x00, 0x00, 0x04, 0x03, 0x02, 0x01, 0x00, 0x00);
-	htoun32((u_int16_t*)&net32 + 1, host32);
+	htoun32((uint16_t*)&net32 + 1, host32);
 	ck_assert(chunk_equals(expected, chunk_from_thing(net32)));
 
 	expected = chunk_from_chars(0x00, 0x00, 0x00, 0x00,
 								0x08, 0x07, 0x06, 0x05,
 								0x04, 0x03, 0x02, 0x01,
 								0x00, 0x00, 0x00, 0x00);
-	htoun64((u_int32_t*)net64.ptr + 1, host64);
+	htoun64((uint32_t*)net64.ptr + 1, host64);
 	ck_assert(chunk_equals(expected, net64));
 }
 END_TEST
@@ -148,9 +196,9 @@ END_TEST
 START_TEST(test_untoh)
 {
 	chunk_t net;
-	u_int16_t host16;
-	u_int32_t host32;
-	u_int64_t host64;
+	uint16_t host16;
+	uint32_t host32;
+	uint64_t host64;
 
 	net = chunk_from_chars(0x00, 0x02, 0x01, 0x00);
 	host16 = untoh16(net.ptr + 1);
@@ -193,6 +241,82 @@ START_TEST(test_round)
 	ck_assert_int_eq(round_down(3, 4), 0);
 	ck_assert_int_eq(round_down(4, 4), 4);
 	ck_assert_int_eq(round_down(5, 4), 4);
+}
+END_TEST
+
+/*******************************************************************************
+ * streq
+ */
+
+static struct {
+	char *a;
+	char *b;
+	bool eq;
+	bool case_eq;
+} streq_data[] = {
+	{NULL, NULL, TRUE, TRUE},
+	{NULL, "", FALSE, FALSE},
+	{"", NULL, FALSE, FALSE},
+	{"abc", "", FALSE, FALSE},
+	{"abc", "abc", TRUE, TRUE},
+	{"abc", "ABC", FALSE, TRUE},
+};
+
+START_TEST(test_streq)
+{
+	bool eq;
+
+	ck_assert(streq(streq_data[_i].a, streq_data[_i].a));
+	ck_assert(streq(streq_data[_i].b, streq_data[_i].b));
+	eq = streq(streq_data[_i].a, streq_data[_i].b);
+	ck_assert(eq == streq_data[_i].eq);
+
+	ck_assert(strcaseeq(streq_data[_i].a, streq_data[_i].a));
+	ck_assert(strcaseeq(streq_data[_i].b, streq_data[_i].b));
+	eq = strcaseeq(streq_data[_i].a, streq_data[_i].b);
+	ck_assert(eq == streq_data[_i].case_eq);
+}
+END_TEST
+
+/*******************************************************************************
+ * strneq
+ */
+
+static struct {
+	char *a;
+	char *b;
+	size_t n;
+	bool eq;
+	bool case_eq;
+} strneq_data[] = {
+	{NULL, NULL, 0, TRUE, TRUE},
+	{NULL, NULL, 10, TRUE, TRUE},
+	{NULL, "", 0, FALSE, FALSE},
+	{"", NULL, 0, FALSE, FALSE},
+	{"abc", "", 0, TRUE, TRUE},
+	{"abc", "", 1, FALSE, FALSE},
+	{"abc", "ab", 1, TRUE, TRUE},
+	{"abc", "ab", 2, TRUE, TRUE},
+	{"abc", "ab", 3, FALSE, FALSE},
+	{"abc", "abc", 3, TRUE, TRUE},
+	{"abc", "abc", 4, TRUE, TRUE},
+	{"abc", "abC", 2, TRUE, TRUE},
+	{"abc", "abC", 3, FALSE, TRUE},
+};
+
+START_TEST(test_strneq)
+{
+	bool eq;
+
+	ck_assert(strneq(strneq_data[_i].a, strneq_data[_i].a, strneq_data[_i].n));
+	ck_assert(strneq(strneq_data[_i].b, strneq_data[_i].b, strneq_data[_i].n));
+	eq = strneq(strneq_data[_i].a, strneq_data[_i].b, strneq_data[_i].n);
+	ck_assert(eq == strneq_data[_i].eq);
+
+	ck_assert(strncaseeq(strneq_data[_i].a, strneq_data[_i].a,  strneq_data[_i].n));
+	ck_assert(strncaseeq(strneq_data[_i].b, strneq_data[_i].b,  strneq_data[_i].n));
+	eq = strncaseeq(strneq_data[_i].a, strneq_data[_i].b,  strneq_data[_i].n);
+	ck_assert(eq == strneq_data[_i].case_eq);
 }
 END_TEST
 
@@ -308,7 +432,7 @@ END_TEST
 
 START_TEST(test_memxor_aligned)
 {
-	u_int64_t a = 0, b = 0;
+	uint64_t a = 0, b = 0;
 	chunk_t ca, cb;
 	int i;
 
@@ -420,6 +544,63 @@ START_TEST(test_memstr)
 	{
 		ck_assert(ret == NULL);
 	}
+}
+END_TEST
+
+/*******************************************************************************
+ * memwipe
+ */
+
+START_TEST(test_memwipe_null)
+{
+	memwipe(NULL, 16);
+}
+END_TEST
+
+static inline bool test_wiped_memory(char *buf, size_t len)
+{
+	int i;
+
+	/* comparing two bytes at once reduces the chances of conflicts if memory
+	 * got overwritten already */
+	for (i = 0; i < len; i += 2)
+	{
+		if (buf[i] != 0 && buf[i] == i &&
+			buf[i+1] != 0 && buf[i+1] == i+1)
+		{
+			return FALSE;
+		}
+	}
+	return TRUE;
+}
+
+START_TEST(test_memwipe_stack)
+{
+	char buf[64];
+	int i;
+
+	for (i = 0; i < sizeof(buf); i++)
+	{
+		buf[i] = i;
+	}
+	memwipe(buf, sizeof(buf));
+	ck_assert(test_wiped_memory(buf, sizeof(buf)));
+}
+END_TEST
+
+START_TEST(test_memwipe_heap)
+{
+	size_t len = 64;
+	char *buf = malloc(len);
+	int i;
+
+	for (i = 0; i < len; i++)
+	{
+		buf[i] = i;
+	}
+	memwipe(buf, len);
+	ck_assert(test_wiped_memory(buf, len));
+	free(buf);
 }
 END_TEST
 
@@ -736,32 +917,75 @@ END_TEST
 static struct {
 	char *s;
 	bool ok;
+	mark_op_t ops;
 	mark_t m;
 } mark_data[] = {
-	{NULL,			FALSE, { 0 }},
-	{"",			TRUE,  { 0, 0xffffffff }},
-	{"/",			TRUE,  { 0, 0 }},
-	{"42",			TRUE,  { 42, 0xffffffff }},
-	{"0x42",		TRUE,  { 0x42, 0xffffffff }},
-	{"x",			FALSE, { 0 }},
-	{"42/",			TRUE,  { 0, 0 }},
-	{"42/0",		TRUE,  { 0, 0 }},
-	{"42/x",		FALSE, { 0 }},
-	{"42/42",		TRUE,  { 42, 42 }},
-	{"42/0xff",		TRUE,  { 42, 0xff }},
-	{"0x42/0xff",	TRUE,  { 0x42, 0xff }},
-	{"/0xff",		TRUE,  { 0, 0xff }},
-	{"/x",			FALSE, { 0 }},
-	{"x/x",			FALSE, { 0 }},
-	{"0xffffffff/0x0000ffff",	TRUE, { 0x0000ffff, 0x0000ffff }},
-	{"0xffffffff/0xffffffff",	TRUE, { 0xffffffff, 0xffffffff }},
+	{NULL,			FALSE,	MARK_OP_NONE, { 0 }},
+	{"",			TRUE,	MARK_OP_NONE, { 0, 0xffffffff }},
+	{"/",			TRUE,	MARK_OP_NONE, { 0, 0 }},
+	{"42",			TRUE,	MARK_OP_NONE, { 42, 0xffffffff }},
+	{"0x42",		TRUE,	MARK_OP_NONE, { 0x42, 0xffffffff }},
+	{"x",			FALSE,	MARK_OP_NONE, { 0 }},
+	{"42/",			TRUE,	MARK_OP_NONE, { 0, 0 }},
+	{"42/0",		TRUE,	MARK_OP_NONE, { 0, 0 }},
+	{"42/x",		FALSE,	MARK_OP_NONE, { 0 }},
+	{"42/42",		TRUE,	MARK_OP_NONE, { 42, 42 }},
+	{"42/0xff",		TRUE,	MARK_OP_NONE, { 42, 0xff }},
+	{"0x42/0xff",	TRUE,	MARK_OP_NONE, { 0x42, 0xff }},
+	{"/0xff",		TRUE,	MARK_OP_NONE, { 0, 0xff }},
+	{"/x",			FALSE,	MARK_OP_NONE, { 0 }},
+	{"x/x",			FALSE,	MARK_OP_NONE, { 0 }},
+	{"0xfffffff0/0x0000ffff",	TRUE,	MARK_OP_UNIQUE,
+		{ 0x0000fff0, 0x0000ffff }},
+	{"%unique",					TRUE,	MARK_OP_UNIQUE,
+		{ MARK_UNIQUE, 0xffffffff }},
+	{"%unique/",				TRUE,	MARK_OP_UNIQUE,
+		{ MARK_UNIQUE, 0 }},
+	{"%unique",					FALSE,	MARK_OP_NONE,
+		{ 0, 0 }},
+	{"%unique/0x0000ffff",		TRUE,	MARK_OP_UNIQUE,
+		{ MARK_UNIQUE, 0x0000ffff }},
+	{"%unique/0xffffffff",		TRUE,	MARK_OP_UNIQUE,
+		{ MARK_UNIQUE, 0xffffffff }},
+	{"%unique0xffffffffff",		FALSE,	MARK_OP_UNIQUE,
+		{ 0, 0 }},
+	{"0xffffffff/0x0000ffff",	TRUE,	MARK_OP_UNIQUE,
+		{ MARK_UNIQUE, 0x0000ffff }},
+	{"0xffffffff/0xffffffff",	TRUE,	MARK_OP_UNIQUE,
+		{ MARK_UNIQUE, 0xffffffff }},
+	{"%unique-dir",				TRUE,	MARK_OP_UNIQUE,
+		{ MARK_UNIQUE_DIR, 0xffffffff }},
+	{"%unique-dir/",			TRUE,	MARK_OP_UNIQUE,
+		{ MARK_UNIQUE_DIR, 0 }},
+	{"%unique-dir",				FALSE,	MARK_OP_NONE,
+		{ 0, 0 }},
+	{"%unique-dir/0x0000ffff",	TRUE,	MARK_OP_UNIQUE,
+		{ MARK_UNIQUE_DIR, 0x0000ffff }},
+	{"%unique-dir/0xffffffff",	TRUE,	MARK_OP_UNIQUE,
+		{ MARK_UNIQUE_DIR, 0xffffffff }},
+	{"%unique-dir0xffffffff",	FALSE,	MARK_OP_UNIQUE,
+		{ 0, 0 }},
+	{"0xfffffffe/0x0000ffff",	TRUE,	MARK_OP_UNIQUE,
+		{ MARK_UNIQUE_DIR, 0x0000ffff }},
+	{"0xfffffffe/0xffffffff",	TRUE,	MARK_OP_UNIQUE,
+		{ MARK_UNIQUE_DIR, 0xffffffff }},
+	{"%unique-/0xffffffff",		FALSE,	MARK_OP_UNIQUE,
+		{ 0, 0 }},
+	{"%unique-foo/0xffffffff",	FALSE,	MARK_OP_UNIQUE,
+		{ 0, 0 }},
+	{"%same",					TRUE,	MARK_OP_SAME,
+		{ MARK_SAME, 0xffffffff }},
+	{"%same/0x0000ffff",		TRUE,	MARK_OP_SAME,
+		{ MARK_SAME, 0x0000ffff }},
+	{"%%same",					FALSE,	MARK_OP_NONE,
+		{ 0, 0 }},
 };
 
 START_TEST(test_mark_from_string)
 {
 	mark_t mark;
 
-	if (mark_from_string(mark_data[_i].s, &mark))
+	if (mark_from_string(mark_data[_i].s, mark_data[_i].ops, &mark))
 	{
 		ck_assert_int_eq(mark.value, mark_data[_i].m.value);
 		ck_assert_int_eq(mark.mask, mark_data[_i].m.mask);
@@ -774,39 +998,129 @@ START_TEST(test_mark_from_string)
 END_TEST
 
 /*******************************************************************************
+ * if_id_from_string
+ */
+
+static struct {
+	char *s;
+	bool ok;
+	uint32_t i;
+} if_id_data[] = {
+	{NULL,			FALSE,	0 },
+	{"",			TRUE,	0 },
+	{"/",			FALSE,	0 },
+	{"42",			TRUE,	42 },
+	{"0x42",		TRUE,	0x42 },
+	{"x",			FALSE,	0 },
+	{"42/",			FALSE,	0 },
+	{"42/0",		FALSE,	0 },
+	{"%unique",		TRUE,	IF_ID_UNIQUE },
+	{"%unique/",	FALSE,	0},
+	{"%unique0xffffffffff",	FALSE,	0},
+	{"0xffffffff",	TRUE,	IF_ID_UNIQUE},
+	{"%unique-dir",	TRUE,	IF_ID_UNIQUE_DIR},
+	{"%unique-dir/",FALSE,	0},
+	{"0xfffffffe",	TRUE,	IF_ID_UNIQUE_DIR},
+	{"%unique-",	FALSE,	0},
+	{"%unique-foo",	FALSE,	0},
+};
+
+START_TEST(test_if_id_from_string)
+{
+	uint32_t if_id;
+
+	if (if_id_from_string(if_id_data[_i].s, &if_id))
+	{
+		ck_assert_int_eq(if_id, if_id_data[_i].i);
+	}
+	else
+	{
+		ck_assert(!if_id_data[_i].ok);
+	}
+}
+END_TEST
+
+/*******************************************************************************
+ * allocate_unique_if_ids
+ */
+
+static struct {
+	uint32_t in;
+	uint32_t out;
+	uint32_t exp_in;
+	uint32_t exp_out;
+} unique_if_id_data[] = {
+	{0,	0, 0, 0 },
+	{42, 42, 42, 42 },
+	{42, 1337, 42, 1337 },
+	/* each call increases the internal counter by 1 or 2*/
+	{IF_ID_UNIQUE, 42, 1, 42 },
+	{42, IF_ID_UNIQUE, 42, 2 },
+	{IF_ID_UNIQUE_DIR, 42, 3, 42 },
+	{42, IF_ID_UNIQUE_DIR, 42, 4 },
+	{IF_ID_UNIQUE, IF_ID_UNIQUE, 5, 5 },
+	{IF_ID_UNIQUE_DIR, IF_ID_UNIQUE, 6, 7 },
+	{IF_ID_UNIQUE, IF_ID_UNIQUE_DIR, 8, 9 },
+	{IF_ID_UNIQUE_DIR, IF_ID_UNIQUE_DIR, 10, 11 },
+};
+
+START_TEST(test_allocate_unique_if_ids)
+{
+	uint32_t if_id_in = unique_if_id_data[_i].in,
+			 if_id_out = unique_if_id_data[_i].out;
+
+	allocate_unique_if_ids(&if_id_in, &if_id_out);
+	ck_assert_int_eq(if_id_in, unique_if_id_data[_i].exp_in);
+	ck_assert_int_eq(if_id_out, unique_if_id_data[_i].exp_out);
+}
+END_TEST
+
+/*******************************************************************************
  * signature_schemes_for_key
  */
 
 static struct {
 	key_type_t type;
 	int size;
-	signature_scheme_t expected[4];
+	signature_scheme_t expected[7];
 } scheme_data[] = {
-	{KEY_RSA,   1024, { SIGN_RSA_EMSA_PKCS1_SHA256, SIGN_RSA_EMSA_PKCS1_SHA384, SIGN_RSA_EMSA_PKCS1_SHA512, SIGN_UNKNOWN }},
-	{KEY_RSA,   2048, { SIGN_RSA_EMSA_PKCS1_SHA256, SIGN_RSA_EMSA_PKCS1_SHA384, SIGN_RSA_EMSA_PKCS1_SHA512, SIGN_UNKNOWN }},
-	{KEY_RSA,   4096, { SIGN_RSA_EMSA_PKCS1_SHA384, SIGN_RSA_EMSA_PKCS1_SHA512, SIGN_UNKNOWN }},
-	{KEY_RSA,   8192, { SIGN_RSA_EMSA_PKCS1_SHA512, SIGN_UNKNOWN }},
-	{KEY_ECDSA,  256, { SIGN_ECDSA_WITH_SHA256_DER, SIGN_ECDSA_WITH_SHA384_DER, SIGN_ECDSA_WITH_SHA512_DER, SIGN_UNKNOWN }},
-	{KEY_ECDSA,  384, { SIGN_ECDSA_WITH_SHA384_DER, SIGN_ECDSA_WITH_SHA512_DER, SIGN_UNKNOWN }},
+	{KEY_RSA,   1024, { SIGN_RSA_EMSA_PSS, SIGN_RSA_EMSA_PSS,
+						SIGN_RSA_EMSA_PSS, SIGN_RSA_EMSA_PKCS1_SHA2_256,
+						SIGN_RSA_EMSA_PKCS1_SHA2_384, SIGN_RSA_EMSA_PKCS1_SHA2_512,
+						SIGN_UNKNOWN }},
+	{KEY_RSA,   2048, { SIGN_RSA_EMSA_PSS, SIGN_RSA_EMSA_PSS,
+						SIGN_RSA_EMSA_PSS, SIGN_RSA_EMSA_PKCS1_SHA2_256,
+						SIGN_RSA_EMSA_PKCS1_SHA2_384, SIGN_RSA_EMSA_PKCS1_SHA2_512,
+						SIGN_UNKNOWN }},
+	{KEY_RSA,   4096, { SIGN_RSA_EMSA_PSS, SIGN_RSA_EMSA_PSS,
+						SIGN_RSA_EMSA_PKCS1_SHA2_384, SIGN_RSA_EMSA_PKCS1_SHA2_512,
+						SIGN_UNKNOWN }},
+	{KEY_RSA,   8192, { SIGN_RSA_EMSA_PSS, SIGN_RSA_EMSA_PKCS1_SHA2_512, SIGN_UNKNOWN }},
+	{KEY_ECDSA,  256, { SIGN_ECDSA_WITH_SHA256_DER, SIGN_ECDSA_WITH_SHA384_DER,
+						SIGN_ECDSA_WITH_SHA512_DER, SIGN_UNKNOWN }},
+	{KEY_ECDSA,  384, { SIGN_ECDSA_WITH_SHA384_DER, SIGN_ECDSA_WITH_SHA512_DER,
+						SIGN_UNKNOWN }},
 	{KEY_ECDSA,  512, { SIGN_ECDSA_WITH_SHA512_DER, SIGN_UNKNOWN }},
-	{KEY_BLISS,  128, { SIGN_BLISS_WITH_SHA2_256, SIGN_BLISS_WITH_SHA2_384, SIGN_BLISS_WITH_SHA2_512, SIGN_UNKNOWN }},
-	{KEY_BLISS,  192, { SIGN_BLISS_WITH_SHA2_384, SIGN_BLISS_WITH_SHA2_512, SIGN_UNKNOWN }},
+	{KEY_BLISS,  128, { SIGN_BLISS_WITH_SHA2_256, SIGN_BLISS_WITH_SHA2_384,
+						SIGN_BLISS_WITH_SHA2_512, SIGN_UNKNOWN }},
+	{KEY_BLISS,  192, { SIGN_BLISS_WITH_SHA2_384, SIGN_BLISS_WITH_SHA2_512,
+						SIGN_UNKNOWN }},
 	{KEY_BLISS,  256, { SIGN_BLISS_WITH_SHA2_512, SIGN_UNKNOWN }},
 };
 
 START_TEST(test_signature_schemes_for_key)
 {
 	enumerator_t  *enumerator;
-	signature_scheme_t scheme;
+	signature_params_t *params;
 	int i;
 
 	enumerator = signature_schemes_for_key(scheme_data[_i].type, scheme_data[_i].size);
 	for (i = 0; scheme_data[_i].expected[i] != SIGN_UNKNOWN; i++)
 	{
-		ck_assert(enumerator->enumerate(enumerator, &scheme));
-		ck_assert_int_eq(scheme_data[_i].expected[i], scheme);
+		ck_assert(enumerator->enumerate(enumerator, &params));
+		ck_assert_int_eq(scheme_data[_i].expected[i], params->scheme);
 	}
-	ck_assert(!enumerator->enumerate(enumerator, &scheme));
+	ck_assert(!enumerator->enumerate(enumerator, &params));
 	enumerator->destroy(enumerator);
 }
 END_TEST
@@ -838,6 +1152,10 @@ Suite *utils_suite_create()
 	tcase_add_test(tc, test_timeval_add_ms);
 	suite_add_tcase(s, tc);
 
+	tc = tcase_create("timespan_from_string");
+	tcase_add_loop_test(tc, test_timespan_from_string, 0, countof(ts_data));
+	suite_add_tcase(s, tc);
+
 	tc = tcase_create("htoun,untoh");
 	tcase_add_test(tc, test_htoun);
 	tcase_add_test(tc, test_untoh);
@@ -848,6 +1166,8 @@ Suite *utils_suite_create()
 	suite_add_tcase(s, tc);
 
 	tc = tcase_create("string helper");
+	tcase_add_loop_test(tc, test_streq, 0, countof(streq_data));
+	tcase_add_loop_test(tc, test_strneq, 0, countof(strneq_data));
 	tcase_add_loop_test(tc, test_strpfx, 0, countof(strpfx_data));
 	suite_add_tcase(s, tc);
 
@@ -867,6 +1187,12 @@ Suite *utils_suite_create()
 
 	tc = tcase_create("memstr");
 	tcase_add_loop_test(tc, test_memstr, 0, countof(memstr_data));
+	suite_add_tcase(s, tc);
+
+	tc = tcase_create("memwipe");
+	tcase_add_test(tc, test_memwipe_null);
+	tcase_add_test(tc, test_memwipe_stack);
+	tcase_add_test(tc, test_memwipe_heap);
 	suite_add_tcase(s, tc);
 
 	tc = tcase_create("utils_memrchr");
@@ -900,6 +1226,14 @@ Suite *utils_suite_create()
 
 	tc = tcase_create("mark_from_string");
 	tcase_add_loop_test(tc, test_mark_from_string, 0, countof(mark_data));
+	suite_add_tcase(s, tc);
+
+	tc = tcase_create("if_id_from_string");
+	tcase_add_loop_test(tc, test_if_id_from_string, 0, countof(if_id_data));
+	suite_add_tcase(s, tc);
+
+	tc = tcase_create("allocate_unique_if_ids");
+	tcase_add_loop_test(tc, test_allocate_unique_if_ids, 0, countof(unique_if_id_data));
 	suite_add_tcase(s, tc);
 
 	tc = tcase_create("signature_schemes_for_key");

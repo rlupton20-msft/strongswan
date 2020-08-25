@@ -3,7 +3,7 @@
  * Copyright (C) 2005-2010 Martin Willi
  * Copyright (C) 2006 Daniel Roethlisberger
  * Copyright (C) 2005 Jan Hutter
- * Hochschule fuer Technik Rapperswil
+ * HSR Hochschule fuer Technik Rapperswil
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -99,7 +99,7 @@ struct socket_t {
 	 * @param nat_t			TRUE to get the port used to float in case of NAT-T
 	 * @return				the port
 	 */
-	u_int16_t (*get_port)(socket_t *this, bool nat_t);
+	uint16_t (*get_port)(socket_t *this, bool nat_t);
 
 	/**
 	 * Get the address families this socket is listening on.

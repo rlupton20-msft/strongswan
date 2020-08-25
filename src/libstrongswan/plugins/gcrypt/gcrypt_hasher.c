@@ -1,6 +1,6 @@
 /*
  * Copyright (C) 2009 Martin Willi
- * Hochschule fuer Technik Rapperswil
+ * HSR Hochschule fuer Technik Rapperswil
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -51,7 +51,7 @@ METHOD(hasher_t, reset, bool,
 }
 
 METHOD(hasher_t, get_hash, bool,
-	private_gcrypt_hasher_t *this, chunk_t chunk, u_int8_t *hash)
+	private_gcrypt_hasher_t *this, chunk_t chunk, uint8_t *hash)
 {
 	gcry_md_write(this->hd, chunk.ptr, chunk.len);
 	if (hash)

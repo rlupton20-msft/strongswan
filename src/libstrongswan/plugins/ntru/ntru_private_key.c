@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2014 Andreas Steffen
+ * Copyright (C) 2014-2016 Andreas Steffen
  * HSR Hochschule fuer Technik Rapperswil
  *
  * Copyright (C) 2009-2013  Security Innovation
@@ -38,7 +38,7 @@ struct private_ntru_private_key_t {
 	/**
 	 * NTRU Parameter Set
 	 */
-	ntru_param_set_t *params;
+	const ntru_param_set_t *params;
 
 	/**
 	 * Polynomial F which is the private key
@@ -58,7 +58,7 @@ struct private_ntru_private_key_t {
 	/**
 	 * Deterministic Random Bit Generator
 	 */
-	ntru_drbg_t *drbg;
+	drbg_t *drbg;
 
 };
 
@@ -146,7 +146,7 @@ METHOD(ntru_private_key_t, get_encoding, chunk_t,
 	return this->encoding;
 }
 
-/** 
+/**
  * Checks that the number of 0, +1, and -1 trinary ring elements meet or exceed
  * a minimum weight.
  *
@@ -178,7 +178,7 @@ bool ntru_check_min_weight(uint16_t N, uint8_t  *t, uint16_t min_wt)
 METHOD(ntru_private_key_t, decrypt, bool,
 	private_ntru_private_key_t *this, chunk_t ciphertext, chunk_t *plaintext)
 {
-	hash_algorithm_t hash_algid;
+	ext_out_function_t alg;
 	size_t t_len, seed1_len, seed2_len;
 	uint16_t *t1, *t2, *t = NULL;
     uint16_t mod_q_mask, q_mod_p, cmprime_len, cm_len = 0, num_zeros;
@@ -206,9 +206,9 @@ METHOD(ntru_private_key_t, decrypt, bool,
 	Mtrin = (uint8_t *)t1;
 	M = Mtrin + this->params->N;
 
-	/* set hash algorithm based on security strength */
-	hash_algid = (this->params->sec_strength_len <= 20) ? HASH_SHA1 :
-														  HASH_SHA256;
+	/* set MGF1 algorithm type based on security strength */
+	alg = (this->params->sec_strength_len <= 20) ? XOF_MGF1_SHA1 :
+												   XOF_MGF1_SHA256;
 
 	/* set constants */
 	mod_q_mask = this->params->q - 1;
@@ -276,7 +276,7 @@ METHOD(ntru_private_key_t, decrypt, bool,
 	}
 	if (!msg_rep_good)
 	{
-		DBG1(DBG_LIB, "decryption failed due to unsufficient minimum weight");
+		DBG1(DBG_LIB, "decryption failed due to insufficient minimum weight");
 		success = FALSE;
 	}
 
@@ -307,7 +307,7 @@ METHOD(ntru_private_key_t, decrypt, bool,
 	ntru_coeffs_mod4_2_octets(this->params->N, t2, seed.ptr);
 
 	/* form mask */
-	mask = ntru_trits_create(this->params->N, hash_algid, seed);
+	mask = ntru_trits_create(this->params->N, alg, seed);
 	if (!mask)
 	{
 		DBG1(DBG_LIB, "mask creation failed");
@@ -390,9 +390,8 @@ METHOD(ntru_private_key_t, decrypt, bool,
 
 	/* generate cr */
 	DBG2(DBG_LIB, "generate polynomial r");
-	r_poly = ntru_poly_create_from_seed(hash_algid, seed,
-						this->params->c_bits, this->params->N,
-						this->params->q, this->params->dF_r,
+	r_poly = ntru_poly_create_from_seed(alg, seed, this->params->c_bits,
+						this->params->N, this->params->q, this->params->dF_r,
 						this->params->dF_r, this->params->is_product_form);
 	if (!r_poly)
 	{
@@ -597,7 +596,7 @@ static bool ring_inv(uint16_t *a, uint16_t N, uint16_t q, uint16_t *t,
 			f[i] ^= g[i];
 		}
 		if (deg_c > deg_b)
-		{	
+		{
 			deg_b = deg_c;
 		}
 		for (i = 0; i <= deg_c; i++)
@@ -634,21 +633,21 @@ static bool ring_inv(uint16_t *a, uint16_t N, uint16_t q, uint16_t *t,
 		t[0] = t[0] + 2;
 		ring_mult_c(t2, t, N, q, a_inv);
 	}
-	
+
 	return TRUE;
 }
 
 /*
  * Described in header.
  */
-ntru_private_key_t *ntru_private_key_create(ntru_drbg_t *drbg,
-											ntru_param_set_t *params)
+ntru_private_key_t *ntru_private_key_create(drbg_t *drbg,
+											const ntru_param_set_t *params)
 {
 	private_ntru_private_key_t *this;
 	size_t t_len;
 	uint16_t *t1, *t2, *t = NULL;
 	uint16_t mod_q_mask;
-    hash_algorithm_t hash_algid;
+    ext_out_function_t alg;
 	ntru_poly_t *g_poly;
 	chunk_t	seed;
 	int i;
@@ -667,25 +666,18 @@ ntru_private_key_t *ntru_private_key_create(ntru_drbg_t *drbg,
 	);
 
 	/* set hash algorithm and seed length based on security strength */
-	if (params->sec_strength_len <= 20)
-	{
-		hash_algid = HASH_SHA1;
-	}
-	else
-	{
-		hash_algid = HASH_SHA256;
-	}
+	alg = (params->sec_strength_len <= 20) ? XOF_MGF1_SHA1 :
+											 XOF_MGF1_SHA256;
 	seed =chunk_alloc(params->sec_strength_len + 8);
 
 	/* get random seed for generating trinary F as a list of indices */
-	if (!drbg->generate(drbg, params->sec_strength_len * BITS_PER_BYTE,
-							  seed.len, seed.ptr))
+	if (!drbg->generate(drbg, seed.len, seed.ptr))
 	{
 		goto err;
 	}
 
 	DBG2(DBG_LIB, "generate polynomial F");
-	this->privkey = ntru_poly_create_from_seed(hash_algid, seed, params->c_bits,
+	this->privkey = ntru_poly_create_from_seed(alg, seed, params->c_bits,
 											   params->N, params->q,
 											   params->dF_r, params->dF_r,
 											   params->is_product_form);
@@ -699,7 +691,7 @@ ntru_private_key_t *ntru_private_key_create(ntru_drbg_t *drbg,
 	t = malloc(t_len);
 	t1 = t + 2 * params->N;
 
-	/* extend sparse private key polynomial f to N array elements */ 
+	/* extend sparse private key polynomial f to N array elements */
 	this->privkey->get_array(this->privkey, t1);
 
 	/* set mask for large modulus */
@@ -714,7 +706,7 @@ ntru_private_key_t *ntru_private_key_create(ntru_drbg_t *drbg,
 
 	/* use the public key array as a temporary buffer */
 	t2 = this->pubkey;
- 
+
 	/* find f^-1 in (Z/qZ)[X]/(X^N - 1) */
 	if (!ring_inv(t1, params->N, params->q, t, t2))
 	{
@@ -722,14 +714,13 @@ ntru_private_key_t *ntru_private_key_create(ntru_drbg_t *drbg,
 	}
 
 	/* get random seed for generating trinary g as a list of indices */
- 	if (!drbg->generate(drbg, params->sec_strength_len * BITS_PER_BYTE,
-							  seed.len, seed.ptr))
+ 	if (!drbg->generate(drbg, seed.len, seed.ptr))
 	{
 		goto err;
 	}
 
 	DBG2(DBG_LIB, "generate polynomial g");
-	g_poly = ntru_poly_create_from_seed(hash_algid, seed, params->c_bits,
+	g_poly = ntru_poly_create_from_seed(alg, seed, params->c_bits,
 										params->N, params->q, params->dg + 1,
 										params->dg, FALSE);
 	if (!g_poly)
@@ -750,7 +741,7 @@ ntru_private_key_t *ntru_private_key_create(ntru_drbg_t *drbg,
 	chunk_clear(&seed);
 	memwipe(t, t_len);
 	free(t);
-	
+
 	/* generate private key encoding */
 	generate_encoding(this);
 
@@ -767,7 +758,7 @@ err:
 /*
  * Described in header.
  */
-ntru_private_key_t *ntru_private_key_create_from_data(ntru_drbg_t *drbg,
+ntru_private_key_t *ntru_private_key_create_from_data(drbg_t *drbg,
 													  chunk_t data)
 {
 	private_ntru_private_key_t *this;
@@ -775,7 +766,7 @@ ntru_private_key_t *ntru_private_key_create_from_data(ntru_drbg_t *drbg,
 	size_t privkey_packed_trits_len, privkey_packed_indices_len;
 	uint8_t *privkey_packed, tag;
 	uint16_t *indices, dF;
-	ntru_param_set_t *params;
+	const ntru_param_set_t *params;
 
 	header_len = 2 + NTRU_OID_LEN;
 
@@ -828,7 +819,7 @@ ntru_private_key_t *ntru_private_key_create_from_data(ntru_drbg_t *drbg,
             privkey_packed_indices_len <= privkey_packed_trits_len)
 		{
 			tag = NTRU_PRIVKEY_INDICES_TAG;
-		}		
+		}
 		else
 		{
 			tag = NTRU_PRIVKEY_TRITS_TAG;
@@ -865,7 +856,7 @@ ntru_private_key_t *ntru_private_key_create_from_data(ntru_drbg_t *drbg,
 	indices = malloc(2 * dF * sizeof(uint16_t));
 
 	/* unpack the private key */
-	privkey_packed = data.ptr + header_len + pubkey_packed_len;	
+	privkey_packed = data.ptr + header_len + pubkey_packed_len;
 	if (tag == NTRU_PRIVKEY_TRITS_TAG)
 	{
 		ntru_packed_trits_2_indices(privkey_packed, params->N,

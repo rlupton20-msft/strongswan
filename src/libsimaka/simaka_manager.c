@@ -1,6 +1,6 @@
 /*
  * Copyright (C) 2008 Martin Willi
- * Hochschule fuer Technik Rapperswil
+ * HSR Hochschule fuer Technik Rapperswil
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -207,7 +207,7 @@ METHOD(simaka_manager_t, card_get_pseudonym, identification_t*,
 
 METHOD(simaka_manager_t, card_set_reauth, void,
 	private_simaka_manager_t *this, identification_t *id, identification_t *next,
-	char mk[HASH_SIZE_SHA1], u_int16_t counter)
+	char mk[HASH_SIZE_SHA1], uint16_t counter)
 {
 	enumerator_t *enumerator;
 	simaka_card_t *card;
@@ -227,7 +227,7 @@ METHOD(simaka_manager_t, card_set_reauth, void,
 
 METHOD(simaka_manager_t, card_get_reauth, identification_t*,
 	private_simaka_manager_t *this, identification_t *id, char mk[HASH_SIZE_SHA1],
-	u_int16_t *counter)
+	uint16_t *counter)
 {
 	enumerator_t *enumerator;
 	simaka_card_t *card;
@@ -393,7 +393,7 @@ METHOD(simaka_manager_t, provider_gen_pseudonym, identification_t*,
 
 METHOD(simaka_manager_t, provider_is_reauth, identification_t*,
 	private_simaka_manager_t *this, identification_t *id, char mk[HASH_SIZE_SHA1],
-	u_int16_t *counter)
+	uint16_t *counter)
 {
 	enumerator_t *enumerator;
 	simaka_provider_t *provider;

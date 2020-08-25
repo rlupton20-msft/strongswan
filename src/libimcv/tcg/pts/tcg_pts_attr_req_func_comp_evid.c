@@ -110,23 +110,29 @@ typedef struct entry_t entry_t;
  * Functional component entry
  */
 struct entry_t {
-	u_int8_t flags;
-	u_int32_t depth;
+	uint8_t flags;
+	uint32_t depth;
 	pts_comp_func_name_t *name;
 };
 
-/**
- * Enumerate functional component entries
- */
-static bool entry_filter(void *null, entry_t **entry, u_int8_t *flags,
-						 void *i2, u_int32_t *depth, void *i3,
-						 pts_comp_func_name_t **name)
+CALLBACK(entry_filter, bool,
+	void *null, enumerator_t *orig, va_list args)
 {
-	*flags = (*entry)->flags;
-	*depth = (*entry)->depth;
-	*name  = (*entry)->name;
+	entry_t *entry;
+	pts_comp_func_name_t **name;
+	uint32_t *depth;
+	uint8_t *flags;
 
-	return TRUE;
+	VA_ARGS_VGET(args, flags, depth, name);
+
+	if (orig->enumerate(orig, &entry))
+	{
+		*flags = entry->flags;
+		*depth = entry->depth;
+		*name  = entry->name;
+		return TRUE;
+	}
+	return FALSE;
 }
 
 /**
@@ -195,11 +201,11 @@ METHOD(pa_tnc_attr_t, build, void,
 }
 
 METHOD(pa_tnc_attr_t, process, status_t,
-	private_tcg_pts_attr_req_func_comp_evid_t *this, u_int32_t *offset)
+	private_tcg_pts_attr_req_func_comp_evid_t *this, uint32_t *offset)
 {
 	bio_reader_t *reader;
-	u_int32_t depth, vendor_id, name;
-	u_int8_t flags, fam_and_qualifier, qualifier;
+	uint32_t depth, vendor_id, name;
+	uint8_t flags, fam_and_qualifier, qualifier;
 	status_t status = FAILED;
 	entry_t *entry = NULL;
 
@@ -296,8 +302,8 @@ METHOD(pa_tnc_attr_t, destroy, void,
 }
 
 METHOD(tcg_pts_attr_req_func_comp_evid_t, add_component, void,
-	private_tcg_pts_attr_req_func_comp_evid_t *this, u_int8_t flags,
-	u_int32_t depth, pts_comp_func_name_t *name)
+	private_tcg_pts_attr_req_func_comp_evid_t *this, uint8_t flags,
+	uint32_t depth, pts_comp_func_name_t *name)
 {
 	entry_t *entry;
 
@@ -318,7 +324,7 @@ METHOD(tcg_pts_attr_req_func_comp_evid_t, create_enumerator, enumerator_t*,
 	private_tcg_pts_attr_req_func_comp_evid_t *this)
 {
 	return enumerator_create_filter(this->list->create_enumerator(this->list),
-								   (void*)entry_filter, NULL, NULL);
+									entry_filter, NULL, NULL);
 }
 
 /**

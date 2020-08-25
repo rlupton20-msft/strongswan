@@ -24,7 +24,7 @@
 typedef struct private_generic_attr_bool_t private_generic_attr_bool_t;
 
 /**
- * Generic PA-TNC attribute containing boolean status value in 32 bit encoding 
+ * Generic PA-TNC attribute containing boolean status value in 32 bit encoding
  *
  *                       1                   2                   3
  *   0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
@@ -118,12 +118,12 @@ METHOD(pa_tnc_attr_t, build, void,
 }
 
 METHOD(pa_tnc_attr_t, process, status_t,
-	private_generic_attr_bool_t *this, u_int32_t *offset)
+	private_generic_attr_bool_t *this, uint32_t *offset)
 {
 	enum_name_t *pa_attr_names;
 	bio_reader_t *reader;
-	u_int32_t status;
-  
+	uint32_t status;
+
 	*offset = 0;
 
 	if (this->value.len < this->length)

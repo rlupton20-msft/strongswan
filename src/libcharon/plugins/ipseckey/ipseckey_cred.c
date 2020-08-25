@@ -1,7 +1,7 @@
 /*
  * Copyright (C) 2013 Tobias Brunner
  * Copyright (C) 2012 Reto Guadagnini
- * Hochschule fuer Technik Rapperswil
+ * HSR Hochschule fuer Technik Rapperswil
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -57,15 +57,20 @@ typedef struct {
 	time_t notAfter;
 	/* identity to which the IPSECKEY belongs */
 	identification_t *identity;
+	/** most recently enumerated certificate */
+	certificate_t *cert;
 } cert_enumerator_t;
 
 METHOD(enumerator_t, cert_enumerator_enumerate, bool,
-	cert_enumerator_t *this, certificate_t **cert)
+	cert_enumerator_t *this, va_list args)
 {
+	certificate_t **cert;
 	ipseckey_t *cur_ipseckey;
 	public_key_t *public;
 	rr_t *cur_rr;
 	chunk_t key;
+
+	VA_ARGS_VGET(args, cert);
 
 	/* Get the next supported IPSECKEY using the inner enumerator. */
 	while (this->inner->enumerate(this->inner, &cur_rr))
@@ -91,28 +96,27 @@ METHOD(enumerator_t, cert_enumerator_enumerate, bool,
 		public = lib->creds->create(lib->creds, CRED_PUBLIC_KEY, KEY_RSA,
 									BUILD_BLOB_DNSKEY, key,
 									BUILD_END);
+		cur_ipseckey->destroy(cur_ipseckey);
 		if (!public)
 		{
 			DBG1(DBG_CFG, "  failed to create public key from IPSECKEY");
-			cur_ipseckey->destroy(cur_ipseckey);
 			continue;
 		}
-
-		*cert = lib->creds->create(lib->creds, CRED_CERTIFICATE,
-								   CERT_TRUSTED_PUBKEY,
-								   BUILD_PUBLIC_KEY, public,
-								   BUILD_SUBJECT, this->identity,
-								   BUILD_NOT_BEFORE_TIME, this->notBefore,
-								   BUILD_NOT_AFTER_TIME, this->notAfter,
-								   BUILD_END);
-		if (*cert == NULL)
+		DESTROY_IF(this->cert);
+		this->cert = lib->creds->create(lib->creds, CRED_CERTIFICATE,
+										CERT_TRUSTED_PUBKEY,
+										BUILD_PUBLIC_KEY, public,
+										BUILD_SUBJECT, this->identity,
+										BUILD_NOT_BEFORE_TIME, this->notBefore,
+										BUILD_NOT_AFTER_TIME, this->notAfter,
+										BUILD_END);
+		public->destroy(public);
+		if (!this->cert)
 		{
 			DBG1(DBG_CFG, "  failed to create certificate from IPSECKEY");
-			cur_ipseckey->destroy(cur_ipseckey);
-			public->destroy(public);
 			continue;
 		}
-		cur_ipseckey->destroy(cur_ipseckey);
+		*cert = this->cert;
 		return TRUE;
 	}
 	return FALSE;
@@ -121,6 +125,7 @@ METHOD(enumerator_t, cert_enumerator_enumerate, bool,
 METHOD(enumerator_t, cert_enumerator_destroy, void,
 	cert_enumerator_t *this)
 {
+	DESTROY_IF(this->cert);
 	this->inner->destroy(this->inner);
 	this->response->destroy(this->response);
 	free(this);
@@ -136,7 +141,7 @@ METHOD(credential_set_t, create_cert_enumerator, enumerator_t*,
 	rr_set_t *rrset;
 	rr_t *rrsig;
 	bio_reader_t *reader;
-	u_int32_t nBefore, nAfter;
+	uint32_t nBefore, nAfter;
 	chunk_t ignore;
 	char *fqdn;
 
@@ -209,7 +214,8 @@ METHOD(credential_set_t, create_cert_enumerator, enumerator_t*,
 
 	INIT(e,
 		.public = {
-			.enumerate = (void*)_cert_enumerator_enumerate,
+			.enumerate = enumerator_enumerate_default,
+			.venumerate = _cert_enumerator_enumerate,
 			.destroy = _cert_enumerator_destroy,
 		},
 		.inner = rrset->create_rr_enumerator(rrset),

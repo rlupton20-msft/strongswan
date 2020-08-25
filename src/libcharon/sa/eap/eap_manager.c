@@ -1,7 +1,7 @@
 /*
  * Copyright (C) 2012 Tobias Brunner
  * Copyright (C) 2008 Martin Willi
- * Hochschule fuer Technik Rapperswil
+ * HSR Hochschule fuer Technik Rapperswil
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -35,7 +35,7 @@ struct eap_entry_t {
 	/**
 	 * vendor ID, 0 for default EAP methods
 	 */
-	u_int32_t vendor;
+	uint32_t vendor;
 
 	/**
 	 * Role of the method returned by the constructor, EAP_SERVER or EAP_PEER
@@ -70,7 +70,7 @@ struct private_eap_manager_t {
 };
 
 METHOD(eap_manager_t, add_method, void,
-	private_eap_manager_t *this, eap_type_t type, u_int32_t vendor,
+	private_eap_manager_t *this, eap_type_t type, uint32_t vendor,
 	eap_role_t role, eap_constructor_t constructor)
 {
 	eap_entry_t *entry = malloc_thing(eap_entry_t);
@@ -105,31 +105,38 @@ METHOD(eap_manager_t, remove_method, void,
 	this->lock->unlock(this->lock);
 }
 
-/**
- * filter the registered methods
- */
-static bool filter_methods(uintptr_t role, eap_entry_t **entry,
-						   eap_type_t *type, void *in, u_int32_t *vendor)
+CALLBACK(filter_methods, bool,
+	uintptr_t role, enumerator_t *orig, va_list args)
 {
-	if ((*entry)->role != (eap_role_t)role)
+	eap_entry_t *entry;
+	eap_type_t *type;
+	uint32_t *vendor;
+
+	VA_ARGS_VGET(args, type, vendor);
+
+	while (orig->enumerate(orig, &entry))
 	{
-		return FALSE;
+		if (entry->role != (eap_role_t)role)
+		{
+			continue;
+		}
+		if (entry->vendor == 0 &&
+		   (entry->type < 4 || entry->type == EAP_EXPANDED ||
+		    entry->type > EAP_EXPERIMENTAL))
+		{	/* filter invalid types */
+			continue;
+		}
+		if (type)
+		{
+			*type = entry->type;
+		}
+		if (vendor)
+		{
+			*vendor = entry->vendor;
+		}
+		return TRUE;
 	}
-	if ((*entry)->vendor == 0 &&
-	   ((*entry)->type < 4 || (*entry)->type == EAP_EXPANDED ||
-	    (*entry)->type > EAP_EXPERIMENTAL))
-	{	/* filter invalid types */
-		return FALSE;
-	}
-	if (type)
-	{
-		*type = (*entry)->type;
-	}
-	if (vendor)
-	{
-		*vendor = (*entry)->vendor;
-	}
-	return TRUE;
+	return FALSE;
 }
 
 METHOD(eap_manager_t, create_enumerator, enumerator_t*,
@@ -139,12 +146,12 @@ METHOD(eap_manager_t, create_enumerator, enumerator_t*,
 	return enumerator_create_cleaner(
 				enumerator_create_filter(
 					this->methods->create_enumerator(this->methods),
-					(void*)filter_methods, (void*)(uintptr_t)role, NULL),
+					filter_methods, (void*)(uintptr_t)role, NULL),
 				(void*)this->lock->unlock, this->lock);
 }
 
 METHOD(eap_manager_t, create_instance, eap_method_t*,
-	private_eap_manager_t *this, eap_type_t type, u_int32_t vendor,
+	private_eap_manager_t *this, eap_type_t type, uint32_t vendor,
 	eap_role_t role, identification_t *server, identification_t *peer)
 {
 	enumerator_t *enumerator;

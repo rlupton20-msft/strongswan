@@ -1,6 +1,6 @@
 /*
  * Copyright (C) 2008 Martin Willi
- * Hochschule fuer Technik Rapperswil
+ * HSR Hochschule fuer Technik Rapperswil
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -73,12 +73,12 @@ static ike_extension_t copy_extension(ike_sa_t *ike_sa, ike_extension_t ext)
 METHOD(listener_t, ike_keys, bool,
 	private_ha_ike_t *this, ike_sa_t *ike_sa, diffie_hellman_t *dh,
 	chunk_t dh_other, chunk_t nonce_i, chunk_t nonce_r, ike_sa_t *rekey,
-	shared_key_t *shared)
+	shared_key_t *shared, auth_method_t method)
 {
 	ha_message_t *m;
 	chunk_t secret;
 	proposal_t *proposal;
-	u_int16_t alg, len;
+	uint16_t alg, len;
 
 	if (this->tunnel && this->tunnel->is_sa(this->tunnel, ike_sa))
 	{	/* do not sync SA between nodes */
@@ -141,6 +141,10 @@ METHOD(listener_t, ike_keys, bool,
 		{
 			m->add_attribute(m, HA_PSK, shared->get_key(shared));
 		}
+		else
+		{
+			m->add_attribute(m, HA_AUTH_METHOD, method);
+		}
 	}
 	m->add_attribute(m, HA_REMOTE_ADDR, ike_sa->get_other_host(ike_sa));
 
@@ -168,7 +172,7 @@ METHOD(listener_t, ike_updown, bool,
 	{
 		enumerator_t *enumerator;
 		peer_cfg_t *peer_cfg;
-		u_int32_t extension, condition;
+		uint32_t extension, condition;
 		host_t *addr;
 		ike_sa_id_t *id;
 		identification_t *eap_id;
@@ -234,6 +238,20 @@ METHOD(listener_t, ike_rekey, bool,
 {
 	ike_updown(this, old, FALSE);
 	ike_updown(this, new, TRUE);
+	return TRUE;
+}
+
+METHOD(listener_t, alert, bool,
+	private_ha_ike_t *this, ike_sa_t *ike_sa, alert_t alert, va_list args)
+{
+	switch (alert)
+	{
+		case ALERT_HALF_OPEN_TIMEOUT:
+			ike_updown(this, ike_sa, FALSE);
+			break;
+		default:
+			break;
+	}
 	return TRUE;
 }
 
@@ -321,7 +339,7 @@ METHOD(listener_t, message_hook, bool,
 		chunk_t iv;
 
 		/* we need the last block (or expected next IV) of Phase 1, which gets
-		 * upated after successful en-/decryption depending on direction */
+		 * updated after successful en-/decryption depending on direction */
 		if (incoming == plain)
 		{
 			if (message->get_message_id(message) == 0)
@@ -349,7 +367,7 @@ METHOD(listener_t, message_hook, bool,
 		ha_message_t *m;
 		notify_payload_t *notify;
 		chunk_t data;
-		u_int32_t seq;
+		uint32_t seq;
 
 		notify = message->get_notify(message, DPD_R_U_THERE);
 		if (notify)
@@ -393,6 +411,7 @@ ha_ike_t *ha_ike_create(ha_socket_t *socket, ha_tunnel_t *tunnel,
 	INIT(this,
 		.public = {
 			.listener = {
+				.alert = _alert,
 				.ike_keys = _ike_keys,
 				.ike_updown = _ike_updown,
 				.ike_rekey = _ike_rekey,

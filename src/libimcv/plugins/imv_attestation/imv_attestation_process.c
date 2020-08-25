@@ -318,15 +318,24 @@ bool imv_attestation_process(pa_tnc_attr_t *attr, imv_msg_t *out_msg,
 						enumerator_t *e;
 						char *filename;
 						chunk_t measurement;
+						int vid;
+
+						if (!pts_db->get_product_version(pts_db,
+											pts->get_platform_id(pts), &vid))
+						{
+							eval = TNC_IMV_EVALUATION_RESULT_ERROR;
+							break;
+						}
 
 						e = measurements->create_enumerator(measurements);
 						while (e->enumerate(e, &filename, &measurement))
 						{
-							if (pts_db->add_file_measurement(pts_db,
-									pts->get_platform_id(pts), algo, measurement,
-									filename, is_dir, arg_int) != SUCCESS)
+							if (!pts_db->add_file_measurement(pts_db, vid, algo,
+										measurement, filename, is_dir, arg_int))
 							{
 								eval = TNC_IMV_EVALUATION_RESULT_ERROR;
+								e->destroy(e);
+								break;
 							}
 						}
 						e->destroy(e);
@@ -418,45 +427,31 @@ bool imv_attestation_process(pa_tnc_attr_t *attr, imv_msg_t *out_msg,
 		case TCG_PTS_SIMPLE_EVID_FINAL:
 		{
 			tcg_pts_attr_simple_evid_final_t *attr_cast;
-			uint8_t flags;
-			pts_meas_algorithms_t comp_hash_algorithm;
-			chunk_t pcr_comp, tpm_quote_sig, evid_sig;
-			chunk_t pcr_composite, quote_info, result_buf;
+			tpm_tss_quote_info_t *quote_info;
+			chunk_t quoted = chunk_empty, quote_sig, evid_sig, result_buf;
 			imv_workitem_t *workitem;
 			imv_reason_string_t *reason_string;
+			hash_algorithm_t digest_alg;
 			enumerator_t *enumerator;
-			bool use_quote2, use_ver_info;
 			bio_writer_t *result;
 
 			attr_cast = (tcg_pts_attr_simple_evid_final_t*)attr;
-			flags = attr_cast->get_quote_info(attr_cast, &comp_hash_algorithm,
-											  &pcr_comp, &tpm_quote_sig);
+			attr_cast->get_quote_info(attr_cast, &quote_info, &quote_sig);
 
-			if (flags != PTS_SIMPLE_EVID_FINAL_NO)
+			if (quote_info->get_quote_mode(quote_info) != TPM_QUOTE_NONE)
 			{
-				use_quote2   = (flags == PTS_SIMPLE_EVID_FINAL_QUOTE_INFO2 ||
-							    flags == PTS_SIMPLE_EVID_FINAL_QUOTE_INFO2_CAP_VER);
-				use_ver_info = (flags == PTS_SIMPLE_EVID_FINAL_QUOTE_INFO2_CAP_VER);
-
 				/* Construct PCR Composite and TPM Quote Info structures */
-				if (!pts->get_quote_info(pts, use_quote2, use_ver_info,
-						comp_hash_algorithm, &pcr_composite, &quote_info))
+				if (!pts->get_quote(pts, quote_info, &quoted))
 				{
-					DBG1(DBG_IMV, "unable to construct TPM Quote Info");
-					return FALSE;
-				}
-
-				if (!chunk_equals_const(pcr_comp, pcr_composite))
-				{
-					DBG1(DBG_IMV, "received PCR Composite does not match "
-								  "constructed one");
+					DBG1(DBG_IMV, "unable to construct TPM Quote Info digest");
 					attestation_state->set_measurement_error(attestation_state,
 										IMV_ATTESTATION_ERROR_TPM_QUOTE_FAIL);
 					goto quote_error;
 				}
-				DBG2(DBG_IMV, "received PCR Composite matches constructed one");
+				digest_alg = quote_info->get_pcr_digest_alg(quote_info);
 
-				if (!pts->verify_quote_signature(pts, quote_info, tpm_quote_sig))
+				if (!pts->verify_quote_signature(pts, digest_alg, quoted,
+												 quote_sig))
 				{
 					attestation_state->set_measurement_error(attestation_state,
 										IMV_ATTESTATION_ERROR_TPM_QUOTE_FAIL);
@@ -465,8 +460,7 @@ bool imv_attestation_process(pa_tnc_attr_t *attr, imv_msg_t *out_msg,
 				DBG2(DBG_IMV, "TPM Quote Info signature verification successful");
 
 quote_error:
-				free(pcr_composite.ptr);
-				free(quote_info.ptr);
+				chunk_free(&quoted);
 
 				/**
 				 * Finalize any pending measurement registrations and check

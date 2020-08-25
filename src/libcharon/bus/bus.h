@@ -1,7 +1,7 @@
 /*
- * Copyright (C) 2012-2015 Tobias Brunner
+ * Copyright (C) 2012-2016 Tobias Brunner
  * Copyright (C) 2006-2009 Martin Willi
- * Hochschule fuer Technik Rapperswil
+ * HSR Hochschule fuer Technik Rapperswil
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -101,9 +101,13 @@ enum alert_t {
 	/** received IKE message with invalid body, argument is message_t*,
 	 *  followed by a status_t result returned by message_t.parse_body(). */
 	ALERT_PARSE_ERROR_BODY,
-	/** sending a retransmit for a message, argument is packet_t, if the message
-	 *  got fragmented only the first fragment is passed */
+	/** sending a retransmit for a message, arguments are packet_t and number
+	 * of the retransmit, if the message got fragmented only the first fragment
+	 * is passed */
 	ALERT_RETRANSMIT_SEND,
+	/** received response for retransmitted request, argument is packet_t, if
+	 * the message got fragmented only the first fragment is passed */
+	ALERT_RETRANSMIT_SEND_CLEARED,
 	/** sending retransmits timed out, argument is packet_t, if available and if
 	 *  the message got fragmented only the first fragment is passed */
 	ALERT_RETRANSMIT_SEND_TIMEOUT,
@@ -345,14 +349,27 @@ struct bus_t {
 	 * @param ike_sa	IKE_SA this keymat belongs to
 	 * @param dh		diffie hellman shared secret
 	 * @param dh_other	others DH public value (IKEv1 only)
-	 * @param nonce_i	initiators nonce
-	 * @param nonce_r	responders nonce
+	 * @param nonce_i	initiator's nonce
+	 * @param nonce_r	responder's nonce
 	 * @param rekey		IKE_SA we are rekeying, if any (IKEv2 only)
 	 * @param shared	shared key used for key derivation (IKEv1-PSK only)
+	 * @param method	auth method for key derivation (IKEv1-non-PSK only)
 	 */
 	void (*ike_keys)(bus_t *this, ike_sa_t *ike_sa, diffie_hellman_t *dh,
 					 chunk_t dh_other, chunk_t nonce_i, chunk_t nonce_r,
-					 ike_sa_t *rekey, shared_key_t *shared);
+					 ike_sa_t *rekey, shared_key_t *shared,
+					 auth_method_t method);
+
+	/**
+	 * IKE_SA derived keys hook.
+	 *
+	 * @param sk_ei		SK_ei, or Ka for IKEv1
+	 * @param sk_er		SK_er
+	 * @param sk_ai		SK_ai, or SKEYID_a for IKEv1
+	 * @param sk_ar		SK_ar
+	 */
+	void (*ike_derived_keys)(bus_t *this, chunk_t sk_ei, chunk_t sk_er,
+							 chunk_t sk_ai, chunk_t sk_ar);
 
 	/**
 	 * CHILD_SA keymat hook.
@@ -360,11 +377,25 @@ struct bus_t {
 	 * @param child_sa	CHILD_SA this keymat is used for
 	 * @param initiator	initiator of the CREATE_CHILD_SA exchange
 	 * @param dh		diffie hellman shared secret
-	 * @param nonce_i	initiators nonce
-	 * @param nonce_r	responders nonce
+	 * @param nonce_i	initiator's nonce
+	 * @param nonce_r	responder's nonce
 	 */
 	void (*child_keys)(bus_t *this, child_sa_t *child_sa, bool initiator,
 					   diffie_hellman_t *dh, chunk_t nonce_i, chunk_t nonce_r);
+
+	/**
+	 * CHILD_SA derived keys hook.
+	 *
+	 * @param child_sa	CHILD_SA these keys are used for
+	 * @param initiator	initiator of the CREATE_CHILD_SA exchange
+	 * @param encr_i	initiator's encryption key
+	 * @param encr_o	responder's encryption key
+	 * @param integ_i	initiator's integrity key
+	 * @param integ_r	responder's integrity key
+	 */
+	void (*child_derived_keys)(bus_t *this, child_sa_t *child_sa,
+							   bool initiator, chunk_t encr_i, chunk_t encr_r,
+							   chunk_t integ_i, chunk_t integ_r);
 
 	/**
 	 * IKE_SA up/down hook.
@@ -432,7 +463,7 @@ struct bus_t {
 	 * @param new		ID of new SA when called for the old, NULL otherwise
 	 * @param uniue		unique ID of new SA when called for the old, 0 otherwise
 	 */
-	void (*children_migrate)(bus_t *this, ike_sa_id_t *new, u_int32_t unique);
+	void (*children_migrate)(bus_t *this, ike_sa_id_t *new, uint32_t unique);
 
 	/**
 	 * Virtual IP assignment hook.

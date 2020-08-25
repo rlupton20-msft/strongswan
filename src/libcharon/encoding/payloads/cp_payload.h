@@ -1,7 +1,7 @@
 /*
  * Copyright (C) 2005-2009 Martin Willi
  * Copyright (C) 2005 Jan Hutter
- * Hochschule fuer Technik Rapperswil
+ * HSR Hochschule fuer Technik Rapperswil
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -82,14 +82,14 @@ struct cp_payload_t {
 	 *
 	 @param identifier	identifier to set
 	 */
-	void (*set_identifier) (cp_payload_t *this, u_int16_t identifier);
+	void (*set_identifier) (cp_payload_t *this, uint16_t identifier);
 
 	/**
 	 * Get the configuration payload identifier (IKEv1 only).
 	 *
 	 * @return			identifier
 	 */
-	u_int16_t (*get_identifier) (cp_payload_t *this);
+	uint16_t (*get_identifier) (cp_payload_t *this);
 
 	/**
 	 * Destroys an cp_payload_t object.

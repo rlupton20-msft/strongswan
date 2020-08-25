@@ -1,6 +1,7 @@
 /*
  * Copyright (C) 2009 Martin Willi
- * Hochschule fuer Technik Rapperswil
+ * Copyright (C) 2016-2019 Andreas Steffen
+ * HSR Hochschule fuer Technik Rapperswil
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -30,6 +31,8 @@ typedef struct aead_test_vector_t aead_test_vector_t;
 typedef struct signer_test_vector_t signer_test_vector_t;
 typedef struct hasher_test_vector_t hasher_test_vector_t;
 typedef struct prf_test_vector_t prf_test_vector_t;
+typedef struct xof_test_vector_t xof_test_vector_t;
+typedef struct drbg_test_vector_t drbg_test_vector_t;
 typedef struct rng_test_vector_t rng_test_vector_t;
 typedef struct dh_test_vector_t dh_test_vector_t;
 
@@ -82,7 +85,7 @@ struct signer_test_vector_t {
 	size_t len;
 	/** input data */
 	u_char *data;
-	/** expected output, with ouput size of the tested algorithm */
+	/** expected output, with output size of the tested algorithm */
 	u_char *mac;
 };
 
@@ -112,6 +115,32 @@ struct prf_test_vector_t {
 	u_char *seed;
 	/** expected output, with block size of the tested algorithm */
 	u_char *out;
+};
+
+struct xof_test_vector_t {
+	/** xof algorithm this test vector tests */
+	ext_out_function_t alg;
+	/** size of the seed data */
+	size_t len;
+	/** seed data */
+	u_char *seed;
+	/** size of the output */
+	size_t out_len;
+	/** expected output of size*/
+	u_char *out;
+};
+
+struct drbg_test_vector_t {
+	/** drbg type this test vector tests */
+	drbg_type_t type;
+	/** security strength in bits */
+	uint32_t strength;
+	/** optional personalization string */
+	chunk_t personalization_str;
+	/** entropy_input | nonce | entropy_input_reseed */
+	chunk_t entropy;
+	/** returned output bits */
+	chunk_t out;
 };
 
 /**
@@ -217,6 +246,28 @@ struct crypto_tester_t {
 					 prf_constructor_t create,
 					 u_int *speed, const char *plugin_name);
 	/**
+	 * Test an XOF algorithm.
+	 *
+	 * @param alg			algorithm to test
+	 * @param create		constructor function for the XOF
+	 * @param speed			speed test result, NULL to omit
+	 * @return				TRUE if test passed
+	 */
+	bool (*test_xof)(crypto_tester_t *this, ext_out_function_t alg,
+					 xof_constructor_t create,
+					 u_int *speed, const char *plugin_name);
+	/**
+	 * Test a DRBG type.
+	 *
+	 * @param type			DRBG type to test
+	 * @param create		constructor function for the DRBG
+	 * @param speed			speed test result, NULL to omit
+	 * @return				TRUE if test passed
+	 */
+	bool (*test_drbg)(crypto_tester_t *this, drbg_type_t type,
+					  drbg_constructor_t create,
+					  u_int *speed, const char *plugin_name);
+	/**
 	 * Test a RNG implementation.
 	 *
 	 * @param alg			algorithm to test
@@ -273,6 +324,20 @@ struct crypto_tester_t {
 	 * @param vector		pointer to test vector
 	 */
 	void (*add_prf_vector)(crypto_tester_t *this, prf_test_vector_t *vector);
+
+	/**
+	 * Add a test vector to test an XOF.
+	 *
+	 * @param vector		pointer to test vector
+	 */
+	void (*add_xof_vector)(crypto_tester_t *this, xof_test_vector_t *vector);
+
+	/**
+	 * Add a test vector to test a DRBG.
+	 *
+	 * @param vector		pointer to test vector
+	 */
+	void (*add_drbg_vector)(crypto_tester_t *this, drbg_test_vector_t *vector);
 
 	/**
 	 * Add a test vector to test a RNG.

@@ -1,8 +1,8 @@
 /*
- * Copyright (C) 2012 Tobias Brunner
+ * Copyright (C) 2012-2017 Tobias Brunner
  * Copyright (C) 2012 Giuliano Grassi
  * Copyright (C) 2012 Ralf Sager
- * Hochschule fuer Technik Rapperswil
+ * HSR Hochschule fuer Technik Rapperswil
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -107,21 +107,26 @@ typedef struct {
 	ipsec_sa_entry_t *entry;
 
 	/**
+	 * SPI of the expired entry
+	 */
+	uint32_t spi;
+
+	/**
 	 * 0 if this is a hard expire, otherwise the offset in s (soft->hard)
 	 */
-	u_int32_t hard_offset;
+	uint32_t hard_offset;
 
 } ipsec_sa_expired_t;
 
 /*
  * Used for the hash table of allocated SPIs
  */
-static bool spi_equals(u_int32_t *spi, u_int32_t *other_spi)
+static bool spi_equals(uint32_t *spi, uint32_t *other_spi)
 {
 	return *spi == *other_spi;
 }
 
-static u_int spi_hash(u_int32_t *spi)
+static u_int spi_hash(uint32_t *spi)
 {
 	return chunk_hash(chunk_from_thing(*spi));
 }
@@ -224,42 +229,60 @@ static void flush_entries(private_ipsec_sa_mgr_t *this)
 	enumerator->destroy(enumerator);
 }
 
-/*
- * Different match functions to find SAs in the linked list
- */
-static bool match_entry_by_ptr(ipsec_sa_entry_t *item, ipsec_sa_entry_t *entry)
+CALLBACK(match_entry_by_sa_ptr, bool,
+	ipsec_sa_entry_t *item, va_list args)
 {
-	return item == entry;
-}
+	ipsec_sa_t *sa;
 
-static bool match_entry_by_sa_ptr(ipsec_sa_entry_t *item, ipsec_sa_t *sa)
-{
+	VA_ARGS_VGET(args, sa);
 	return item->sa == sa;
 }
 
-static bool match_entry_by_spi_inbound(ipsec_sa_entry_t *item, u_int32_t *spi,
-									   bool *inbound)
+CALLBACK(match_entry_by_spi_inbound, bool,
+	ipsec_sa_entry_t *item, va_list args)
 {
-	return item->sa->get_spi(item->sa) == *spi &&
-		   item->sa->is_inbound(item->sa) == *inbound;
+	uint32_t spi;
+	int inbound;
+
+	VA_ARGS_VGET(args, spi, inbound);
+	return item->sa->get_spi(item->sa) == spi &&
+		   item->sa->is_inbound(item->sa) == inbound;
 }
 
-static bool match_entry_by_spi_src_dst(ipsec_sa_entry_t *item, u_int32_t *spi,
+static bool match_entry_by_spi_src_dst(ipsec_sa_entry_t *item, uint32_t spi,
 									   host_t *src, host_t *dst)
 {
-	return item->sa->match_by_spi_src_dst(item->sa, *spi, src, dst);
+	return item->sa->match_by_spi_src_dst(item->sa, spi, src, dst);
 }
 
-static bool match_entry_by_reqid_inbound(ipsec_sa_entry_t *item,
-										 u_int32_t *reqid, bool *inbound)
+CALLBACK(match_entry_by_spi_src_dst_cb, bool,
+	ipsec_sa_entry_t *item, va_list args)
 {
-	return item->sa->match_by_reqid(item->sa, *reqid, *inbound);
+	host_t *src, *dst;
+	uint32_t spi;
+
+	VA_ARGS_VGET(args, spi, src, dst);
+	return match_entry_by_spi_src_dst(item, spi, src, dst);
 }
 
-static bool match_entry_by_spi_dst(ipsec_sa_entry_t *item, u_int32_t *spi,
-								   host_t *dst)
+CALLBACK(match_entry_by_reqid_inbound, bool,
+	ipsec_sa_entry_t *item, va_list args)
 {
-	return item->sa->match_by_spi_dst(item->sa, *spi, dst);
+	uint32_t reqid;
+	int inbound;
+
+	VA_ARGS_VGET(args, reqid, inbound);
+	return item->sa->match_by_reqid(item->sa, reqid, inbound);
+}
+
+CALLBACK(match_entry_by_spi_dst, bool,
+	ipsec_sa_entry_t *item, va_list args)
+{
+	host_t *dst;
+	uint32_t spi;
+
+	VA_ARGS_VGET(args, spi, dst);
+	return item->sa->match_by_spi_dst(item->sa, spi, dst);
 }
 
 /**
@@ -296,10 +319,10 @@ static job_requeue_t sa_expired(ipsec_sa_expired_t *expired)
 	private_ipsec_sa_mgr_t *this = expired->manager;
 
 	this->mutex->lock(this->mutex);
-	if (this->sas->find_first(this->sas, (void*)match_entry_by_ptr,
-							  NULL, expired->entry) == SUCCESS)
-	{
-		u_int32_t hard_offset;
+	if (this->sas->find_first(this->sas, NULL, (void**)&expired->entry) &&
+		expired->spi == expired->entry->sa->get_spi(expired->entry->sa))
+	{	/* only if we find the right SA at this pointer location */
+		uint32_t hard_offset;
 
 		hard_offset = expired->hard_offset;
 		expired->entry->sa->expire(expired->entry->sa, hard_offset == 0);
@@ -328,7 +351,7 @@ static void schedule_expiration(private_ipsec_sa_mgr_t *this,
 	lifetime_cfg_t *lifetime = entry->sa->get_lifetime(entry->sa);
 	ipsec_sa_expired_t *expired;
 	callback_job_t *job;
-	u_int32_t timeout;
+	uint32_t timeout;
 
 	if (!lifetime->time.life)
 	{	/* no expiration at all */
@@ -338,6 +361,7 @@ static void schedule_expiration(private_ipsec_sa_mgr_t *this,
 	INIT(expired,
 		.manager = this,
 		.entry = entry,
+		.spi = entry->sa->get_spi(entry->sa),
 	);
 
 	/* schedule a rekey first, a hard timeout will be scheduled then, if any */
@@ -362,7 +386,7 @@ static void schedule_expiration(private_ipsec_sa_mgr_t *this,
 static void flush_allocated_spis(private_ipsec_sa_mgr_t *this)
 {
 	enumerator_t *enumerator;
-	u_int32_t *current;
+	uint32_t *current;
 
 	DBG2(DBG_ESP, "flushing allocated SPIs");
 	enumerator = this->allocated_spis->create_enumerator(this->allocated_spis);
@@ -378,27 +402,41 @@ static void flush_allocated_spis(private_ipsec_sa_mgr_t *this)
 /**
  * Pre-allocate an SPI for an inbound SA
  */
-static bool allocate_spi(private_ipsec_sa_mgr_t *this, u_int32_t spi)
+static bool allocate_spi(private_ipsec_sa_mgr_t *this, uint32_t spi)
 {
-	u_int32_t *spi_alloc;
+	uint32_t *spi_alloc;
 
 	if (this->allocated_spis->get(this->allocated_spis, &spi) ||
-		this->sas->find_first(this->sas, (void*)match_entry_by_spi_inbound,
-							  NULL, &spi, TRUE) == SUCCESS)
+		this->sas->find_first(this->sas, match_entry_by_spi_inbound,
+							  NULL, spi, TRUE))
 	{
 		return FALSE;
 	}
-	spi_alloc = malloc_thing(u_int32_t);
+	spi_alloc = malloc_thing(uint32_t);
 	*spi_alloc = spi;
 	this->allocated_spis->put(this->allocated_spis, spi_alloc, spi_alloc);
 	return TRUE;
 }
 
 METHOD(ipsec_sa_mgr_t, get_spi, status_t,
-	private_ipsec_sa_mgr_t *this, host_t *src, host_t *dst, u_int8_t protocol,
-	u_int32_t *spi)
+	private_ipsec_sa_mgr_t *this, host_t *src, host_t *dst, uint8_t protocol,
+	uint32_t *spi)
 {
-	u_int32_t spi_new;
+	uint32_t spi_min, spi_max, spi_new;
+
+	spi_min = lib->settings->get_int(lib->settings, "%s.spi_min",
+									 0x00000100, lib->ns);
+	spi_max = lib->settings->get_int(lib->settings, "%s.spi_max",
+									 0xffffffff, lib->ns);
+	if (spi_min > spi_max)
+	{
+		spi_new = spi_min;
+		spi_min = spi_max;
+		spi_max = spi_new;
+	}
+	/* make sure the SPI is valid (not in range 0-255) */
+	spi_min = max(spi_min, 0x00000100);
+	spi_max = max(spi_max, 0x00000100);
 
 	this->mutex->lock(this->mutex);
 	if (!this->rng)
@@ -415,14 +453,13 @@ METHOD(ipsec_sa_mgr_t, get_spi, status_t,
 	do
 	{
 		if (!this->rng->get_bytes(this->rng, sizeof(spi_new),
-								 (u_int8_t*)&spi_new))
+								 (uint8_t*)&spi_new))
 		{
 			this->mutex->unlock(this->mutex);
 			DBG1(DBG_ESP, "failed to allocate SPI");
 			return FAILED;
 		}
-		/* make sure the SPI is valid (not in range 0-255) */
-		spi_new |= 0x00000100;
+		spi_new = spi_min + spi_new % (spi_max - spi_min + 1);
 		spi_new = htonl(spi_new);
 	}
 	while (!allocate_spi(this, spi_new));
@@ -435,11 +472,11 @@ METHOD(ipsec_sa_mgr_t, get_spi, status_t,
 }
 
 METHOD(ipsec_sa_mgr_t, add_sa, status_t,
-	private_ipsec_sa_mgr_t *this, host_t *src, host_t *dst, u_int32_t spi,
-	u_int8_t protocol, u_int32_t reqid,	mark_t mark, u_int32_t tfc,
-	lifetime_cfg_t *lifetime, u_int16_t enc_alg, chunk_t enc_key,
-	u_int16_t int_alg, chunk_t int_key, ipsec_mode_t mode, u_int16_t ipcomp,
-	u_int16_t cpi, bool initiator, bool encap, bool esn, bool inbound,
+	private_ipsec_sa_mgr_t *this, host_t *src, host_t *dst, uint32_t spi,
+	uint8_t protocol, uint32_t reqid,	mark_t mark, uint32_t tfc,
+	lifetime_cfg_t *lifetime, uint16_t enc_alg, chunk_t enc_key,
+	uint16_t int_alg, chunk_t int_key, ipsec_mode_t mode, uint16_t ipcomp,
+	uint16_t cpi, bool initiator, bool encap, bool esn, bool inbound,
 	bool update)
 {
 	ipsec_sa_entry_t *entry;
@@ -465,14 +502,14 @@ METHOD(ipsec_sa_mgr_t, add_sa, status_t,
 
 	if (update)
 	{	/* remove any pre-allocated SPIs */
-		u_int32_t *spi_alloc;
+		uint32_t *spi_alloc;
 
 		spi_alloc = this->allocated_spis->remove(this->allocated_spis, &spi);
 		free(spi_alloc);
 	}
 
-	if (this->sas->find_first(this->sas, (void*)match_entry_by_spi_src_dst,
-							  NULL, &spi, src, dst) == SUCCESS)
+	if (this->sas->find_first(this->sas, match_entry_by_spi_src_dst_cb, NULL,
+							  spi, src, dst))
 	{
 		this->mutex->unlock(this->mutex);
 		DBG1(DBG_ESP, "failed to install SAD entry: already installed");
@@ -489,8 +526,8 @@ METHOD(ipsec_sa_mgr_t, add_sa, status_t,
 }
 
 METHOD(ipsec_sa_mgr_t, update_sa, status_t,
-	private_ipsec_sa_mgr_t *this, u_int32_t spi, u_int8_t protocol,
-	u_int16_t cpi, host_t *src, host_t *dst, host_t *new_src, host_t *new_dst,
+	private_ipsec_sa_mgr_t *this, uint32_t spi, uint8_t protocol,
+	uint16_t cpi, host_t *src, host_t *dst, host_t *new_src, host_t *new_dst,
 	bool encap, bool new_encap, mark_t mark)
 {
 	ipsec_sa_entry_t *entry = NULL;
@@ -506,8 +543,8 @@ METHOD(ipsec_sa_mgr_t, update_sa, status_t,
 	}
 
 	this->mutex->lock(this->mutex);
-	if (this->sas->find_first(this->sas, (void*)match_entry_by_spi_src_dst,
-							 (void**)&entry, &spi, src, dst) == SUCCESS &&
+	if (this->sas->find_first(this->sas, match_entry_by_spi_src_dst_cb,
+							 (void**)&entry, spi, src, dst) &&
 		wait_for_entry(this, entry))
 	{
 		entry->sa->set_source(entry->sa, new_src);
@@ -528,14 +565,14 @@ METHOD(ipsec_sa_mgr_t, update_sa, status_t,
 
 METHOD(ipsec_sa_mgr_t, query_sa, status_t,
 	private_ipsec_sa_mgr_t *this, host_t *src, host_t *dst,
-	u_int32_t spi, u_int8_t protocol, mark_t mark,
-	u_int64_t *bytes, u_int64_t *packets, time_t *time)
+	uint32_t spi, uint8_t protocol, mark_t mark,
+	uint64_t *bytes, uint64_t *packets, time_t *time)
 {
 	ipsec_sa_entry_t *entry = NULL;
 
 	this->mutex->lock(this->mutex);
-	if (this->sas->find_first(this->sas, (void*)match_entry_by_spi_src_dst,
-							 (void**)&entry, &spi, src, dst) == SUCCESS &&
+	if (this->sas->find_first(this->sas, match_entry_by_spi_src_dst_cb,
+							 (void**)&entry, spi, src, dst) &&
 		wait_for_entry(this, entry))
 	{
 		entry->sa->get_usestats(entry->sa, bytes, packets, time);
@@ -549,8 +586,8 @@ METHOD(ipsec_sa_mgr_t, query_sa, status_t,
 }
 
 METHOD(ipsec_sa_mgr_t, del_sa, status_t,
-	private_ipsec_sa_mgr_t *this, host_t *src, host_t *dst, u_int32_t spi,
-	u_int8_t protocol, u_int16_t cpi, mark_t mark)
+	private_ipsec_sa_mgr_t *this, host_t *src, host_t *dst, uint32_t spi,
+	uint8_t protocol, uint16_t cpi, mark_t mark)
 {
 	ipsec_sa_entry_t *current, *found = NULL;
 	enumerator_t *enumerator;
@@ -559,7 +596,7 @@ METHOD(ipsec_sa_mgr_t, del_sa, status_t,
 	enumerator = this->sas->create_enumerator(this->sas);
 	while (enumerator->enumerate(enumerator, (void**)&current))
 	{
-		if (match_entry_by_spi_src_dst(current, &spi, src, dst))
+		if (match_entry_by_spi_src_dst(current, spi, src, dst))
 		{
 			if (wait_remove_entry(this, current))
 			{
@@ -583,14 +620,14 @@ METHOD(ipsec_sa_mgr_t, del_sa, status_t,
 }
 
 METHOD(ipsec_sa_mgr_t, checkout_by_reqid, ipsec_sa_t*,
-	private_ipsec_sa_mgr_t *this, u_int32_t reqid, bool inbound)
+	private_ipsec_sa_mgr_t *this, uint32_t reqid, bool inbound)
 {
 	ipsec_sa_entry_t *entry;
 	ipsec_sa_t *sa = NULL;
 
 	this->mutex->lock(this->mutex);
-	if (this->sas->find_first(this->sas, (void*)match_entry_by_reqid_inbound,
-							 (void**)&entry, &reqid, &inbound) == SUCCESS &&
+	if (this->sas->find_first(this->sas, match_entry_by_reqid_inbound,
+							 (void**)&entry, reqid, inbound) &&
 		wait_for_entry(this, entry))
 	{
 		sa = entry->sa;
@@ -600,14 +637,14 @@ METHOD(ipsec_sa_mgr_t, checkout_by_reqid, ipsec_sa_t*,
 }
 
 METHOD(ipsec_sa_mgr_t, checkout_by_spi, ipsec_sa_t*,
-	private_ipsec_sa_mgr_t *this, u_int32_t spi, host_t *dst)
+	private_ipsec_sa_mgr_t *this, uint32_t spi, host_t *dst)
 {
 	ipsec_sa_entry_t *entry;
 	ipsec_sa_t *sa = NULL;
 
 	this->mutex->lock(this->mutex);
-	if (this->sas->find_first(this->sas, (void*)match_entry_by_spi_dst,
-							 (void**)&entry, &spi, dst) == SUCCESS &&
+	if (this->sas->find_first(this->sas, match_entry_by_spi_dst,
+							 (void**)&entry, spi, dst) &&
 		wait_for_entry(this, entry))
 	{
 		sa = entry->sa;
@@ -622,8 +659,8 @@ METHOD(ipsec_sa_mgr_t, checkin, void,
 	ipsec_sa_entry_t *entry;
 
 	this->mutex->lock(this->mutex);
-	if (this->sas->find_first(this->sas, (void*)match_entry_by_sa_ptr,
-							 (void**)&entry, sa) == SUCCESS)
+	if (this->sas->find_first(this->sas, match_entry_by_sa_ptr,
+							 (void**)&entry, sa))
 	{
 		if (entry->locked)
 		{

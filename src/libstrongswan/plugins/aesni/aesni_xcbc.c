@@ -1,7 +1,7 @@
 /*
  * Copyright (C) 2008-2015 Martin Willi
  * Copyright (C) 2012 Tobias Brunner
- * Hochschule fuer Technik Rapperswil
+ * HSR Hochschule fuer Technik Rapperswil
  * Copyright (C) 2015 revosec AG
  *
  * This program is free software; you can redistribute it and/or modify it
@@ -70,7 +70,7 @@ struct private_aesni_mac_t {
 };
 
 METHOD(mac_t, get_mac, bool,
-	private_aesni_mac_t *this, chunk_t data, u_int8_t *out)
+	private_aesni_mac_t *this, chunk_t data, uint8_t *out)
 {
 	__m128i *ks, e, *bi;
 	u_int blocks, rem, i;

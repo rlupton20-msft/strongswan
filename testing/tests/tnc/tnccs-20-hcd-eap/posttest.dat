@@ -1,7 +1,7 @@
-carol::service charon stop
-dave::service charon stop
-moon::service charon stop
-alice::service charon stop
+carol::systemctl stop strongswan
+dave::systemctl stop strongswan
+moon::systemctl stop strongswan
+alice::systemctl stop strongswan
 alice::rm /etc/swanctl/rsa/aaaKey.pem
 alice::rm /etc/swanctl/x509/aaaCert.pem
 winnetou::ip route del 10.1.0.0/16 via 192.168.0.1

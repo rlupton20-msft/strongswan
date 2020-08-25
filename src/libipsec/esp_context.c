@@ -2,7 +2,7 @@
  * Copyright (C) 2012-2013 Tobias Brunner
  * Copyright (C) 2012 Giuliano Grassi
  * Copyright (C) 2012 Ralf Sager
- * Hochschule fuer Technik Rapperswil
+ * HSR Hochschule fuer Technik Rapperswil
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -49,7 +49,7 @@ struct private_esp_context_t {
 	 * The highest sequence number that was successfully verified
 	 * and authenticated, or assigned in an outbound context
 	 */
-	u_int32_t last_seqno;
+	uint32_t last_seqno;
 
 	/**
 	 * The bit in the window of the highest authenticated sequence number
@@ -103,7 +103,7 @@ static inline bool get_window_bit(private_esp_context_t *this, u_int index)
 /**
  * Returns TRUE if the supplied seqno is not already marked in the window
  */
-static bool check_window(private_esp_context_t *this, u_int32_t seqno)
+static bool check_window(private_esp_context_t *this, uint32_t seqno)
 {
 	u_int offset;
 
@@ -113,7 +113,7 @@ static bool check_window(private_esp_context_t *this, u_int32_t seqno)
 }
 
 METHOD(esp_context_t, verify_seqno, bool,
-	private_esp_context_t *this, u_int32_t seqno)
+	private_esp_context_t *this, uint32_t seqno)
 {
 	if (!this->inbound)
 	{
@@ -145,7 +145,7 @@ METHOD(esp_context_t, verify_seqno, bool,
 }
 
 METHOD(esp_context_t, set_authenticated_seqno, void,
-	private_esp_context_t *this, u_int32_t seqno)
+	private_esp_context_t *this, uint32_t seqno)
 {
 	u_int i, shift;
 
@@ -173,14 +173,14 @@ METHOD(esp_context_t, set_authenticated_seqno, void,
 	}
 }
 
-METHOD(esp_context_t, get_seqno, u_int32_t,
+METHOD(esp_context_t, get_seqno, uint32_t,
 	private_esp_context_t *this)
 {
 	return this->last_seqno;
 }
 
 METHOD(esp_context_t, next_seqno, bool,
-	private_esp_context_t *this, u_int32_t *seqno)
+	private_esp_context_t *this, uint32_t *seqno)
 {
 	if (this->inbound || this->last_seqno == UINT32_MAX)
 	{	/* inbound or segno would cycle */
@@ -210,18 +210,31 @@ METHOD(esp_context_t, destroy, void,
 static bool create_aead(private_esp_context_t *this, int alg,
 						chunk_t key)
 {
+	size_t salt = 0;
+
 	switch (alg)
 	{
 		case ENCR_AES_GCM_ICV8:
 		case ENCR_AES_GCM_ICV12:
 		case ENCR_AES_GCM_ICV16:
 		case ENCR_CHACHA20_POLY1305:
-			/* the key includes a 4 byte salt */
-			this->aead = lib->crypto->create_aead(lib->crypto, alg,
-												  key.len - 4, 4);
+			salt = 4;
+			break;
+		case ENCR_AES_CCM_ICV8:
+		case ENCR_AES_CCM_ICV12:
+		case ENCR_AES_CCM_ICV16:
+		case ENCR_CAMELLIA_CCM_ICV8:
+		case ENCR_CAMELLIA_CCM_ICV12:
+		case ENCR_CAMELLIA_CCM_ICV16:
+			salt = 3;
 			break;
 		default:
 			break;
+	}
+	if (salt)
+	{
+		this->aead = lib->crypto->create_aead(lib->crypto, alg,
+											  key.len - salt, salt);
 	}
 	if (!this->aead)
 	{

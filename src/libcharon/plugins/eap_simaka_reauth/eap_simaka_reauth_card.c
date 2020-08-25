@@ -1,6 +1,6 @@
 /*
  * Copyright (C) 2009 Martin Willi
- * Hochschule fuer Technik Rapperswil
+ * HSR Hochschule fuer Technik Rapperswil
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -45,7 +45,7 @@ typedef struct {
 	/** associated permanent identity */
 	identification_t *permanent;
 	/** counter value */
-	u_int16_t counter;
+	uint16_t counter;
 	/** master key */
 	char mk[HASH_SIZE_SHA1];
 } reauth_data_t;
@@ -68,7 +68,7 @@ static bool equals(identification_t *key1, identification_t *key2)
 
 METHOD(simaka_card_t, get_reauth, identification_t*,
 	private_eap_simaka_reauth_card_t *this, identification_t *id,
-	char mk[HASH_SIZE_SHA1], u_int16_t *counter)
+	char mk[HASH_SIZE_SHA1], uint16_t *counter)
 {
 	reauth_data_t *data;
 	identification_t *reauth;
@@ -89,7 +89,7 @@ METHOD(simaka_card_t, get_reauth, identification_t*,
 
 METHOD(simaka_card_t, set_reauth, void,
 	private_eap_simaka_reauth_card_t *this, identification_t *id,
-	identification_t* next, char mk[HASH_SIZE_SHA1], u_int16_t counter)
+	identification_t* next, char mk[HASH_SIZE_SHA1], uint16_t counter)
 {
 	reauth_data_t *data;
 

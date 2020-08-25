@@ -1,8 +1,8 @@
 /*
- * Copyright (C) 2006-2008 Tobias Brunner
+ * Copyright (C) 2006-2019 Tobias Brunner
  * Copyright (C) 2006-2008 Martin Willi
  * Copyright (C) 2006 Daniel Roethlisberger
- * Hochschule fuer Technik Rapperswil
+ * HSR Hochschule fuer Technik Rapperswil
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -24,12 +24,14 @@
 #define CHILD_SA_H_
 
 typedef enum child_sa_state_t child_sa_state_t;
+typedef enum child_sa_outbound_state_t child_sa_outbound_state_t;
 typedef struct child_sa_t child_sa_t;
+typedef struct child_sa_create_t child_sa_create_t;
 
 #include <library.h>
 #include <crypto/prf_plus.h>
 #include <encoding/payloads/proposal_substructure.h>
-#include <config/proposal.h>
+#include <crypto/proposal/proposal.h>
 #include <config/child_cfg.h>
 
 /**
@@ -53,7 +55,7 @@ enum child_sa_state_t {
 	CHILD_INSTALLING,
 
 	/**
-	 * Installed an in-use CHILD_SA
+	 * Installed both SAs of a CHILD_SA
 	 */
 	CHILD_INSTALLED,
 
@@ -83,6 +85,11 @@ enum child_sa_state_t {
 	CHILD_DELETING,
 
 	/**
+	 * CHILD_SA has been deleted, but not yet destroyed
+	 */
+	CHILD_DELETED,
+
+	/**
 	 * CHILD_SA object gets destroyed
 	 */
 	CHILD_DESTROYING,
@@ -92,6 +99,43 @@ enum child_sa_state_t {
  * enum strings for child_sa_state_t.
  */
 extern enum_name_t *child_sa_state_names;
+
+/**
+ * States of the outbound SA of a CHILD_SA
+ */
+enum child_sa_outbound_state_t {
+
+	/**
+	 * Outbound SA is not installed
+	 */
+	CHILD_OUTBOUND_NONE = 0,
+
+	/**
+	 * Data for the outbound SA has been registered during a rekeying (not set
+	 * once the SA and policies are both installed)
+	 */
+	CHILD_OUTBOUND_REGISTERED = (1<<0),
+
+	/**
+	 * The outbound SA has been installed
+	 */
+	CHILD_OUTBOUND_SA = (1<<1),
+
+	/**
+	 * The outbound policies have been installed
+	 */
+	CHILD_OUTBOUND_POLICIES = (1<<2),
+
+	/**
+	 * The outbound SA and policies are both installed
+	 */
+	CHILD_OUTBOUND_INSTALLED = (CHILD_OUTBOUND_SA|CHILD_OUTBOUND_POLICIES),
+};
+
+/**
+ * enum strings for child_sa_outbound_state_t.
+ */
+extern enum_name_t *child_sa_outbound_state_names;
 
 /**
  * Represents an IPsec SAs between two hosts.
@@ -107,7 +151,7 @@ extern enum_name_t *child_sa_state_names;
  * - B allocates an SPI for the selected protocol
  * - B calls child_sa_t.install for both, the allocated and received SPI
  * - B sends the proposal with the allocated SPI to A
- * - A calls child_sa_t.install for both, the allocated and recevied SPI
+ * - A calls child_sa_t.install for both, the allocated and received SPI
  *
  * Once SAs are set up, policies can be added using add_policies.
  */
@@ -128,7 +172,7 @@ struct child_sa_t {
 	 *
 	 * @return 			reqid of the CHILD SA
 	 */
-	u_int32_t (*get_reqid)(child_sa_t *this);
+	uint32_t (*get_reqid)(child_sa_t *this);
 
 	/**
 	 * Get the unique numerical identifier for this CHILD_SA.
@@ -138,7 +182,7 @@ struct child_sa_t {
 	 *
 	 * @return			unique CHILD_SA identifier
 	 */
-	u_int32_t (*get_unique_id)(child_sa_t *this);
+	uint32_t (*get_unique_id)(child_sa_t *this);
 
 	/**
 	 * Get the config used to set up this child sa.
@@ -152,7 +196,14 @@ struct child_sa_t {
 	 *
 	 * @return 			CHILD_SA state
 	 */
-	child_sa_state_t (*get_state) (child_sa_t *this);
+	child_sa_state_t (*get_state)(child_sa_t *this);
+
+	/**
+	 * Get the state of the outbound SA.
+	 *
+	 * @return 			outbound SA state
+	 */
+	child_sa_outbound_state_t (*get_outbound_state)(child_sa_t *this);
 
 	/**
 	 * Set the state of the CHILD_SA.
@@ -171,7 +222,7 @@ struct child_sa_t {
 	 * @param inbound	TRUE to get inbound SPI, FALSE for outbound.
 	 * @return 			SPI of the CHILD SA
 	 */
-	u_int32_t (*get_spi) (child_sa_t *this, bool inbound);
+	uint32_t (*get_spi) (child_sa_t *this, bool inbound);
 
 	/**
 	 * Get the CPI of this CHILD_SA.
@@ -183,7 +234,7 @@ struct child_sa_t {
 	 * @param inbound	TRUE to get inbound CPI, FALSE for outbound.
 	 * @return 			CPI of the CHILD SA
 	 */
-	u_int16_t (*get_cpi) (child_sa_t *this, bool inbound);
+	uint16_t (*get_cpi) (child_sa_t *this, bool inbound);
 
 	/**
 	 * Get the protocol which this CHILD_SA uses to protect traffic.
@@ -209,7 +260,7 @@ struct child_sa_t {
 	/**
 	 * Set the negotiated IPsec mode to use.
 	 *
-	 * @param mode		TUNNEL | TRANPORT | BEET
+	 * @param mode		TUNNEL | TRANSPORT | BEET
 	 */
 	void (*set_mode)(child_sa_t *this, ipsec_mode_t mode);
 
@@ -300,7 +351,7 @@ struct child_sa_t {
 	 * @param[out] packets	number of processed packets (NULL to ignore)
 	 */
 	void (*get_usestats)(child_sa_t *this, bool inbound, time_t *time,
-						 u_int64_t *bytes, u_int64_t *packets);
+						 uint64_t *bytes, uint64_t *packets);
 
 	/**
 	 * Get the mark used with this CHILD_SA.
@@ -309,6 +360,14 @@ struct child_sa_t {
 	 * @return				mark used with this CHILD_SA
 	 */
 	mark_t (*get_mark)(child_sa_t *this, bool inbound);
+
+	/**
+	 * Get the interface ID used with this CHILD_SA.
+	 *
+	 * @param inbound		TRUE to get inbound ID, FALSE for outbound
+	 * @return				interface ID used with this CHILD_SA
+	 */
+	uint32_t (*get_if_id)(child_sa_t *this, bool inbound);
 
 	/**
 	 * Create an enumerator over traffic selectors of one side.
@@ -335,17 +394,19 @@ struct child_sa_t {
 	 * @param spi		SPI output pointer
 	 * @return			SPI, 0 on failure
 	 */
-	u_int32_t (*alloc_spi)(child_sa_t *this, protocol_id_t protocol);
+	uint32_t (*alloc_spi)(child_sa_t *this, protocol_id_t protocol);
 
 	/**
 	 * Allocate a CPI to use for IPComp.
 	 *
 	 * @return			CPI, 0 on failure
 	 */
-	u_int16_t (*alloc_cpi)(child_sa_t *this);
+	uint16_t (*alloc_cpi)(child_sa_t *this);
 
 	/**
 	 * Install an IPsec SA for one direction.
+	 *
+	 * set_policies() should be called before calling this.
 	 *
 	 * @param encr		encryption key, if any
 	 * @param integ		integrity key
@@ -354,26 +415,87 @@ struct child_sa_t {
 	 * @param initiator	TRUE if initiator of exchange resulting in this SA
 	 * @param inbound	TRUE to install an inbound SA, FALSE for outbound
 	 * @param tfcv3		TRUE if peer supports ESPv3 TFC
-	 * @param my_ts		negotiated local traffic selector list
-	 * @param other_ts	negotiated remote traffic selector list
 	 * @return			SUCCESS or FAILED
 	 */
 	status_t (*install)(child_sa_t *this, chunk_t encr, chunk_t integ,
-						u_int32_t spi, u_int16_t cpi,
-						bool initiator, bool inbound, bool tfcv3,
-						linked_list_t *my_ts, linked_list_t *other_ts);
+						uint32_t spi, uint16_t cpi,
+						bool initiator, bool inbound, bool tfcv3);
+
 	/**
-	 * Install the policies using some traffic selectors.
+	 * Register data for the installation of an outbound SA as responder during
+	 * a rekeying.
+	 *
+	 * If the kernel is able to handle SPIs on policies the SA is installed
+	 * immediately, if not it won't be installed until install_outbound() is
+	 * called.
+	 *
+	 * @param encr		encryption key, if any (cloned)
+	 * @param integ		integrity key (cloned)
+	 * @param spi		SPI to use, allocated for inbound
+	 * @param cpi		CPI to use, allocated for outbound
+	 * @param tfcv3		TRUE if peer supports ESPv3 TFC
+	 * @return			SUCCESS or FAILED
+	 */
+	status_t (*register_outbound)(child_sa_t *this, chunk_t encr, chunk_t integ,
+								  uint32_t spi, uint16_t cpi, bool tfcv3);
+
+	/**
+	 * Install the outbound policies and, if not already done, the outbound SA
+	 * as responder during a rekeying.
+	 *
+	 * @return			SUCCESS or FAILED
+	 */
+	status_t (*install_outbound)(child_sa_t *this);
+
+	/**
+	 * Remove the outbound SA and the outbound policies after a rekeying.
+	 */
+	void (*remove_outbound)(child_sa_t *this);
+
+	/**
+	 * Configure the policies using some traffic selectors.
 	 *
 	 * Supplied lists of traffic_selector_t's specify the policies
 	 * to use for this child sa.
 	 *
-	 * @param my_ts		traffic selectors for local site
-	 * @param other_ts	traffic selectors for remote site
+	 * Install the policies by calling install_policies().
+	 *
+	 * This should be called before calling install() so the traffic selectors
+	 * may be passed to the kernel interface when installing the SAs.
+	 *
+	 * @param my_ts		traffic selectors for local site (cloned)
+	 * @param other_ts	traffic selectors for remote site (cloned)
+	 */
+	void (*set_policies)(child_sa_t *this, linked_list_t *my_ts_list,
+						 linked_list_t *other_ts_list);
+
+	/**
+	 * Install the configured policies.
+	 *
+	 * If register_outbound() was called previously this only installs the
+	 * inbound and forward policies, the outbound policies are installed when
+	 * install_outbound() is called.
+	 *
 	 * @return			SUCCESS or FAILED
 	 */
-	status_t (*add_policies)(child_sa_t *this, linked_list_t *my_ts_list,
-							 linked_list_t *other_ts_list);
+	status_t (*install_policies)(child_sa_t *this);
+
+	/**
+	 * Set the outbound SPI of the CHILD_SA that replaced this CHILD_SA during
+	 * a rekeying.
+	 *
+	 * @param spi		outbound SPI of the CHILD_SA that replaced this CHILD_SA
+	 */
+	void (*set_rekey_spi)(child_sa_t *this, uint32_t spi);
+
+	/**
+	 * Get the outbound SPI of the CHILD_SA that replaced this CHILD_SA during
+	 * a rekeying.
+	 *
+	 * @return			outbound SPI of the CHILD_SA that replaced this CHILD_SA
+	 */
+	uint32_t (*get_rekey_spi)(child_sa_t *this);
+
 	/**
 	 * Update hosts and ecapulation mode in the kernel SAs and policies.
 	 *
@@ -392,19 +514,39 @@ struct child_sa_t {
 };
 
 /**
+ * Data passed to the constructor of a child_sa_t object.
+ */
+struct child_sa_create_t {
+	/** Optional reqid of old CHILD_SA when rekeying */
+	uint32_t reqid;
+	/** Optional inbound mark when rekeying */
+	uint32_t mark_in;
+	/** Optional outbound mark when rekeying */
+	uint32_t mark_out;
+	/** Optional inbound interface ID when rekeying */
+	uint32_t if_id_in;
+	/** Optional outbound interface ID when rekeying */
+	uint32_t if_id_out;
+	/** Optional default inbound interface ID, if neither if_id_in, nor config
+	 * sets one */
+	uint32_t if_id_in_def;
+	/** Optional default outbound interface ID, if neither if_id_out, nor config
+	 * sets one */
+	uint32_t if_id_out_def;
+	/** TRUE to enable UDP encapsulation (NAT traversal) */
+	bool encap;
+};
+
+/**
  * Constructor to create a child SA negotiated with IKE.
  *
  * @param me				own address
  * @param other				remote address
  * @param config			config to use for this CHILD_SA
- * @param reqid				reqid of old CHILD_SA when rekeying, 0 otherwise
- * @param encap				TRUE to enable UDP encapsulation (NAT traversal)
- * @param mark_in			explicit inbound mark value to use, 0 for config
- * @param mark_out			explicit outbound mark value to use, 0 for config
+ * @param data				data for this CHILD_SA
  * @return					child_sa_t object
  */
-child_sa_t * child_sa_create(host_t *me, host_t *other, child_cfg_t *config,
-							 u_int32_t reqid, bool encap,
-							 u_int mark_in, u_int mark_out);
+child_sa_t *child_sa_create(host_t *me, host_t *other,	child_cfg_t *config,
+							child_sa_create_t *data);
 
 #endif /** CHILD_SA_H_ @}*/

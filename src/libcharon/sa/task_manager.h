@@ -1,6 +1,7 @@
 /*
+ * Copyright (C) 2013-2018 Tobias Brunner
  * Copyright (C) 2006 Martin Willi
- * Hochschule fuer Technik Rapperswil
+ * HSR Hochschule fuer Technik Rapperswil
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -47,6 +48,11 @@ typedef enum task_queue_t task_queue_t;
 #define RETRANSMIT_TRIES 5
 
 /**
+ * Maximum jitter in percent.
+ */
+#define RETRANSMIT_JITTER_MAX 20
+
+/**
  * Interval for mobike routability checks in ms.
  */
 #define ROUTEABILITY_CHECK_INTERVAL 2500
@@ -80,7 +86,7 @@ enum task_queue_t {
  * completed.
  * For the initial IKE_SA setup, several tasks are queued: One for the
  * unauthenticated IKE_SA setup, one for authentication, one for CHILD_SA setup
- * and maybe one for virtual IP assignement.
+ * and maybe one for virtual IP assignment.
  * The task manager is also responsible for retransmission. It uses a backoff
  * algorithm. The timeout is calculated using
  * RETRANSMIT_TIMEOUT * (RETRANSMIT_BASE ** try).
@@ -122,7 +128,17 @@ struct task_manager_t {
 	 *
 	 * @param task			task to queue
 	 */
-	void (*queue_task) (task_manager_t *this, task_t *task);
+	void (*queue_task)(task_manager_t *this, task_t *task);
+
+	/**
+	 * Queue a task in the manager, but delay its initiation for at least the
+	 * given number of seconds.
+	 *
+	 * @param task			task to queue
+	 * @param delay			minimum delay in s before initiating the task
+	 */
+	void (*queue_task_delayed)(task_manager_t *this, task_t *task,
+							   uint32_t delay);
 
 	/**
 	 * Queue IKE_SA establishing tasks.
@@ -160,7 +176,7 @@ struct task_manager_t {
 	 * @param tsi			initiator traffic selector, if packet-triggered
 	 * @param tsr			responder traffic selector, if packet-triggered
 	 */
-	void (*queue_child)(task_manager_t *this, child_cfg_t *cfg, u_int32_t reqid,
+	void (*queue_child)(task_manager_t *this, child_cfg_t *cfg, uint32_t reqid,
 						traffic_selector_t *tsi, traffic_selector_t *tsr);
 
 	/**
@@ -170,7 +186,7 @@ struct task_manager_t {
 	 * @param spi			CHILD_SA SPI to rekey
 	 */
 	void (*queue_child_rekey)(task_manager_t *this, protocol_id_t protocol,
-							  u_int32_t spi);
+							  uint32_t spi);
 
 	/**
 	 * Queue CHILD_SA delete tasks.
@@ -180,7 +196,7 @@ struct task_manager_t {
 	 * @param expired		TRUE if SA already expired
 	 */
 	void (*queue_child_delete)(task_manager_t *this, protocol_id_t protocol,
-							   u_int32_t spi, bool expired);
+							   uint32_t spi, bool expired);
 
 	/**
 	 * Queue liveness checking tasks.
@@ -199,7 +215,7 @@ struct task_manager_t {
 	 *						- INVALID_STATE if retransmission not required
 	 *						- SUCCESS if retransmission sent
 	 */
-	status_t (*retransmit) (task_manager_t *this, u_int32_t message_id);
+	status_t (*retransmit) (task_manager_t *this, uint32_t message_id);
 
 	/**
 	 * Migrate all queued tasks from other to this.
@@ -212,13 +228,6 @@ struct task_manager_t {
 	void (*adopt_tasks) (task_manager_t *this, task_manager_t *other);
 
 	/**
-	 * Migrate all active or queued CHILD_SA-creating tasks from other to this.
-	 *
-	 * @param other			manager which gives away its tasks
-	 */
-	void (*adopt_child_tasks) (task_manager_t *this, task_manager_t *other);
-
-	/**
 	 * Increment a message ID counter, in- or outbound.
 	 *
 	 * If a message is processed outside of the manager, this call increments
@@ -227,6 +236,14 @@ struct task_manager_t {
 	 * @param inititate		TRUE to increment the initiating ID
 	 */
 	void (*incr_mid)(task_manager_t *this, bool initiate);
+
+	/**
+	 * Get the current message ID counter, in- or outbound.
+	 *
+	 * @param initiate		TRUE to get the initiating ID
+	 * @return				current message ID
+	 */
+	uint32_t (*get_mid)(task_manager_t *this, bool initiate);
 
 	/**
 	 * Reset message ID counters of the task manager.
@@ -242,7 +259,7 @@ struct task_manager_t {
 	 * @param initiate		message ID / DPD seq to initiate exchanges (send)
 	 * @param respond		message ID / DPD seq to respond to exchanges (expect)
 	 */
-	void (*reset) (task_manager_t *this, u_int32_t initiate, u_int32_t respond);
+	void (*reset)(task_manager_t *this, uint32_t initiate, uint32_t respond);
 
 	/**
 	 * Check if we are currently waiting for a reply.
@@ -261,6 +278,16 @@ struct task_manager_t {
 											task_queue_t queue);
 
 	/**
+	 * Remove the task the given enumerator points to.
+	 *
+	 * @note This should be used with caution, in partciular, for tasks in the
+	 * active and passive queues.
+	 *
+	 * @param enumerator	enumerator created with the method above
+	 */
+	void (*remove_task)(task_manager_t *this, enumerator_t *enumerator);
+
+	/**
 	 * Flush all tasks, regardless of the queue.
 	 */
 	void (*flush)(task_manager_t *this);
@@ -277,6 +304,17 @@ struct task_manager_t {
 	 */
 	void (*destroy) (task_manager_t *this);
 };
+
+/**
+ * Calculate total timeout of the retransmission mechanism.
+ *
+ * This is affected by modifications of retransmit_base, retransmit_timeout,
+ * retransmit_limit or retransmit_tries. The resulting value can then be used
+ * e.g. in kernel plugins to set the system's acquire timeout properly.
+ *
+ * @return					calculated total retransmission timeout in seconds
+ */
+u_int task_manager_total_retransmit_timeout();
 
 /**
  * Create a task manager instance for the correct IKE version.

@@ -1,7 +1,7 @@
 /*
  * Copyright (C) 2005-2008 Martin Willi
  * Copyright (C) 2005 Jan Hutter
- * Hochschule fuer Technik Rapperswil
+ * HSR Hochschule fuer Technik Rapperswil
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -41,7 +41,7 @@ struct private_random_rng_t {
 };
 
 METHOD(rng_t, get_bytes, bool,
-	private_random_rng_t *this, size_t bytes, u_int8_t *buffer)
+	private_random_rng_t *this, size_t bytes, uint8_t *buffer)
 {
 	size_t done;
 	ssize_t got;

@@ -1,8 +1,8 @@
 /*
- * Copyright (C) 2012 Tobias Brunner
+ * Copyright (C) 2012-2017 Tobias Brunner
  * Copyright (C) 2012 Reto Buerki
  * Copyright (C) 2012 Adrian-Ken Rueegsegger
- * Hochschule fuer Technik Rapperswil
+ * HSR Hochschule fuer Technik Rapperswil
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -24,6 +24,7 @@
 #include <sys/types.h>
 #include <unistd.h>
 #include <libgen.h>
+#include <fcntl.h>
 #include <errno.h>
 
 #include <daemon.h>
@@ -42,12 +43,16 @@
 #include "tkm_public_key.h"
 #include "tkm_cred.h"
 #include "tkm_encoder.h"
-#include "tkm_spi_generator.h"
 
 /**
  * TKM bus listener for IKE authorize events.
  */
 static tkm_listener_t *listener;
+
+/**
+ * Name of the daemon
+ */
+static char *dmn_name;
 
 /**
  * PID file, in which charon-tkm stores its process id
@@ -128,6 +133,7 @@ static void run()
 	}
 }
 
+#ifndef DISABLE_SIGNAL_HANDLER
 /**
  * Handle SIGSEGV/SIGILL signals raised by threads
  */
@@ -143,6 +149,7 @@ static void segv_handler(int signal)
 	DBG1(DBG_DMN, "killing ourself, received critical signal");
 	abort();
 }
+#endif /* DISABLE_SIGNAL_HANDLER */
 
 /**
  * Lookup UID and GID
@@ -186,8 +193,11 @@ static bool check_pidfile()
 				pid = atoi(buf);
 			}
 			fclose(pidfile);
-			if (pid && kill(pid, 0) == 0)
-			{	/* such a process is running */
+			pidfile = NULL;
+			if (pid && pid != getpid() && kill(pid, 0) == 0)
+			{
+				DBG1(DBG_DMN, "%s already running ('%s' exists)", dmn_name,
+					 pidfile_name);
 				return TRUE;
 			}
 		}
@@ -199,13 +209,31 @@ static bool check_pidfile()
 	pidfile = fopen(pidfile_name, "w");
 	if (pidfile)
 	{
-		ignore_result(fchown(fileno(pidfile),
+		int fd;
+
+		fd = fileno(pidfile);
+		if (fd == -1)
+		{
+			DBG1(DBG_DMN, "unable to determine fd for '%s'", pidfile_name);
+			return TRUE;
+		}
+		if (fcntl(fd, F_SETFD, FD_CLOEXEC) == -1)
+		{
+			DBG1(DBG_LIB, "setting FD_CLOEXEC for '%s' failed: %s",
+				 pidfile_name, strerror(errno));
+		}
+		ignore_result(fchown(fd,
 							 lib->caps->get_uid(lib->caps),
 							 lib->caps->get_gid(lib->caps)));
 		fprintf(pidfile, "%d\n", getpid());
 		fflush(pidfile);
+		return FALSE;
 	}
-	return FALSE;
+	else
+	{
+		DBG1(DBG_DMN, "unable to create pidfile '%s'", pidfile_name);
+		return TRUE;
+	}
 }
 
 /**
@@ -221,15 +249,15 @@ static void unlink_pidfile()
 	{
 		ignore_result(ftruncate(fileno(pidfile), 0));
 		fclose(pidfile);
+		unlink(pidfile_name);
 	}
-	unlink(pidfile_name);
 }
+
 /**
  * Main function, starts TKM backend.
  */
 int main(int argc, char *argv[])
 {
-	char *dmn_name;
 	if (argc > 0 && strlen(argv[0]) > 0)
 	{
 		dmn_name = basename(argv[0]);
@@ -275,7 +303,7 @@ int main(int argc, char *argv[])
 	lib->settings->set_int(lib->settings, "%s.syslog.daemon.default",
 			lib->settings->get_int(lib->settings, "%s.syslog.daemon.default", 1,
 								   dmn_name), dmn_name);
-	charon->load_loggers(charon, NULL, FALSE);
+	charon->load_loggers(charon);
 
 	DBG1(DBG_DMN, "Starting charon with TKM backend (strongSwan "VERSION")");
 
@@ -286,12 +314,9 @@ int main(int argc, char *argv[])
 		PLUGIN_REGISTER(PUBKEY, tkm_public_key_load, TRUE),
 			PLUGIN_PROVIDE(PUBKEY, KEY_RSA),
 			PLUGIN_PROVIDE(PUBKEY_VERIFY, SIGN_RSA_EMSA_PKCS1_SHA1),
-			PLUGIN_PROVIDE(PUBKEY_VERIFY, SIGN_RSA_EMSA_PKCS1_SHA256),
+			PLUGIN_PROVIDE(PUBKEY_VERIFY, SIGN_RSA_EMSA_PKCS1_SHA2_256),
 		PLUGIN_CALLBACK(kernel_ipsec_register, tkm_kernel_ipsec_create),
 			PLUGIN_PROVIDE(CUSTOM, "kernel-ipsec"),
-		PLUGIN_CALLBACK(tkm_spi_generator_register, NULL),
-			PLUGIN_PROVIDE(CUSTOM, "tkm-spi-generator"),
-				PLUGIN_DEPENDS(CUSTOM, "libcharon-sa-managers"),
 	};
 	lib->plugins->add_static_features(lib->plugins, "tkm-backend", features,
 			countof(features), TRUE, NULL, NULL);
@@ -322,8 +347,6 @@ int main(int argc, char *argv[])
 
 	if (check_pidfile())
 	{
-		DBG1(DBG_DMN, "%s already running (\"%s\" exists)", dmn_name,
-			 pidfile_name);
 		goto deinit;
 	}
 
@@ -351,16 +374,21 @@ int main(int argc, char *argv[])
 	/* register TKM credential encoder */
 	lib->encoding->add_encoder(lib->encoding, tkm_encoder_encode);
 
-	/* add handler for SEGV and ILL,
+	/* add handler for fatal signals,
 	 * INT and TERM are handled by sigwaitinfo() in run() */
-	action.sa_handler = segv_handler;
 	action.sa_flags = 0;
 	sigemptyset(&action.sa_mask);
 	sigaddset(&action.sa_mask, SIGINT);
 	sigaddset(&action.sa_mask, SIGTERM);
+
+	/* optionally let the external system handle fatal signals */
+#ifndef DISABLE_SIGNAL_HANDLER
+	action.sa_handler = segv_handler;
 	sigaction(SIGSEGV, &action, NULL);
 	sigaction(SIGILL, &action, NULL);
 	sigaction(SIGBUS, &action, NULL);
+#endif /* DISABLE_SIGNAL_HANDLER */
+
 	action.sa_handler = SIG_IGN;
 	sigaction(SIGPIPE, &action, NULL);
 
@@ -372,7 +400,6 @@ int main(int argc, char *argv[])
 	/* main thread goes to run loop */
 	run();
 
-	unlink_pidfile();
 	status = 0;
 	charon->bus->remove_listener(charon->bus, &listener->listener);
 	listener->destroy(listener);
@@ -382,7 +409,9 @@ int main(int argc, char *argv[])
 deinit:
 	destroy_dh_mapping();
 	libcharon_deinit();
-	library_deinit();
 	tkm_deinit();
+	unlink_pidfile();
+	free(pidfile_name);
+	library_deinit();
 	return status;
 }

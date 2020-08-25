@@ -1,7 +1,7 @@
 /*
- * Copyright (C) 2010 Tobias Brunner
+ * Copyright (C) 2010-2018 Tobias Brunner
  * Copyright (C) 2008 Martin Willi
- * Hochschule fuer Technik Rapperswil
+ * HSR Hochschule fuer Technik Rapperswil
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -51,13 +51,13 @@ bool settings_value_as_bool(char *value, bool def);
 int settings_value_as_int(char *value, int def);
 
 /**
- * Convert a string value returned by a key/value enumerator to an u_int64_t.
+ * Convert a string value returned by a key/value enumerator to an uint64_t.
  *
  * @see settings_t.create_key_value_enumerator()
  * @param value			the string value
  * @param def			the default value, if value is NULL or invalid
  */
-u_int64_t settings_value_as_uint64(char *value, u_int64_t def);
+uint64_t settings_value_as_uint64(char *value, uint64_t def);
 
 /**
  * Convert a string value returned by a key/value enumerator to a double.
@@ -77,7 +77,7 @@ double settings_value_as_double(char *value, double def);
  * @param value			the string value
  * @param def			the default value, if value is NULL or invalid
  */
-u_int32_t settings_value_as_time(char *value, u_int32_t def);
+uint32_t settings_value_as_time(char *value, uint32_t def);
 
 /**
  * Generic configuration options read from a config file.
@@ -173,7 +173,7 @@ struct settings_t {
 	 * @param ...		argument list for key
 	 * @return			value of the key
 	 */
-	bool (*get_bool)(settings_t *this, char *key, bool def, ...);
+	bool (*get_bool)(settings_t *this, char *key, int def, ...);
 
 	/**
 	 * Get an integer value.
@@ -203,7 +203,7 @@ struct settings_t {
 	 * @param ...		argument list for key
 	 * @return			value of the key (in seconds)
 	 */
-	u_int32_t (*get_time)(settings_t *this, char *key, u_int32_t def, ...);
+	uint32_t (*get_time)(settings_t *this, char *key, uint32_t def, ...);
 
 	/**
 	 * Set a string value.
@@ -221,7 +221,7 @@ struct settings_t {
 	 * @param value		value to set
 	 * @param ...		argument list for key
 	 */
-	void (*set_bool)(settings_t *this, char *key, bool value, ...);
+	void (*set_bool)(settings_t *this, char *key, int value, ...);
 
 	/**
 	 * Set an integer value.
@@ -248,7 +248,7 @@ struct settings_t {
 	 * @param def		value to set
 	 * @param ...		argument list for key
 	 */
-	void (*set_time)(settings_t *this, char *key, u_int32_t value, ...);
+	void (*set_time)(settings_t *this, char *key, uint32_t value, ...);
 
 	/**
 	 * Set a default for string value.
@@ -288,15 +288,9 @@ struct settings_t {
 	 * 'section-one.two' will result in a lookup for the same section/key
 	 * in 'section-two'.
 	 *
-	 * @note Lookups are depth-first and currently strictly top-down.
-	 * For instance, if app.sec had lib1.sec as fallback and lib1 had lib2 as
-	 * fallback the keys/sections in lib2.sec would not be considered.  But if
-	 * app had lib3 as fallback the contents of lib3.sec would (as app is passed
-	 * during the initial lookup).  In the last example the order during
-	 * enumerations would be app.sec, lib1.sec, lib3.sec.
-	 *
 	 * @note Additional arguments will be applied to both section format
-	 * strings so they must be compatible.
+	 * strings so they must be compatible. And they are evaluated immediately,
+	 * so arguments can't contain dots.
 	 *
 	 * @param section	section for which a fallback is configured, printf style
 	 * @param fallback	fallback section, printf style
@@ -412,5 +406,19 @@ settings_t *settings_create(char *file);
  * @return				settings object, or NULL
  */
 settings_t *settings_create_string(char *settings);
+
+/**
+ * Remove the given key/value.
+ *
+ * Compared to setting a key to NULL, which makes it appear to be unset (i.e.
+ * default values will apply) this removes the given key (if found) and
+ * references/fallbacks will apply when looking for that key.  This is mainly
+ * usefuls for the unit tests.
+ *
+ * @param settings		settings to remove key/value from
+ * @param key			key including sections, printf style format
+ * @param ...			argument list for key
+ */
+void settings_remove_value(settings_t *settings, char *key, ...);
 
 #endif /** SETTINGS_H_ @}*/

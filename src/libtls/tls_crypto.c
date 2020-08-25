@@ -376,7 +376,7 @@ struct private_tls_crypto_t {
 	tls_cache_t *cache;
 
 	/**
-	 * All handshake data concatentated
+	 * All handshake data concatenated
 	 */
 	chunk_t handshake;
 
@@ -1215,16 +1215,16 @@ static struct {
 	tls_hash_algorithm_t hash;
 	signature_scheme_t scheme;
 } schemes[] = {
-	{ TLS_SIG_ECDSA,	TLS_HASH_SHA256,	SIGN_ECDSA_WITH_SHA256_DER	},
-	{ TLS_SIG_ECDSA,	TLS_HASH_SHA384,	SIGN_ECDSA_WITH_SHA384_DER	},
-	{ TLS_SIG_ECDSA,	TLS_HASH_SHA512,	SIGN_ECDSA_WITH_SHA512_DER	},
-	{ TLS_SIG_ECDSA,	TLS_HASH_SHA1,		SIGN_ECDSA_WITH_SHA1_DER	},
-	{ TLS_SIG_RSA,		TLS_HASH_SHA256,	SIGN_RSA_EMSA_PKCS1_SHA256	},
-	{ TLS_SIG_RSA,		TLS_HASH_SHA384,	SIGN_RSA_EMSA_PKCS1_SHA384	},
-	{ TLS_SIG_RSA,		TLS_HASH_SHA512,	SIGN_RSA_EMSA_PKCS1_SHA512	},
-	{ TLS_SIG_RSA,		TLS_HASH_SHA224,	SIGN_RSA_EMSA_PKCS1_SHA224	},
-	{ TLS_SIG_RSA,		TLS_HASH_SHA1,		SIGN_RSA_EMSA_PKCS1_SHA1	},
-	{ TLS_SIG_RSA,		TLS_HASH_MD5,		SIGN_RSA_EMSA_PKCS1_MD5		},
+	{ TLS_SIG_ECDSA,	TLS_HASH_SHA256,	SIGN_ECDSA_WITH_SHA256_DER   },
+	{ TLS_SIG_ECDSA,	TLS_HASH_SHA384,	SIGN_ECDSA_WITH_SHA384_DER   },
+	{ TLS_SIG_ECDSA,	TLS_HASH_SHA512,	SIGN_ECDSA_WITH_SHA512_DER   },
+	{ TLS_SIG_ECDSA,	TLS_HASH_SHA1,		SIGN_ECDSA_WITH_SHA1_DER     },
+	{ TLS_SIG_RSA,		TLS_HASH_SHA256,	SIGN_RSA_EMSA_PKCS1_SHA2_256 },
+	{ TLS_SIG_RSA,		TLS_HASH_SHA384,	SIGN_RSA_EMSA_PKCS1_SHA2_384 },
+	{ TLS_SIG_RSA,		TLS_HASH_SHA512,	SIGN_RSA_EMSA_PKCS1_SHA2_512 },
+	{ TLS_SIG_RSA,		TLS_HASH_SHA224,	SIGN_RSA_EMSA_PKCS1_SHA2_224 },
+	{ TLS_SIG_RSA,		TLS_HASH_SHA1,		SIGN_RSA_EMSA_PKCS1_SHA1     },
+	{ TLS_SIG_RSA,		TLS_HASH_MD5,		SIGN_RSA_EMSA_PKCS1_MD5      },
 };
 
 METHOD(tls_crypto_t, get_signature_algorithms, void,
@@ -1296,28 +1296,32 @@ static struct {
 	{ ECP_192_BIT, TLS_SECP192R1},
 };
 
-/**
- * Filter EC groups, add TLS curve
- */
-static bool group_filter(void *null,
-						diffie_hellman_group_t *in, diffie_hellman_group_t *out,
-						void* dummy1, tls_named_curve_t *curve)
+CALLBACK(group_filter, bool,
+	void *null, enumerator_t *orig, va_list args)
 {
+	diffie_hellman_group_t group, *out;
+	tls_named_curve_t *curve;
+	char *plugin;
 	int i;
 
-	for (i = 0; i < countof(curves); i++)
+	VA_ARGS_VGET(args, out, curve);
+
+	while (orig->enumerate(orig, &group, &plugin))
 	{
-		if (curves[i].group == *in)
+		for (i = 0; i < countof(curves); i++)
 		{
-			if (out)
+			if (curves[i].group == group)
 			{
-				*out = curves[i].group;
+				if (out)
+				{
+					*out = curves[i].group;
+				}
+				if (curve)
+				{
+					*curve = curves[i].curve;
+				}
+				return TRUE;
 			}
-			if (curve)
-			{
-				*curve = curves[i].curve;
-			}
-			return TRUE;
 		}
 	}
 	return FALSE;
@@ -1327,8 +1331,8 @@ METHOD(tls_crypto_t, create_ec_enumerator, enumerator_t*,
 	private_tls_crypto_t *this)
 {
 	return enumerator_create_filter(
-					lib->crypto->create_dh_enumerator(lib->crypto),
-					(void*)group_filter, NULL, NULL);
+							lib->crypto->create_dh_enumerator(lib->crypto),
+							group_filter, NULL, NULL);
 }
 
 METHOD(tls_crypto_t, set_protection, void,
@@ -1340,7 +1344,7 @@ METHOD(tls_crypto_t, set_protection, void,
 METHOD(tls_crypto_t, append_handshake, void,
 	private_tls_crypto_t *this, tls_handshake_type_t type, chunk_t data)
 {
-	u_int32_t header;
+	uint32_t header;
 
 	/* reconstruct handshake header */
 	header = htonl(data.len | (type << 24));
@@ -1407,7 +1411,7 @@ METHOD(tls_crypto_t, sign, bool,
 	{
 		signature_scheme_t scheme;
 		bio_reader_t *reader;
-		u_int8_t hash, alg;
+		uint8_t hash, alg;
 		chunk_t sig;
 		bool done = FALSE;
 
@@ -1424,7 +1428,7 @@ METHOD(tls_crypto_t, sign, bool,
 			{
 				scheme = hashsig_to_scheme(key->get_type(key), hash, alg);
 				if (scheme != SIGN_UNKNOWN &&
-					key->sign(key, scheme, data, &sig))
+					key->sign(key, scheme, NULL, data, &sig))
 				{
 					done = TRUE;
 					break;
@@ -1456,7 +1460,8 @@ METHOD(tls_crypto_t, sign, bool,
 				{
 					return FALSE;
 				}
-				done = key->sign(key, SIGN_RSA_EMSA_PKCS1_NULL, hash, &sig);
+				done = key->sign(key, SIGN_RSA_EMSA_PKCS1_NULL, NULL, hash,
+								 &sig);
 				free(hash.ptr);
 				if (!done)
 				{
@@ -1465,7 +1470,7 @@ METHOD(tls_crypto_t, sign, bool,
 				DBG2(DBG_TLS, "created signature with MD5+SHA1/RSA");
 				break;
 			case KEY_ECDSA:
-				if (!key->sign(key, SIGN_ECDSA_WITH_SHA1_DER, data, &sig))
+				if (!key->sign(key, SIGN_ECDSA_WITH_SHA1_DER, NULL, data, &sig))
 				{
 					return FALSE;
 				}
@@ -1487,7 +1492,7 @@ METHOD(tls_crypto_t, verify, bool,
 	if (this->tls->get_version(this->tls) >= TLS_1_2)
 	{
 		signature_scheme_t scheme = SIGN_UNKNOWN;
-		u_int8_t hash, alg;
+		uint8_t hash, alg;
 		chunk_t sig;
 
 		if (!reader->read_uint8(reader, &hash) ||
@@ -1505,7 +1510,7 @@ METHOD(tls_crypto_t, verify, bool,
 				 tls_signature_algorithm_names, alg);
 			return FALSE;
 		}
-		if (!key->verify(key, scheme, data, sig))
+		if (!key->verify(key, scheme, NULL, data, sig))
 		{
 			return FALSE;
 		}
@@ -1529,7 +1534,8 @@ METHOD(tls_crypto_t, verify, bool,
 				{
 					return FALSE;
 				}
-				done = key->verify(key, SIGN_RSA_EMSA_PKCS1_NULL, hash, sig);
+				done = key->verify(key, SIGN_RSA_EMSA_PKCS1_NULL, NULL, hash,
+								   sig);
 				free(hash.ptr);
 				if (!done)
 				{
@@ -1538,7 +1544,8 @@ METHOD(tls_crypto_t, verify, bool,
 				DBG2(DBG_TLS, "verified signature data with MD5+SHA1/RSA");
 				break;
 			case KEY_ECDSA:
-				if (!key->verify(key, SIGN_ECDSA_WITH_SHA1_DER, data, sig))
+				if (!key->verify(key, SIGN_ECDSA_WITH_SHA1_DER, NULL, data,
+								 sig))
 				{
 					return FALSE;
 				}

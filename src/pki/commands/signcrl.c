@@ -2,6 +2,9 @@
  * Copyright (C) 2010 Martin Willi
  * Copyright (C) 2010 revosec AG
  *
+ * Copyright (C) 2017-2019 Andreas Steffen
+ * HSR Hochschule fuer Technik Rapperswil
+ *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
  * Free Software Foundation; either version 2 of the License, or (at your
@@ -22,6 +25,7 @@
 #include <credentials/certificates/certificate.h>
 #include <credentials/certificates/x509.h>
 #include <credentials/certificates/crl.h>
+#include <asn1/asn1.h>
 
 
 /**
@@ -58,16 +62,24 @@ static void revoked_destroy(revoked_t *revoked)
 	free(revoked);
 }
 
-/**
- * Filter for revoked enumerator
- */
-static bool filter(void *data, revoked_t **revoked, chunk_t *serial, void *p2,
-				   time_t *date, void *p3, crl_reason_t *reason)
+CALLBACK(filter, bool,
+	void *data, enumerator_t *orig, va_list args)
 {
-	*serial = (*revoked)->serial;
-	*date = (*revoked)->date;
-	*reason = (*revoked)->reason;
-	return TRUE;
+	revoked_t *revoked;
+	crl_reason_t *reason;
+	chunk_t *serial;
+	time_t *date;
+
+	VA_ARGS_VGET(args, serial, date, reason);
+
+	if (orig->enumerate(orig, &revoked))
+	{
+		*serial = revoked->serial;
+		*date = revoked->date;
+		*reason = revoked->reason;
+		return TRUE;
+	}
+	return FALSE;
 }
 
 /**
@@ -98,15 +110,6 @@ static int read_serial(char *file, char *buf, int buflen)
 }
 
 /**
- * Destroy a CDP
- */
-static void cdp_destroy(x509_cdp_t *this)
-{
-	free(this->uri);
-	free(this);
-}
-
-/**
  * Sign a CRL
  */
 static int sign_crl()
@@ -118,10 +121,11 @@ static int sign_crl()
 	crl_t *lastcrl = NULL;
 	x509_t *x509;
 	hash_algorithm_t digest = HASH_UNKNOWN;
+	signature_params_t *scheme = NULL;
 	char *arg, *cacert = NULL, *cakey = NULL, *lastupdate = NULL, *error = NULL;
 	char *basecrl = NULL;
 	char serial[512], *keyid = NULL;
-	int serial_len = 0;
+	int serial_len;
 	crl_reason_t reason = CRL_REASON_UNSPECIFIED;
 	time_t thisUpdate, nextUpdate, date = time(NULL);
 	time_t lifetime = 15 * 24 * 60 * 60;
@@ -130,7 +134,10 @@ static int sign_crl()
 	enumerator_t *enumerator, *lastenum = NULL;
 	x509_cdp_t *cdp;
 	chunk_t crl_serial = chunk_empty, baseCrlNumber = chunk_empty;
+	chunk_t critical_extension_oid = chunk_empty;
 	chunk_t encoding = chunk_empty;
+	bool pss = lib->settings->get_bool(lib->settings, "%s.rsa_pss", FALSE,
+									   lib->ns);
 
 	list = linked_list_create();
 	cdps = linked_list_create();
@@ -145,6 +152,17 @@ static int sign_crl()
 				if (!enum_from_name(hash_algorithm_short_names, arg, &digest))
 				{
 					error = "invalid --digest type";
+					goto usage;
+				}
+				continue;
+			case 'R':
+				if (streq(arg, "pss"))
+				{
+					pss = TRUE;
+				}
+				else if (!streq(arg, "pkcs1"))
+				{
+					error = "invalid RSA padding";
 					goto usage;
 				}
 				continue;
@@ -188,7 +206,6 @@ static int sign_crl()
 				}
 				add_revoked(list, chunk_create(serial, serial_len), reason, date);
 				date = time(NULL);
-				serial_len = 0;
 				reason = CRL_REASON_UNSPECIFIED;
 				continue;
 			case 's':
@@ -206,7 +223,6 @@ static int sign_crl()
 				serial_len = chunk.len;
 				add_revoked(list, chunk_create(serial, serial_len), reason, date);
 				date = time(NULL);
-				serial_len = 0;
 				reason = CRL_REASON_UNSPECIFIED;
 				continue;
 			}
@@ -264,6 +280,10 @@ static int sign_crl()
 					error = "invalid output format";
 					goto usage;
 				}
+				continue;
+			case 'X':
+				chunk_free(&critical_extension_oid);
+				critical_extension_oid = asn1_oid_from_string(arg);
 				continue;
 			case EOF:
 				break;
@@ -330,10 +350,6 @@ static int sign_crl()
 		error = "loading CA private key failed";
 		goto error;
 	}
-	if (digest == HASH_UNKNOWN)
-	{
-		digest = get_default_digest(private);
-	}
 	if (!private->belongs_to(private, public))
 	{
 		error = "CA private key does not match CA certificate";
@@ -369,35 +385,44 @@ static int sign_crl()
 	}
 	else
 	{
-		crl_serial = chunk_from_chars(0x00);
+		if (!crl_serial.ptr)
+		{
+			crl_serial = chunk_from_chars(0x00);
+		}
 		lastenum = enumerator_create_empty();
 	}
 
-	/* remove superfluous leading zeros */
-	while (crl_serial.len > 1 && crl_serial.ptr[0] == 0x00 &&
-		  (crl_serial.ptr[1] & 0x80) == 0x00)
-	{
-		crl_serial = chunk_skip_zero(crl_serial);
+	if (!crl_serial.len || crl_serial.ptr[0] & 0x80)
+	{	/* add leading 0x00 to handle potential overflow if serial is encoded
+		 * incorrectly */
+		crl_serial = chunk_cat("cc", chunk_from_chars(0x00), crl_serial);
 	}
-	crl_serial = chunk_clone(crl_serial);
-
+	else
+	{
+		crl_serial = chunk_clone(crl_serial);
+	}
 	/* increment the serial number by one */
 	chunk_increment(crl_serial);
 
+	scheme = get_signature_scheme(private, digest, pss);
+	if (!scheme)
+	{
+		error = "no signature scheme found";
+		goto error;
+	}
+
 	enumerator = enumerator_create_filter(list->create_enumerator(list),
-										  (void*)filter, NULL, NULL);
+										  filter, NULL, NULL);
 	crl = lib->creds->create(lib->creds, CRED_CERTIFICATE, CERT_X509_CRL,
 			BUILD_SIGNING_KEY, private, BUILD_SIGNING_CERT, ca,
 			BUILD_SERIAL, crl_serial,
 			BUILD_NOT_BEFORE_TIME, thisUpdate, BUILD_NOT_AFTER_TIME, nextUpdate,
 			BUILD_REVOKED_ENUMERATOR, enumerator,
-			BUILD_REVOKED_ENUMERATOR, lastenum, BUILD_DIGEST_ALG, digest,
+			BUILD_REVOKED_ENUMERATOR, lastenum, BUILD_SIGNATURE_SCHEME, scheme,
 			BUILD_CRL_DISTRIBUTION_POINTS, cdps, BUILD_BASE_CRL, baseCrlNumber,
+			BUILD_CRITICAL_EXTENSION, critical_extension_oid,
 			BUILD_END);
 	enumerator->destroy(enumerator);
-	lastenum->destroy(lastenum);
-	DESTROY_IF((certificate_t*)lastcrl);
-	free(crl_serial.ptr);
 
 	if (!crl)
 	{
@@ -421,10 +446,15 @@ error:
 	DESTROY_IF(private);
 	DESTROY_IF(ca);
 	DESTROY_IF(crl);
+	DESTROY_IF(lastenum);
+	DESTROY_IF((certificate_t*)lastcrl);
+	signature_params_destroy(scheme);
+	free(critical_extension_oid.ptr);
 	free(encoding.ptr);
 	free(baseCrlNumber.ptr);
+	free(crl_serial.ptr);
 	list->destroy_function(list, (void*)revoked_destroy);
-	cdps->destroy_function(cdps, (void*)cdp_destroy);
+	cdps->destroy_function(cdps, (void*)x509_cdp_destroy);
 	if (error)
 	{
 		fprintf(stderr, "%s\n", error);
@@ -434,7 +464,8 @@ error:
 
 usage:
 	list->destroy_function(list, (void*)revoked_destroy);
-	cdps->destroy_function(cdps, (void*)cdp_destroy);
+	cdps->destroy_function(cdps, (void*)x509_cdp_destroy);
+	free(critical_extension_oid.ptr);
 	return command_usage(error);
 }
 
@@ -447,17 +478,18 @@ static void __attribute__ ((constructor))reg()
 		sign_crl, 'c', "signcrl",
 		"issue a CRL using a CA certificate and key",
 		{"--cacert file --cakey file|--cakeyid hex [--lifetime days]",
-		 "  [--lastcrl crl] [--basecrl crl] [--crluri uri]+",
-		 "  [[--reason key-compromise|ca-compromise|affiliation-changed|",
-		 "             superseded|cessation-of-operation|certificate-hold]",
-		 "   [--date timestamp] --cert file|--serial hex]*",
-		 "  [--digest md5|sha1|sha224|sha256|sha384|sha512|sha3_224|sha3_256|sha3_384|sha3_512]",
-		 "  [--outform der|pem]"},
+		 "[--lastcrl crl] [--basecrl crl] [--crluri uri]+",
+		 "[[--reason key-compromise|ca-compromise|affiliation-changed|",
+		 "           superseded|cessation-of-operation|certificate-hold]",
+		 " [--date timestamp] --cert file|--serial hex]*",
+		 "[--digest md5|sha1|sha224|sha256|sha384|sha512|sha3_224|sha3_256|sha3_384|sha3_512]",
+		 "[--rsa-padding pkcs1|pss] [--critical oid]",
+		 "[--outform der|pem]"},
 		{
 			{"help",		'h', 0, "show usage information"},
 			{"cacert",		'c', 1, "CA certificate file"},
 			{"cakey",		'k', 1, "CA private key file"},
-			{"cakeyid",		'x', 1, "keyid on smartcard of CA private key"},
+			{"cakeyid",		'x', 1, "smartcard or TPM CA private key object handle"},
 			{"lifetime",	'l', 1, "days the CRL gets a nextUpdate, default: 15"},
 			{"this-update",	'F', 1, "date/time the validity of the CRL starts"},
 			{"next-update",	'T', 1, "date/time the validity of the CRL ends"},
@@ -470,6 +502,8 @@ static void __attribute__ ((constructor))reg()
 			{"reason",		'r', 1, "reason for certificate revocation"},
 			{"date",		'd', 1, "revocation date as unix timestamp, default: now"},
 			{"digest",		'g', 1, "digest for signature creation, default: key-specific"},
+			{"rsa-padding",	'R', 1, "padding for RSA signatures, default: pkcs1"},
+			{"critical",	'X', 1, "critical extension OID to include for test purposes"},
 			{"outform",		'f', 1, "encoding of generated crl, default: der"},
 		}
 	});

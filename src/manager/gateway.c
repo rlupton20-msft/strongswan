@@ -1,6 +1,6 @@
 /*
  * Copyright (C) 2007 Martin Willi
- * Hochschule fuer Technik Rapperswil
+ * HSR Hochschule fuer Technik Rapperswil
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -317,7 +317,7 @@ METHOD(gateway_t, initiate, enumerator_t*,
 }
 
 METHOD(gateway_t, terminate, enumerator_t*,
-	private_gateway_t *this, bool ike, u_int32_t id)
+	private_gateway_t *this, bool ike, uint32_t id)
 {
 	char *str, *kind;
 

@@ -2,7 +2,7 @@
  * Copyright (C) 2012 Tobias Brunner
  * Copyright (C) 2012 Giuliano Grassi
  * Copyright (C) 2012 Ralf Sager
- * Hochschule fuer Technik Rapperswil
+ * HSR Hochschule fuer Technik Rapperswil
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -105,7 +105,7 @@ struct ipsec_policy_mgr_t {
 	 */
 	ipsec_policy_t *(*find_by_packet)(ipsec_policy_mgr_t *this,
 									  ip_packet_t *packet, bool inbound,
-									  u_int32_t reqid);
+									  uint32_t reqid);
 
 	/**
 	 * Destroy an ipsec_policy_mgr_t

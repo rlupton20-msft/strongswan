@@ -1,6 +1,6 @@
 /*
  * Copyright (C) 2008 Martin Willi
- * Hochschule fuer Technik Rapperswil
+ * HSR Hochschule fuer Technik Rapperswil
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -81,7 +81,7 @@ METHOD(rng_t, allocate_bytes, bool,
 }
 
 METHOD(rng_t, get_bytes, bool,
-	private_padlock_rng_t *this, size_t bytes, u_int8_t *buffer)
+	private_padlock_rng_t *this, size_t bytes, uint8_t *buffer)
 {
 	chunk_t chunk;
 

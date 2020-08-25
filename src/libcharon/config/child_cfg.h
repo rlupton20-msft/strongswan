@@ -1,8 +1,9 @@
 /*
- * Copyright (C) 2008-2015 Tobias Brunner
+ * Copyright (C) 2008-2019 Tobias Brunner
+ * Copyright (C) 2016 Andreas Steffen
  * Copyright (C) 2005-2007 Martin Willi
  * Copyright (C) 2005 Jan Hutter
- * Hochschule fuer Technik Rapperswil
+ * HSR Hochschule fuer Technik Rapperswil
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -24,11 +25,13 @@
 #define CHILD_CFG_H_
 
 typedef enum action_t action_t;
+typedef enum child_cfg_option_t child_cfg_option_t;
 typedef struct child_cfg_t child_cfg_t;
+typedef struct child_cfg_create_t child_cfg_create_t;
 
 #include <library.h>
 #include <selectors/traffic_selector.h>
-#include <config/proposal.h>
+#include <crypto/proposal/proposal.h>
 #include <kernel/kernel_ipsec.h>
 
 /**
@@ -96,12 +99,11 @@ struct child_cfg_t {
 	 * Returned propsal is newly created and must be destroyed after usage.
 	 *
 	 * @param proposals		list from which proposals are selected
-	 * @param strip_dh		TRUE strip out diffie hellman groups
-	 * @param private		accept algorithms from a private range
+	 * @param flags			flags to consider during proposal selection
 	 * @return				selected proposal, or NULL if nothing matches
 	 */
 	proposal_t* (*select_proposal)(child_cfg_t*this, linked_list_t *proposals,
-								   bool strip_dh, bool private);
+								   proposal_selection_flag_t flags);
 
 	/**
 	 * Add a traffic selector to the config.
@@ -130,11 +132,13 @@ struct child_cfg_t {
 	 * @param local			TRUE for TS on local side, FALSE for remote
 	 * @param supplied		list with TS to select from, or NULL
 	 * @param hosts			addresses to use for narrowing "dynamic" TS', host_t
+	 * @param log			FALSE to avoid logging details about the selection
 	 * @return				list containing the traffic selectors
 	 */
 	linked_list_t *(*get_traffic_selectors)(child_cfg_t *this, bool local,
 											linked_list_t *supplied,
-											linked_list_t *hosts);
+											linked_list_t *hosts, bool log);
+
 	/**
 	 * Get the updown script to run for the CHILD_SA.
 	 *
@@ -143,21 +147,15 @@ struct child_cfg_t {
 	char* (*get_updown)(child_cfg_t *this);
 
 	/**
-	 * Should we allow access to the local host (gateway)?
-	 *
-	 * @return				value of hostaccess flag
-	 */
-	bool (*get_hostaccess) (child_cfg_t *this);
-
-	/**
 	 * Get the lifetime configuration of a CHILD_SA.
 	 *
 	 * The rekey limits automatically contain a jitter to avoid simultaneous
 	 * rekeying. These values will change with each call to this function.
 	 *
+	 * @param jitter		subtract jitter value to randomize lifetimes
 	 * @return				lifetime_cfg_t (has to be freed)
 	 */
-	lifetime_cfg_t* (*get_lifetime) (child_cfg_t *this);
+	lifetime_cfg_t* (*get_lifetime) (child_cfg_t *this, bool jitter);
 
 	/**
 	 * Get the mode to use for the CHILD_SA.
@@ -184,6 +182,20 @@ struct child_cfg_t {
 	action_t (*get_dpd_action) (child_cfg_t *this);
 
 	/**
+	 * Get the HW offload mode to use for the CHILD_SA.
+	 *
+	 * @return				hw offload mode
+	 */
+	hw_offload_t (*get_hw_offload) (child_cfg_t *this);
+
+	/**
+	 * Get the copy mode for the DS header field to use for the CHILD_SA.
+	 *
+	 * @return				IP header copy mode
+	 */
+	dscp_copy_t (*get_copy_dscp) (child_cfg_t *this);
+
+	/**
 	 * Action to take if CHILD_SA gets closed.
 	 *
 	 * @return				close action
@@ -198,29 +210,29 @@ struct child_cfg_t {
 	diffie_hellman_group_t (*get_dh_group)(child_cfg_t *this);
 
 	/**
-	 * Check whether IPComp should be used, if the other peer supports it.
-	 *
-	 * @return				TRUE, if IPComp should be used
-	 *						FALSE, otherwise
-	 */
-	bool (*use_ipcomp)(child_cfg_t *this);
-
-	/**
 	 * Get the inactivity timeout value.
 	 *
 	 * @return				inactivity timeout in s
 	 */
-	u_int32_t (*get_inactivity)(child_cfg_t *this);
+	uint32_t (*get_inactivity)(child_cfg_t *this);
 
 	/**
 	 * Specific reqid to use for CHILD_SA.
 	 *
 	 * @return				reqid
 	 */
-	u_int32_t (*get_reqid)(child_cfg_t *this);
+	uint32_t (*get_reqid)(child_cfg_t *this);
 
 	/**
-	 * Optional mark for CHILD_SA.
+	 * Optional interface ID to set on policies/SAs.
+	 *
+	 * @param inbound		TRUE for inbound, FALSE for outbound
+	 * @return				interface ID
+	 */
+	uint32_t (*get_if_id)(child_cfg_t *this, bool inbound);
+
+	/**
+	 * Optional mark to set on policies/SAs.
 	 *
 	 * @param inbound		TRUE for inbound, FALSE for outbound
 	 * @return				mark
@@ -228,50 +240,55 @@ struct child_cfg_t {
 	mark_t (*get_mark)(child_cfg_t *this, bool inbound);
 
 	/**
+	 * Optional mark the SAs should apply after processing packets.
+	 *
+	 * @param inbound		TRUE for inbound, FALSE for outbound
+	 * @return				mark
+	 */
+	mark_t (*get_set_mark)(child_cfg_t *this, bool inbound);
+
+	/**
 	 * Get the TFC padding value to use for CHILD_SA.
 	 *
 	 * @return				TFC padding, 0 to disable, -1 for MTU
 	 */
-	u_int32_t (*get_tfc)(child_cfg_t *this);
+	uint32_t (*get_tfc)(child_cfg_t *this);
+
+	/**
+	 * Get optional manually-set IPsec policy priority
+	 *
+	 * @return				manually-set IPsec policy priority (automatic if 0)
+	 */
+	uint32_t (*get_manual_prio)(child_cfg_t *this);
+
+	/**
+	 * Get optional network interface restricting IPsec policy
+	 *
+	 * @return				network interface)
+	 */
+	char* (*get_interface)(child_cfg_t *this);
 
 	/**
 	 * Get anti-replay window size
 	 *
 	 * @return				anti-replay window size
 	 */
-	u_int32_t (*get_replay_window)(child_cfg_t *this);
+	uint32_t (*get_replay_window)(child_cfg_t *this);
 
 	/**
 	 * Set anti-replay window size
 	 *
-	 * @param window		anti-replay window size
+	 * @param window        anti-replay window size
 	 */
-	void (*set_replay_window)(child_cfg_t *this, u_int32_t window);
+	void (*set_replay_window)(child_cfg_t *this, uint32_t window);
 
 	/**
-	 * Sets two options needed for Mobile IPv6 interoperability.
+	 * Check if an option flag is set.
 	 *
-	 * @param proxy_mode	use IPsec transport proxy mode (default FALSE)
-	 * @param install_policy install IPsec kernel policies (default TRUE)
+	 * @param option		option flag to check
+	 * @return				TRUE if option flag set, FALSE otherwise
 	 */
-	void (*set_mipv6_options)(child_cfg_t *this, bool proxy_mode,
-												 bool install_policy);
-
-	/**
-	 * Check whether IPsec transport SA should be set up in proxy mode.
-	 *
-	 * @return				TRUE, if proxy mode should be used
-	 *						FALSE, otherwise
-	 */
-	bool (*use_proxy_mode)(child_cfg_t *this);
-
-	/**
-	 * Check whether IPsec policies should be installed in the kernel.
-	 *
-	 * @return				TRUE, if IPsec kernel policies should be installed
-	 *						FALSE, otherwise
-	 */
-	bool (*install_policy)(child_cfg_t *this);
+	bool (*has_option)(child_cfg_t *this, child_cfg_option_t option);
 
 	/**
 	 * Check if two child_cfg objects are equal.
@@ -298,37 +315,93 @@ struct child_cfg_t {
 };
 
 /**
+ * Option flags that may be set on a child_cfg_t object
+ */
+enum child_cfg_option_t {
+
+	/** Use IPsec transport proxy mode */
+	OPT_PROXY_MODE = (1<<0),
+
+	/** Use IPComp, if peer supports it */
+	OPT_IPCOMP = (1<<1),
+
+	/** Allow access to the local host */
+	OPT_HOSTACCESS = (1<<2),
+
+	/** Don't install any IPsec policies */
+	OPT_NO_POLICIES = (1<<3),
+
+	/** Install outbound FWD IPsec policies to bypass drop policies */
+	OPT_FWD_OUT_POLICIES = (1<<4),
+
+	/** Force 96-bit truncation for SHA-256 */
+	OPT_SHA256_96 = (1<<5),
+
+	/** Set mark on inbound SAs */
+	OPT_MARK_IN_SA = (1<<6),
+
+	/** Disable copying the DF bit to the outer IPv4 header in tunnel mode */
+	OPT_NO_COPY_DF = (1<<7),
+
+	/** Disable copying the ECN header field in tunnel mode */
+	OPT_NO_COPY_ECN = (1<<8),
+};
+
+/**
+ * Data passed to the constructor of a child_cfg_t object.
+ */
+struct child_cfg_create_t {
+	/** Options set for CHILD_SA */
+	child_cfg_option_t options;
+	/** Specific reqid to use for CHILD_SA, 0 for auto assignment */
+	uint32_t reqid;
+	/** Optional inbound interface ID */
+	uint32_t if_id_in;
+	/** Optional outbound interface ID */
+	uint32_t if_id_out;
+	/** Optional inbound mark */
+	mark_t mark_in;
+	/** Optional outbound mark */
+	mark_t mark_out;
+	/** Optional inbound mark the SA should apply to traffic */
+	mark_t set_mark_in;
+	/** Optional outbound mark the SA should apply to traffic */
+	mark_t set_mark_out;
+	/** Mode to propose for CHILD_SA */
+	ipsec_mode_t mode;
+	/** TFC padding size, 0 to disable, -1 to pad to PMTU */
+	uint32_t tfc;
+	/** Optional manually-set IPsec policy priority */
+	uint32_t priority;
+	/** Optional network interface restricting IPsec policy (cloned) */
+	char *interface;
+	/** lifetime_cfg_t for this child_cfg */
+	lifetime_cfg_t lifetime;
+	/** Inactivity timeout in s before closing a CHILD_SA */
+	uint32_t inactivity;
+	/** Start action */
+	action_t start_action;
+	/** DPD action */
+	action_t dpd_action;
+	/** Close action */
+	action_t close_action;
+	/** updown script to execute on up/down event (cloned) */
+	char *updown;
+	/** HW offload mode */
+	hw_offload_t hw_offload;
+	/** How to handle the DS header field in tunnel mode */
+	dscp_copy_t copy_dscp;
+};
+
+/**
  * Create a configuration template for CHILD_SA setup.
- *
- * The "name" string gets cloned.
- *
- * The lifetime_cfg_t object gets cloned.
- * To prevent two peers to start rekeying at the same time, a jitter may be
- * specified. Rekeying of an SA starts at (x.rekey - random(0, x.jitter)).
  *
  * After a call to create, a reference is obtained (refcount = 1).
  *
- * @param name				name of the child_cfg
- * @param lifetime			lifetime_cfg_t for this child_cfg
- * @param updown			updown script to execute on up/down event
- * @param hostaccess		TRUE to allow access to the local host
- * @param mode				mode to propose for CHILD_SA, transport, tunnel or BEET
- * @param start_action		start action
- * @param dpd_action		DPD action
- * @param close_action		close action
- * @param ipcomp			use IPComp, if peer supports it
- * @param inactivity		inactivity timeout in s before closing a CHILD_SA
- * @param reqid				specific reqid to use for CHILD_SA, 0 for auto assign
- * @param mark_in			optional inbound mark (can be NULL)
- * @param mark_out			optional outbound mark (can be NULL)
- * @param tfc				TFC padding size, 0 to disable, -1 to pad to PMTU
+ * @param name				name of the child_cfg (cloned)
+ * @param data				data for this child_cfg
  * @return					child_cfg_t object
  */
-child_cfg_t *child_cfg_create(char *name, lifetime_cfg_t *lifetime,
-							  char *updown, bool hostaccess,
-							  ipsec_mode_t mode, action_t start_action,
-							  action_t dpd_action, action_t close_action,
-							  bool ipcomp, u_int32_t inactivity, u_int32_t reqid,
-							  mark_t *mark_in, mark_t *mark_out, u_int32_t tfc);
+child_cfg_t *child_cfg_create(char *name, child_cfg_create_t *data);
 
 #endif /** CHILD_CFG_H_ @}*/

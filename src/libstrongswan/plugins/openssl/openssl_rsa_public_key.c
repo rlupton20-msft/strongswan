@@ -1,7 +1,7 @@
 /*
+ * Copyright (C) 2008-2017 Tobias Brunner
  * Copyright (C) 2009 Martin Willi
- * Copyright (C) 2008 Tobias Brunner
- * Hochschule fuer Technik Rapperswil
+ * HSR Hochschule fuer Technik Rapperswil
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -19,14 +19,20 @@
 #ifndef OPENSSL_NO_RSA
 
 #include "openssl_rsa_public_key.h"
+#include "openssl_hasher.h"
 #include "openssl_util.h"
 
 #include <utils/debug.h>
+#include <credentials/keys/signature_params.h>
 
 #include <openssl/bn.h>
 #include <openssl/evp.h>
 #include <openssl/rsa.h>
 #include <openssl/x509.h>
+
+#if OPENSSL_VERSION_NUMBER < 0x10100000L
+OPENSSL_KEY_FALLBACK(RSA, key, n, e, d)
+#endif
 
 typedef struct private_openssl_rsa_public_key_t private_openssl_rsa_public_key_t;
 
@@ -50,8 +56,133 @@ struct private_openssl_rsa_public_key_t {
 	refcount_t ref;
 };
 
+
+#if OPENSSL_VERSION_NUMBER >= 0x10000000L
+
 /**
- * Verification of an EMPSA PKCS1 signature described in PKCS#1
+ * Verify RSA signature
+ */
+static bool verify_signature(private_openssl_rsa_public_key_t *this,
+							 const EVP_MD *md, rsa_pss_params_t *pss,
+							 chunk_t data, chunk_t signature)
+{
+	EVP_PKEY_CTX *pctx = NULL;
+	EVP_MD_CTX *mctx = NULL;
+	EVP_PKEY *key;
+	int rsa_size = RSA_size(this->rsa);
+	bool valid = FALSE;
+
+	/* OpenSSL expects a signature of exactly RSA size (no leading 0x00) */
+	if (signature.len > rsa_size)
+	{
+		signature = chunk_skip(signature, signature.len - rsa_size);
+	}
+
+	mctx = EVP_MD_CTX_create();
+	key = EVP_PKEY_new();
+	if (!mctx || !key)
+	{
+		goto error;
+	}
+	if (!EVP_PKEY_set1_RSA(key, this->rsa))
+	{
+		goto error;
+	}
+	if (EVP_DigestVerifyInit(mctx, &pctx, md, NULL, key) <= 0)
+	{
+		goto error;
+	}
+	if (pss)
+	{
+		const EVP_MD *mgf1md = openssl_get_md(pss->mgf1_hash);
+		if (EVP_PKEY_CTX_set_rsa_padding(pctx, RSA_PKCS1_PSS_PADDING) <= 0 ||
+			EVP_PKEY_CTX_set_rsa_pss_saltlen(pctx, pss->salt_len) <= 0 ||
+			EVP_PKEY_CTX_set_rsa_mgf1_md(pctx, mgf1md) <= 0)
+		{
+			goto error;
+		}
+	}
+	if (EVP_DigestVerifyUpdate(mctx, data.ptr, data.len) <= 0)
+	{
+		goto error;
+	}
+	valid = (EVP_DigestVerifyFinal(mctx, signature.ptr, signature.len) == 1);
+
+error:
+	if (key)
+	{
+		EVP_PKEY_free(key);
+	}
+	if (mctx)
+	{
+		EVP_MD_CTX_destroy(mctx);
+	}
+	return valid;
+}
+
+/**
+ * Verification of a signature without hashing
+ */
+static bool verify_plain_signature(private_openssl_rsa_public_key_t *this,
+								   chunk_t data, chunk_t signature)
+{
+	char *buf;
+	int len, rsa_size = RSA_size(this->rsa);
+	bool valid = FALSE;
+
+	/* OpenSSL expects a signature of exactly RSA size (no leading 0x00) */
+	if (signature.len > rsa_size)
+	{
+		signature = chunk_skip(signature, signature.len - rsa_size);
+	}
+	buf = malloc(rsa_size);
+	len = RSA_public_decrypt(signature.len, signature.ptr, buf, this->rsa,
+							 RSA_PKCS1_PADDING);
+	if (len != -1)
+	{
+		valid = chunk_equals_const(data, chunk_create(buf, len));
+	}
+	free(buf);
+	return valid;
+}
+
+/**
+ * Verification of an EMSA PKCS1 signature described in PKCS#1
+ */
+static bool verify_emsa_pkcs1_signature(private_openssl_rsa_public_key_t *this,
+										int type, chunk_t data, chunk_t signature)
+{
+	const EVP_MD *md;
+
+	if (type == NID_undef)
+	{
+		return verify_plain_signature(this, data, signature);
+	}
+	md = EVP_get_digestbynid(type);
+	return md && verify_signature(this, md, NULL, data, signature);
+}
+
+/**
+ * Verification of an EMSA PSS signature described in PKCS#1
+ */
+static bool verify_emsa_pss_signature(private_openssl_rsa_public_key_t *this,
+									  rsa_pss_params_t *params, chunk_t data,
+									  chunk_t signature)
+{
+	const EVP_MD *md;
+
+	if (!params)
+	{
+		return FALSE;
+	}
+	md = openssl_get_md(params->hash);
+	return md && verify_signature(this, md, params, data, signature);
+}
+
+#else /* OPENSSL_VERSION_NUMBER < 1.0 */
+
+/**
+ * Verification of an EMSA PKCS1 signature described in PKCS#1
  */
 static bool verify_emsa_pkcs1_signature(private_openssl_rsa_public_key_t *this,
 										int type, chunk_t data, chunk_t signature)
@@ -125,6 +256,8 @@ error:
 	return valid;
 }
 
+#endif /* OPENSSL_VERSION_NUMBER < 1.0 */
+
 METHOD(public_key_t, get_type, key_type_t,
 	private_openssl_rsa_public_key_t *this)
 {
@@ -133,24 +266,28 @@ METHOD(public_key_t, get_type, key_type_t,
 
 METHOD(public_key_t, verify, bool,
 	private_openssl_rsa_public_key_t *this, signature_scheme_t scheme,
-	chunk_t data, chunk_t signature)
+	void *params, chunk_t data, chunk_t signature)
 {
 	switch (scheme)
 	{
 		case SIGN_RSA_EMSA_PKCS1_NULL:
 			return verify_emsa_pkcs1_signature(this, NID_undef, data, signature);
+		case SIGN_RSA_EMSA_PKCS1_SHA2_224:
+			return verify_emsa_pkcs1_signature(this, NID_sha224, data, signature);
+		case SIGN_RSA_EMSA_PKCS1_SHA2_256:
+			return verify_emsa_pkcs1_signature(this, NID_sha256, data, signature);
+		case SIGN_RSA_EMSA_PKCS1_SHA2_384:
+			return verify_emsa_pkcs1_signature(this, NID_sha384, data, signature);
+		case SIGN_RSA_EMSA_PKCS1_SHA2_512:
+			return verify_emsa_pkcs1_signature(this, NID_sha512, data, signature);
 		case SIGN_RSA_EMSA_PKCS1_SHA1:
 			return verify_emsa_pkcs1_signature(this, NID_sha1, data, signature);
-		case SIGN_RSA_EMSA_PKCS1_SHA224:
-			return verify_emsa_pkcs1_signature(this, NID_sha224, data, signature);
-		case SIGN_RSA_EMSA_PKCS1_SHA256:
-			return verify_emsa_pkcs1_signature(this, NID_sha256, data, signature);
-		case SIGN_RSA_EMSA_PKCS1_SHA384:
-			return verify_emsa_pkcs1_signature(this, NID_sha384, data, signature);
-		case SIGN_RSA_EMSA_PKCS1_SHA512:
-			return verify_emsa_pkcs1_signature(this, NID_sha512, data, signature);
 		case SIGN_RSA_EMSA_PKCS1_MD5:
 			return verify_emsa_pkcs1_signature(this, NID_md5, data, signature);
+#if OPENSSL_VERSION_NUMBER >= 0x10000000L
+		case SIGN_RSA_EMSA_PSS:
+			return verify_emsa_pss_signature(this, params, data, signature);
+#endif
 		default:
 			DBG1(DBG_LIB, "signature scheme %N not supported in RSA",
 				 signature_scheme_names, scheme);
@@ -224,11 +361,13 @@ bool openssl_rsa_fingerprint(RSA *rsa, cred_encoding_type_t type, chunk_t *fp)
 			break;
 		default:
 		{
+			const BIGNUM *bn_n, *bn_e;
 			chunk_t n = chunk_empty, e = chunk_empty;
 			bool success = FALSE;
 
-			if (openssl_bn2chunk(rsa->n, &n) &&
-				openssl_bn2chunk(rsa->e, &e))
+			RSA_get0_key(rsa, &bn_n, &bn_e, NULL);
+			if (openssl_bn2chunk(bn_n, &n) &&
+				openssl_bn2chunk(bn_e, &e))
 			{
 				success = lib->encoding->encode(lib->encoding, type, rsa, fp,
 									CRED_PART_RSA_MODULUS, n,
@@ -297,10 +436,12 @@ METHOD(public_key_t, get_encoding, bool,
 		}
 		default:
 		{
+			const BIGNUM *bn_n, *bn_e;
 			chunk_t n = chunk_empty, e = chunk_empty;
 
-			if (openssl_bn2chunk(this->rsa->n, &n) &&
-				openssl_bn2chunk(this->rsa->e, &e))
+			RSA_get0_key(this->rsa, &bn_n, &bn_e, NULL);
+			if (openssl_bn2chunk(bn_n, &n) &&
+				openssl_bn2chunk(bn_e, &e))
 			{
 				success = lib->encoding->encode(lib->encoding, type, NULL,
 									encoding, CRED_PART_RSA_MODULUS, n,
@@ -416,10 +557,15 @@ openssl_rsa_public_key_t *openssl_rsa_public_key_load(key_type_t type,
 	}
 	else if (n.ptr && e.ptr && type == KEY_RSA)
 	{
+		BIGNUM *bn_n, *bn_e;
+
 		this->rsa = RSA_new();
-		this->rsa->n = BN_bin2bn((const u_char*)n.ptr, n.len, NULL);
-		this->rsa->e = BN_bin2bn((const u_char*)e.ptr, e.len, NULL);
-		return &this->public;
+		bn_n = BN_bin2bn((const u_char*)n.ptr, n.len, NULL);
+		bn_e = BN_bin2bn((const u_char*)e.ptr, e.len, NULL);
+		if (RSA_set0_key(this->rsa, bn_n, bn_e, NULL))
+		{
+			return &this->public;
+		}
 	}
 	destroy(this);
 	return NULL;

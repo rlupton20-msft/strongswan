@@ -2,7 +2,7 @@
  * Copyright (C) 2009-2015 Tobias Brunner
  * Copyright (C) 2005-2009 Martin Willi
  * Copyright (C) 2005 Jan Hutter
- * Hochschule fuer Technik Rapperswil
+ * HSR Hochschule fuer Technik Rapperswil
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -168,6 +168,8 @@ enum id_part_t {
 	ID_PART_RDN_I,
 	/** DN Qualifier RDN of a DN */
 	ID_PART_RDN_DNQ,
+	/** dmdName RDN of a DN */
+	ID_PART_RDN_DMDN,
 	/** Pseudonym RDN of a DN */
 	ID_PART_RDN_PN,
 	/** UniqueIdentifier RDN of a DN */

@@ -1,6 +1,6 @@
 /*
  * Copyright (C) 2010 Martin Willi
- * Hochschule fuer Technik Rapperswil
+ * HSR Hochschule fuer Technik Rapperswil
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -32,12 +32,12 @@ struct private_inactivity_job_t {
 	/**
 	 * Unique CHILD_SA identifier to check
 	 */
-	u_int32_t id;
+	uint32_t id;
 
 	/**
 	 * Inactivity timeout
 	 */
-	u_int32_t timeout;
+	uint32_t timeout;
 
 	/**
 	 * Close IKE_SA if last remaining CHILD inactive?
@@ -55,7 +55,7 @@ METHOD(job_t, execute, job_requeue_t,
 	private_inactivity_job_t *this)
 {
 	ike_sa_t *ike_sa;
-	u_int32_t reschedule = 0;
+	uint32_t reschedule = 0;
 
 	ike_sa = charon->child_sa_manager->checkout_by_id(charon->child_sa_manager,
 													  this->id, NULL);
@@ -63,7 +63,7 @@ METHOD(job_t, execute, job_requeue_t,
 	{
 		enumerator_t *enumerator;
 		child_sa_t *child_sa;
-		u_int32_t delete = 0;
+		uint32_t delete = 0;
 		protocol_id_t proto = 0;
 		int children = 0;
 		status_t status = SUCCESS;
@@ -101,7 +101,7 @@ METHOD(job_t, execute, job_requeue_t,
 			{
 				DBG1(DBG_JOB, "deleting IKE_SA after %d seconds "
 					 "of CHILD_SA inactivity", this->timeout);
-				status = ike_sa->delete(ike_sa);
+				status = ike_sa->delete(ike_sa, FALSE);
 			}
 			else
 			{
@@ -136,7 +136,7 @@ METHOD(job_t, get_priority, job_priority_t,
 /**
  * See header
  */
-inactivity_job_t *inactivity_job_create(u_int32_t unique_id, u_int32_t timeout,
+inactivity_job_t *inactivity_job_create(uint32_t unique_id, uint32_t timeout,
 										bool close_ike)
 {
 	private_inactivity_job_t *this;

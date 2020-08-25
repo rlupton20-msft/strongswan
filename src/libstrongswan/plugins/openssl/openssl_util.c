@@ -1,7 +1,7 @@
 /*
  * Copyright (C) 2009 Martin Willi
  * Copyright (C) 2008 Tobias Brunner
- * Hochschule fuer Technik Rapperswil
+ * HSR Hochschule fuer Technik Rapperswil
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -21,6 +21,13 @@
 #include <openssl/bn.h>
 #include <openssl/evp.h>
 #include <openssl/x509.h>
+
+/* these were added with 1.1.0 when ASN1_OBJECT was made opaque */
+#if OPENSSL_VERSION_NUMBER < 0x10100000L
+#define OBJ_get0_data(o) ((o)->data)
+#define OBJ_length(o) ((o)->length)
+#define ASN1_STRING_get0_data(a) ASN1_STRING_data((ASN1_STRING*)a)
+#endif
 
 /**
  * Described in header.
@@ -51,7 +58,7 @@ bool openssl_hash_chunk(int hash_type, chunk_t data, chunk_t *hash)
 		goto error;
 	}
 
-	*hash = chunk_alloc(hasher->md_size);
+	*hash = chunk_alloc(EVP_MD_size(hasher));
 	if (!EVP_DigestFinal_ex(ctx, hash->ptr, NULL))
 	{
 		chunk_free(hash);
@@ -70,7 +77,8 @@ error:
 /**
  * Described in header.
  */
-bool openssl_bn_cat(int len, BIGNUM *a, BIGNUM *b, chunk_t *chunk)
+bool openssl_bn_cat(const int len, const BIGNUM *a, const BIGNUM *b,
+					chunk_t *chunk)
 {
 	int offset;
 
@@ -127,7 +135,7 @@ bool openssl_bn_split(chunk_t chunk, BIGNUM *a, BIGNUM *b)
 /**
  * Described in header.
  */
-bool openssl_bn2chunk(BIGNUM *bn, chunk_t *chunk)
+bool openssl_bn2chunk(const BIGNUM *bn, chunk_t *chunk)
 {
 	*chunk = chunk_alloc(BN_num_bytes(bn));
 	if (BN_bn2bin(bn, chunk->ptr) == chunk->len)
@@ -145,11 +153,11 @@ bool openssl_bn2chunk(BIGNUM *bn, chunk_t *chunk)
 /**
  * Described in header.
  */
-chunk_t openssl_asn1_obj2chunk(ASN1_OBJECT *asn1)
+chunk_t openssl_asn1_obj2chunk(const ASN1_OBJECT *asn1)
 {
 	if (asn1)
 	{
-		return chunk_create((u_char*)asn1->data, asn1->length);
+		return chunk_create((u_char*)OBJ_get0_data(asn1), OBJ_length(asn1));
 	}
 	return chunk_empty;
 }
@@ -157,11 +165,12 @@ chunk_t openssl_asn1_obj2chunk(ASN1_OBJECT *asn1)
 /**
  * Described in header.
  */
-chunk_t openssl_asn1_str2chunk(ASN1_STRING *asn1)
+chunk_t openssl_asn1_str2chunk(const ASN1_STRING *asn1)
 {
 	if (asn1)
 	{
-		return chunk_create(ASN1_STRING_data(asn1), ASN1_STRING_length(asn1));
+		return chunk_create((u_char*)ASN1_STRING_get0_data(asn1),
+							ASN1_STRING_length(asn1));
 	}
 	return chunk_empty;
 }
@@ -197,7 +206,7 @@ time_t asn1_to_time(chunk_t *,int);
 /**
  * Described in header.
  */
-int openssl_asn1_known_oid(ASN1_OBJECT *obj)
+int openssl_asn1_known_oid(const ASN1_OBJECT *obj)
 {
 	return asn1_known_oid(openssl_asn1_obj2chunk(obj));
 }
@@ -205,7 +214,7 @@ int openssl_asn1_known_oid(ASN1_OBJECT *obj)
 /**
  * Described in header.
  */
-time_t openssl_asn1_to_time(ASN1_TIME *time)
+time_t openssl_asn1_to_time(const ASN1_TIME *time)
 {
 	chunk_t chunk;
 

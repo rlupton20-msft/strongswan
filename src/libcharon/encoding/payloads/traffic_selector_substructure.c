@@ -2,7 +2,7 @@
  * Copyright (C) 2005-2010 Martin Willi
  * Copyright (C) 2010 revosec AG
  * Copyright (C) 2005 Jan Hutter
- * Hochschule fuer Technik Rapperswil
+ * HSR Hochschule fuer Technik Rapperswil
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -35,27 +35,27 @@ struct private_traffic_selector_substructure_t {
 	/**
 	 * Type of traffic selector.
 	 */
-	u_int8_t ts_type;
+	uint8_t ts_type;
 
 	/**
 	 * IP Protocol ID.
 	 */
-	u_int8_t ip_protocol_id;
+	uint8_t ip_protocol_id;
 
 	/**
 	 * Length of this payload.
 	 */
-	u_int16_t payload_length;
+	uint16_t payload_length;
 
 	/**
 	 * Start port number.
 	 */
-	u_int16_t start_port;
+	uint16_t start_port;
 
 	/**
 	 * End port number.
 	 */
-	u_int16_t end_port;
+	uint16_t end_port;
 
 	/**
 	 * Starting address.

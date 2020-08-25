@@ -1,6 +1,6 @@
 /*
  * Copyright (C) 2008 Martin Willi
- * Hochschule fuer Technik Rapperswil
+ * HSR Hochschule fuer Technik Rapperswil
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -60,7 +60,7 @@ static void add_feature_with_ssl(private_curl_plugin_t *this, const char *ssl,
 								 char *proto, plugin_feature_t f)
 {
 	/* http://curl.haxx.se/libcurl/c/libcurl-tutorial.html#Multi-threading */
-	if (strpfx(ssl, "OpenSSL"))
+	if (strpfx(ssl, "OpenSSL") || strpfx(ssl, "LibreSSL"))
 	{
 		add_feature(this, f);
 		add_feature(this, PLUGIN_DEPENDS(CUSTOM, "openssl-threading"));
@@ -70,7 +70,8 @@ static void add_feature_with_ssl(private_curl_plugin_t *this, const char *ssl,
 		add_feature(this, f);
 		add_feature(this, PLUGIN_DEPENDS(CUSTOM, "gcrypt-threading"));
 	}
-	else if (strpfx(ssl, "NSS"))
+	else if (strpfx(ssl, "NSS") ||
+			 strpfx(ssl, "BoringSSL"))
 	{
 		add_feature(this, f);
 	}

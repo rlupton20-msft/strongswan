@@ -1,8 +1,8 @@
 /*
- * Copyright (C) 2012-2015 Tobias Brunner
+ * Copyright (C) 2012-2019 Tobias Brunner
  * Copyright (C) 2005-2007 Martin Willi
  * Copyright (C) 2005 Jan Hutter
- * Hochschule fuer Technik Rapperswil
+ * HSR Hochschule fuer Technik Rapperswil
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -25,13 +25,15 @@
 
 typedef enum ike_version_t ike_version_t;
 typedef enum fragmentation_t fragmentation_t;
+typedef enum childless_t childless_t;
 typedef struct ike_cfg_t ike_cfg_t;
+typedef struct ike_cfg_create_t ike_cfg_create_t;
 
 #include <library.h>
 #include <networking/host.h>
 #include <collections/linked_list.h>
 #include <utils/identification.h>
-#include <config/proposal.h>
+#include <crypto/proposal/proposal.h>
 #include <crypto/diffie_hellman.h>
 
 /**
@@ -47,19 +49,33 @@ enum ike_version_t {
 };
 
 /**
- * Proprietary IKEv1 fragmentation
+ * Proprietary IKEv1 fragmentation and IKEv2 fragmentation
  */
 enum fragmentation_t {
 	/** disable fragmentation */
 	FRAGMENTATION_NO,
-	/** enable fragmentation if supported by peer */
+	/** announce support, but don't send any fragments */
+	FRAGMENTATION_ACCEPT,
+	/** enable fragmentation, if supported by peer */
 	FRAGMENTATION_YES,
-	/** force use of fragmentation (even for the first message) */
+	/** force use of fragmentation (even for the first message for IKEv1) */
 	FRAGMENTATION_FORCE,
 };
 
 /**
- * enum strings fro ike_version_t
+ * Childless IKE_SAs (RFC 6023)
+ */
+enum childless_t {
+	/** Allow childless IKE_SAs as responder, but initiate regular IKE_SAs */
+	CHILDLESS_ALLOW,
+	/** Don't accept childless IKE_SAs as responder, don't initiate them */
+	CHILDLESS_NEVER,
+	/** Only accept the creation of childless IKE_SAs (also as responder) */
+	CHILDLESS_FORCE,
+};
+
+/**
+ * enum strings for ike_version_t
  */
 extern enum_name_t *ike_version_names;
 
@@ -128,21 +144,21 @@ struct ike_cfg_t {
 	 *
 	 * @return				source address port, host order
 	 */
-	u_int16_t (*get_my_port)(ike_cfg_t *this);
+	uint16_t (*get_my_port)(ike_cfg_t *this);
 
 	/**
 	 * Get the port to use as destination port.
 	 *
 	 * @return				destination address, host order
 	 */
-	u_int16_t (*get_other_port)(ike_cfg_t *this);
+	uint16_t (*get_other_port)(ike_cfg_t *this);
 
 	/**
 	 * Get the DSCP value to use for IKE packets send from connections.
 	 *
 	 * @return				DSCP value
 	 */
-	u_int8_t (*get_dscp)(ike_cfg_t *this);
+	uint8_t (*get_dscp)(ike_cfg_t *this);
 
 	/**
 	 * Adds a proposal to the list.
@@ -165,16 +181,25 @@ struct ike_cfg_t {
 	linked_list_t* (*get_proposals) (ike_cfg_t *this);
 
 	/**
-	 * Select a proposed from suggested proposals.
+	 * Select a proposal from a list of supplied proposals.
 	 *
 	 * Returned proposal must be destroyed after use.
 	 *
 	 * @param proposals		list of proposals to select from
-	 * @param private		accept algorithms from a private range
+	 * @param flags			flags to consider during proposal selection
 	 * @return				selected proposal, or NULL if none matches.
 	 */
 	proposal_t *(*select_proposal) (ike_cfg_t *this, linked_list_t *proposals,
-									bool private);
+									proposal_selection_flag_t flags);
+
+	/**
+	 * Check if the config has a matching proposal.
+	 *
+	 * @param match			proposal to check
+	 * @param private		accept algorithms from a private range
+	 * @return				TRUE if a matching proposal is contained
+	 */
+	bool(*has_proposal)(ike_cfg_t *this, proposal_t *match, bool private);
 
 	/**
 	 * Should we send a certificate request in IKE_SA_INIT?
@@ -191,11 +216,18 @@ struct ike_cfg_t {
 	bool (*force_encap) (ike_cfg_t *this);
 
 	/**
-	 * Use proprietary IKEv1 fragmentation
+	 * Use IKE fragmentation
 	 *
 	 * @return				TRUE to use fragmentation
 	 */
 	fragmentation_t (*fragmentation) (ike_cfg_t *this);
+
+	/**
+	 * Whether to initiate/accept childless IKE_SAs
+	 *
+	 * @return				initiate/accept childless IKE_SAs
+	 */
+	childless_t (*childless)(ike_cfg_t *this);
 
 	/**
 	 * Get the DH group to use for IKE_SA setup.
@@ -229,33 +261,46 @@ struct ike_cfg_t {
 };
 
 /**
- * Creates a ike_cfg_t object.
+ * Data passed to the constructor of an ike_cfg_t object.
  *
- * Supplied hosts become owned by ike_cfg, strings get cloned.
- *
- * me and other are comma separated lists of IP addresses, DNS names, IP ranges
- * or subnets. When initiating, the first non-range/subnet address is used
- * as address. When responding, a match is performed against all items in the
- * list.
- *
- * @param version			IKE major version to use for this config
- * @param certreq			TRUE to send a certificate request
- * @param force_encap		enforce UDP encapsulation by faking NATD notify
- * @param me				address/DNS name of local peer
- * @param my_port			IKE port to use as source, 500 uses IKEv2 port floating
- * @param other				address/DNS name of remote peer
- * @param other_port		IKE port to use as dest, 500 uses IKEv2 port floating
- * @param fragmentation		use IKEv1 fragmentation
- * @param dscp				DSCP value to send IKE packets with
- * @return					ike_cfg_t object.
+ * local and remote are comma separated lists of IP addresses, DNS names,
+ * IP ranges or subnets. When initiating, the first non-range/subnet address is
+ * used as address. When responding, a match is performed against all items in
+ * the list.
  */
-ike_cfg_t *ike_cfg_create(ike_version_t version, bool certreq, bool force_encap,
-						  char *me, u_int16_t my_port,
-						  char *other, u_int16_t other_port,
-						  fragmentation_t fragmentation, u_int8_t dscp);
+struct ike_cfg_create_t {
+	/** IKE major version to use for this config */
+	ike_version_t version;
+	/** Address/DNS name of local peer (cloned) */
+	char *local;
+	/** IKE port to use as source, 500 uses IKEv2 port floating */
+	uint16_t local_port;
+	/** Address/DNS name of remote peer (cloned) */
+	char *remote;
+	/** IKE port to use as dest, 500 uses IKEv2 port floating */
+	uint16_t remote_port;
+	/** TRUE to not send any certificate requests */
+	bool no_certreq;
+	/** Enforce UDP encapsulation by faking NATD notify */
+	bool force_encap;
+	/** Use IKE fragmentation */
+	fragmentation_t fragmentation;
+	/** Childless IKE_SA configuration */
+	childless_t childless;
+	/** DSCP value to send IKE packets with */
+	uint8_t dscp;
+};
 
 /**
- * Determine the address family of the local or remtoe address(es).  If multiple
+ * Creates an ike_cfg_t object.
+ *
+ * @param data				data for this ike_cfg
+ * @return					ike_cfg_t object.
+ */
+ike_cfg_t *ike_cfg_create(ike_cfg_create_t *data);
+
+/**
+ * Determine the address family of the local or remote address(es).  If multiple
  * families are configured AF_UNSPEC is returned.  %any is ignored (%any4|6 are
  * not though).
  *
@@ -264,5 +309,16 @@ ike_cfg_t *ike_cfg_create(ike_version_t version, bool certreq, bool force_encap,
  * @return					address family of address(es) if distinct
  */
 int ike_cfg_get_family(ike_cfg_t *this, bool local);
+
+/**
+ * Determine if the given address was explicitly configured as local or remote
+ * address.
+ *
+ * @param this				ike config to check
+ * @param addr				address to check
+ * @param local				TRUE to check local addresses, FALSE for remote
+ * @return					TRUE if address was configured
+ */
+bool ike_cfg_has_address(ike_cfg_t *this, host_t *addr, bool local);
 
 #endif /** IKE_CFG_H_ @}*/

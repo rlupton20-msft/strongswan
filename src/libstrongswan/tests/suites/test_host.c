@@ -1,6 +1,6 @@
 /*
  * Copyright (C) 2013 Tobias Brunner
- * Hochschule fuer Technik Rapperswil
+ * HSR Hochschule fuer Technik Rapperswil
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -46,7 +46,7 @@ static void verify_netmask(chunk_t addr, int mask)
  * host_create_any
  */
 
-static void verify_any(host_t *host, int family, u_int16_t port)
+static void verify_any(host_t *host, int family, uint16_t port)
 {
 	verify_netmask(host->get_address(host), 0);
 	ck_assert(host->is_anyaddr(host));
@@ -88,7 +88,7 @@ END_TEST
  * host_create_from_string
  */
 
-static void verify_address(host_t *host, chunk_t addr, int family, u_int16_t port)
+static void verify_address(host_t *host, chunk_t addr, int family, uint16_t port)
 {
 	ck_assert(chunk_equals(host->get_address(host), addr));
 	ck_assert(!host->is_anyaddr(host));
@@ -656,19 +656,19 @@ END_TEST
 
 static struct {
 	char *addr;
-	u_int16_t port;
-	/* results for %H, %+H, %#H (falls back to [0]) */
+	uint16_t port;
+	/* results for %H, %+H, %#H (falls back to the first entry) */
 	char *result[3];
 } printf_data[] = {
 	{NULL,          0, { "(null)" }},
 	{NULL,        500, { "(null)" }},
-	{"%any",        0, { "%any", "0.0.0.0", "0.0.0.0[0]" }},
+	{"%any",        0, { "%any", "0.0.0.0", "0.0.0.0" }},
 	{"%any",      500, { "%any", "0.0.0.0", "0.0.0.0[500]" }},
-	{"%any6",       0, { "%any6", "::", "::[0]" }},
+	{"%any6",       0, { "%any6", "::", "::" }},
 	{"%any6",     500, { "%any6", "::", "::[500]" }},
-	{"192.168.0.1",   0, { "192.168.0.1", "192.168.0.1", "192.168.0.1[0]" }},
+	{"192.168.0.1",   0, { "192.168.0.1" }},
 	{"192.168.0.1", 500, { "192.168.0.1", "192.168.0.1", "192.168.0.1[500]" }},
-	{"fec1::1",     0, { "fec1::1", "fec1::1", "fec1::1[0]" }},
+	{"fec1::1",     0, { "fec1::1" }},
 	{"fec1::1",   500, { "fec1::1", "fec1::1", "fec1::1[500]" }},
 };
 

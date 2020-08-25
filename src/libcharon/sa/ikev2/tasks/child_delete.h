@@ -1,6 +1,6 @@
 /*
  * Copyright (C) 2007 Martin Willi
- * Hochschule fuer Technik Rapperswil
+ * HSR Hochschule fuer Technik Rapperswil
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -56,6 +56,6 @@ struct child_delete_t {
  * @return				child_delete task to handle by the task_manager
  */
 child_delete_t *child_delete_create(ike_sa_t *ike_sa, protocol_id_t protocol,
-									u_int32_t spi, bool expired);
+									uint32_t spi, bool expired);
 
 #endif /** CHILD_DELETE_H_ @}*/

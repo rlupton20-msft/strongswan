@@ -2,7 +2,7 @@
  * Copyright (C) 2007-2015 Tobias Brunner
  * Copyright (C) 2005-2006 Martin Willi
  * Copyright (C) 2005 Jan Hutter
- * Hochschule fuer Technik Rapperswil
+ * HSR Hochschule fuer Technik Rapperswil
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -188,7 +188,7 @@ enum payload_type_t {
 	PLV2_TS_INITIATOR = 44,
 
 	/**
-	 * Traffic selector for the original responser (TSr).
+	 * Traffic selector for the original responder (TSr).
 	 */
 	PLV2_TS_RESPONDER = 45,
 
@@ -413,7 +413,7 @@ payload_t *payload_create(payload_type_t type);
  * @param maj_ver	major IKE version (use 0 to skip version check)
  * @return			FALSE if payload type handled as unknown payload
  */
-bool payload_is_known(payload_type_t type, u_int8_t maj_ver);
+bool payload_is_known(payload_type_t type, uint8_t maj_ver);
 
 /**
  * Get the value field in a payload using encoding rules.

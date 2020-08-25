@@ -1,6 +1,6 @@
 /*
  * Copyright (C) 2012-2014 Tobias Brunner
- * Hochschule fuer Technik Rapperswil
+ * HSR Hochschule fuer Technik Rapperswil
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -20,10 +20,47 @@
 #include <utils/debug.h>
 
 #include <sys/types.h>
+
+#ifndef WIN32
 #include <netinet/in.h>
 #include <netinet/ip.h>
 #ifdef HAVE_NETINET_IP6_H
 #include <netinet/ip6.h>
+#endif
+#else
+struct ip {
+#if BYTE_ORDER == LITTLE_ENDIAN
+	uint8_t ip_hl: 4;
+	uint8_t ip_v: 4;
+#elif BYTE_ORDER == BIG_ENDIAN
+	uint8_t ip_v: 4;
+	uint8_t ip_hl: 4;
+#endif
+	uint8_t ip_tos;
+	uint16_t ip_len;
+	uint16_t ip_id;
+	uint16_t ip_off;
+	uint8_t ip_ttl;
+	uint8_t ip_p;
+	uint16_t ip_sum;
+	struct in_addr ip_src, ip_dst;
+} __attribute__((packed));
+struct ip6_hdr {
+	uint32_t ip6_flow; /* 4 bit version, 8 bit TC, 20 bit flow label */
+	uint16_t ip6_plen;
+	uint8_t ip6_nxt;
+	uint8_t ip6_hlim;
+	struct in6_addr ip6_src, ip6_dst;
+} __attribute__((packed));
+struct ip6_ext {
+	uint8_t ip6e_nxt;
+	uint8_t ip6e_len;
+} __attribute__((packed));
+#define HAVE_NETINET_IP6_H /* not really, but we only need the structs above */
+#endif
+
+#ifndef IP_OFFMASK
+#define IP_OFFMASK 0x1fff
 #endif
 
 /**
@@ -31,14 +68,14 @@
  * and unfortunately Android does not define a variant with BSD names.
  */
 struct tcphdr {
-	u_int16_t source;
-	u_int16_t dest;
-	u_int32_t seq;
-	u_int32_t ack_seq;
-	u_int16_t flags;
-	u_int16_t window;
-	u_int16_t check;
-	u_int16_t urg_ptr;
+	uint16_t source;
+	uint16_t dest;
+	uint32_t seq;
+	uint32_t ack_seq;
+	uint16_t flags;
+	uint16_t window;
+	uint16_t check;
+	uint16_t urg_ptr;
 } __attribute__((packed));
 
 /**
@@ -47,10 +84,10 @@ struct tcphdr {
  * the BSD member names, but this is simpler and more consistent with the above.
  */
 struct udphdr {
-	u_int16_t source;
-	u_int16_t dest;
-	u_int16_t len;
-	u_int16_t check;
+	uint16_t source;
+	uint16_t dest;
+	uint16_t len;
+	uint16_t check;
 } __attribute__((packed));
 
 typedef struct private_ip_packet_t private_ip_packet_t;
@@ -88,16 +125,16 @@ struct private_ip_packet_t {
 	/**
 	 * IP version
 	 */
-	u_int8_t version;
+	uint8_t version;
 
 	/**
 	 * Protocol|Next Header field
 	 */
-	u_int8_t next_header;
+	uint8_t next_header;
 
 };
 
-METHOD(ip_packet_t, get_version, u_int8_t,
+METHOD(ip_packet_t, get_version, uint8_t,
 	private_ip_packet_t *this)
 {
 	return this->version;
@@ -127,7 +164,7 @@ METHOD(ip_packet_t, get_payload, chunk_t,
 	return this->payload;
 }
 
-METHOD(ip_packet_t, get_next_header, u_int8_t,
+METHOD(ip_packet_t, get_next_header, uint8_t,
 	private_ip_packet_t *this)
 {
 	return this->next_header;
@@ -151,8 +188,8 @@ METHOD(ip_packet_t, destroy, void,
 /**
  * Parse transport protocol header
  */
-static bool parse_transport_header(chunk_t packet, u_int8_t proto,
-								   u_int16_t *sport, u_int16_t *dport)
+static bool parse_transport_header(chunk_t packet, uint8_t proto,
+								   uint16_t *sport, uint16_t *dport)
 {
 	switch (proto)
 	{
@@ -190,14 +227,64 @@ static bool parse_transport_header(chunk_t packet, u_int8_t proto,
 	return TRUE;
 }
 
+#ifdef HAVE_NETINET_IP6_H
+/**
+ * Skip to the actual payload and parse the transport header.
+ */
+static bool parse_transport_header_v6(struct ip6_hdr *ip, chunk_t packet,
+									  chunk_t *payload, uint8_t *proto,
+									  uint16_t *sport, uint16_t *dport)
+{
+	struct ip6_ext *ext;
+	bool fragment = FALSE;
+
+	*proto = ip->ip6_nxt;
+	*payload = chunk_skip(packet, 40);
+	while (payload->len >= sizeof(struct ip6_ext))
+	{
+		switch (*proto)
+		{
+			case 44:  /* Fragment Header */
+				fragment = TRUE;
+				/* skip the header */
+			case 0:   /* Hop-by-Hop Options Header */
+			case 43:  /* Routing Header */
+			case 60:  /* Destination Options Header */
+			case 135: /* Mobility Header */
+			case 139: /* HIP */
+			case 140: /* Shim6 */
+				/* simply skip over these headers for now */
+				ext = (struct ip6_ext*)payload->ptr;
+				*proto = ext->ip6e_nxt;
+				*payload = chunk_skip(*payload, 8 * (ext->ip6e_len + 1));
+				continue;
+			default:
+				/* assume anything else is an upper layer protocol but only
+				 * attempt to parse the transport header for non-fragmented
+				 * packets as there is no guarantee that initial fragments
+				 * contain the transport header, depending on the number and
+				 * type of extension headers */
+				if (!fragment &&
+					!parse_transport_header(*payload, *proto, sport, dport))
+				{
+					return FALSE;
+				}
+				break;
+		}
+		break;
+	}
+	return TRUE;
+}
+#endif /* HAVE_NETINET_IP6_H */
+
 /**
  * Described in header.
  */
 ip_packet_t *ip_packet_create(chunk_t packet)
 {
 	private_ip_packet_t *this;
-	u_int8_t version, next_header;
-	u_int16_t sport = 0, dport = 0;
+	uint8_t version, next_header;
+	uint16_t sport = 0, dport = 0;
 	host_t *src, *dst;
 	chunk_t payload;
 
@@ -224,7 +311,8 @@ ip_packet_t *ip_packet_create(chunk_t packet)
 			/* remove any RFC 4303 TFC extra padding */
 			packet.len = min(packet.len, untoh16(&ip->ip_len));
 			payload = chunk_skip(packet, ip->ip_hl * 4);
-			if (!parse_transport_header(payload, ip->ip_p, &sport, &dport))
+			if ((ip->ip_off & htons(IP_OFFMASK)) == 0 &&
+				!parse_transport_header(payload, ip->ip_p, &sport, &dport))
 			{
 				goto failed;
 			}
@@ -247,11 +335,9 @@ ip_packet_t *ip_packet_create(chunk_t packet)
 			}
 			ip = (struct ip6_hdr*)packet.ptr;
 			/* remove any RFC 4303 TFC extra padding */
-			packet.len = min(packet.len, 40 + untoh16(&ip->ip6_plen));
-			/* we only handle packets without extension headers, just skip the
-			 * basic IPv6 header */
-			payload = chunk_skip(packet, 40);
-			if (!parse_transport_header(payload, ip->ip6_nxt, &sport, &dport))
+			packet.len = min(packet.len, 40 + untoh16((void*)&ip->ip6_plen));
+			if (!parse_transport_header_v6(ip, packet, &payload, &next_header,
+										   &sport, &dport))
 			{
 				goto failed;
 			}
@@ -259,7 +345,6 @@ ip_packet_t *ip_packet_create(chunk_t packet)
 										 chunk_from_thing(ip->ip6_src), sport);
 			dst = host_create_from_chunk(AF_INET6,
 										 chunk_from_thing(ip->ip6_dst), dport);
-			next_header = ip->ip6_nxt;
 			break;
 		}
 #endif /* HAVE_NETINET_IP6_H */
@@ -296,19 +381,19 @@ failed:
 /**
  * Calculate the checksum for the pseudo IP header
  */
-static u_int16_t pseudo_header_checksum(host_t *src, host_t *dst,
-										u_int8_t proto, chunk_t payload)
+static uint16_t pseudo_header_checksum(host_t *src, host_t *dst,
+										uint8_t proto, chunk_t payload)
 {
 	switch (src->get_family(src))
 	{
 		case AF_INET:
 		{
 			struct __attribute__((packed)) {
-				u_int32_t src;
-				u_int32_t dst;
+				uint32_t src;
+				uint32_t dst;
 				u_char zero;
 				u_char proto;
-				u_int16_t len;
+				uint16_t len;
 			} pseudo = {
 				.proto = proto,
 				.len = htons(payload.len),
@@ -324,7 +409,7 @@ static u_int16_t pseudo_header_checksum(host_t *src, host_t *dst,
 			struct __attribute__((packed)) {
 				u_char src[16];
 				u_char dst[16];
-				u_int32_t len;
+				uint32_t len;
 				u_char zero[3];
 				u_char next_header;
 			} pseudo = {
@@ -344,10 +429,10 @@ static u_int16_t pseudo_header_checksum(host_t *src, host_t *dst,
 /**
  * Apply transport ports and calculate header checksums
  */
-static void fix_transport_header(host_t *src, host_t *dst, u_int8_t proto,
+static void fix_transport_header(host_t *src, host_t *dst, uint8_t proto,
 								 chunk_t payload)
 {
-	u_int16_t sum = 0, sport, dport;
+	uint16_t sum = 0, sport, dport;
 
 	sport = src->get_port(src);
 	dport = dst->get_port(dst);
@@ -407,7 +492,7 @@ static void fix_transport_header(host_t *src, host_t *dst, u_int8_t proto,
  * Described in header.
  */
 ip_packet_t *ip_packet_create_from_data(host_t *src, host_t *dst,
-										u_int8_t next_header, chunk_t data)
+										uint8_t next_header, chunk_t data)
 {
 	chunk_t packet;
 	int family;
@@ -442,7 +527,7 @@ ip_packet_t *ip_packet_create_from_data(host_t *src, host_t *dst,
 		case AF_INET6:
 		{
 			struct ip6_hdr ip = {
-				.ip6_flow = htonl(6),
+				.ip6_flow = htonl(6 << 28),
 				.ip6_plen = htons(data.len),
 				.ip6_nxt = next_header,
 				.ip6_hlim = 0x80,

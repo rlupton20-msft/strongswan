@@ -1,6 +1,6 @@
 /*
- * Copyright (C) 2015 Tobias Brunner
- * Hochschule fuer Technik Rapperswil
+ * Copyright (C) 2015-2019 Tobias Brunner
+ * HSR Hochschule fuer Technik Rapperswil
  *
  * Copyright (C) 2011 Martin Willi
  * Copyright (C) 2011 revosec AG
@@ -46,14 +46,14 @@ struct quick_mode_t {
 	 *
 	 * @return				message ID, or 0 (not defined yet or as initiator)
 	 */
-	u_int32_t (*get_mid)(quick_mode_t *this);
+	uint32_t (*get_mid)(quick_mode_t *this);
 
 	/**
 	 * Use a specific reqid to install this CHILD_SA.
 	 *
 	 * @param reqid			reqid to use
 	 */
-	void (*use_reqid)(quick_mode_t *this, u_int32_t reqid);
+	void (*use_reqid)(quick_mode_t *this, uint32_t reqid);
 
 	/**
 	 * Use specific mark values, overriding configuration.
@@ -61,14 +61,22 @@ struct quick_mode_t {
 	 * @param in			inbound mark value
 	 * @param out			outbound mark value
 	 */
-	void (*use_marks)(quick_mode_t *this, u_int in, u_int out);
+	void (*use_marks)(quick_mode_t *this, uint32_t in, uint32_t out);
+
+	/**
+	 * Use specific interface IDs, overriding configuration.
+	 *
+	 * @param in			inbound interface ID
+	 * @param out			outbound interface ID
+	 */
+	void (*use_if_ids)(quick_mode_t *this, uint32_t in, uint32_t out);
 
 	/**
 	 * Set the SPI of the old SA, if rekeying.
 	 *
 	 * @param spi			spi of SA to rekey
 	 */
-	void (*rekey)(quick_mode_t *this, u_int32_t spi);
+	void (*rekey)(quick_mode_t *this, uint32_t spi);
 };
 
 /**

@@ -1,4 +1,5 @@
 /*
+ * Copyright (C) 2016-2019 Tobias Brunner
  * Copyright (C) 2015 Andreas Steffen
  * HSR Hochschule fuer Technik Rapperswil
  *
@@ -87,11 +88,6 @@ struct authority_t {
 	linked_list_t *ocsp_uris;
 
 	/**
-	 * Hashes of certificates issued by this CA
-	 */
-	linked_list_t *hashes;
-
-	/**
 	 * Base URI used for certificates from this CA
 	 */
 	char *cert_uri_base;
@@ -108,7 +104,6 @@ static authority_t *authority_create(char *name)
 		.name = strdup(name),
 		.crl_uris = linked_list_create(),
 		.ocsp_uris = linked_list_create(),
-		.hashes = linked_list_create(),
 	);
 
 	return authority;
@@ -121,7 +116,6 @@ static void authority_destroy(authority_t *this)
 {
 	this->crl_uris->destroy_function(this->crl_uris, free);
 	this->ocsp_uris->destroy_function(this->ocsp_uris, free);
-	this->hashes->destroy_offset(this->hashes, offsetof(identification_t, destroy));
 	DESTROY_IF(this->cert);
 	free(this->cert_uri_base);
 	free(this->name);
@@ -199,7 +193,26 @@ typedef struct {
 typedef struct {
 	request_data_t *request;
 	authority_t *authority;
+	char *handle;
+	uint32_t slot;
+	char *module;
+	char *file;
 } load_data_t;
+
+/**
+ * Clean up data associated with an authority load
+ */
+static void free_load_data(load_data_t *data)
+{
+	if (data->authority)
+	{
+		authority_destroy(data->authority);
+	}
+	free(data->handle);
+	free(data->module);
+	free(data->file);
+	free(data);
+}
 
 /**
  * Parse a string
@@ -214,6 +227,28 @@ CALLBACK(parse_string, bool,
 	*str = strndup(v.ptr, v.len);
 
 	return TRUE;
+}
+
+/**
+ * Parse a uint32_t
+ */
+CALLBACK(parse_uint32, bool,
+	uint32_t *out, chunk_t v)
+{
+	char buf[16], *end;
+	u_long l;
+
+	if (!vici_stringify(v, buf, sizeof(buf)))
+	{
+		return FALSE;
+	}
+	l = strtoul(buf, &end, 0);
+	if (*end == 0)
+	{
+		*out = l;
+		return TRUE;
+	}
+	return FALSE;
 }
 
 /**
@@ -266,8 +301,12 @@ CALLBACK(authority_kv, bool,
 	load_data_t *data, vici_message_t *message, char *name, chunk_t value)
 {
 	parse_rule_t rules[] = {
-		{ "cacert",			parse_cacert, &data->authority->cert	      },
-		{ "cert_uri_base",	parse_string, &data->authority->cert_uri_base },
+		{ "cacert",			parse_cacert, &data->authority->cert			},
+		{ "file",			parse_string, &data->file						},
+		{ "handle",			parse_string, &data->handle						},
+		{ "slot",			parse_uint32, &data->slot						},
+		{ "module",			parse_string, &data->module						},
+		{ "cert_uri_base",	parse_string, &data->authority->cert_uri_base	},
 	};
 
 	return parse_rules(rules, countof(rules), name, value,
@@ -341,21 +380,60 @@ CALLBACK(authority_sn, bool,
 	linked_list_t *authorities;
 	authority_t *authority;
 	vici_cred_t *cred;
+	load_data_t *data;
+	chunk_t handle;
 
-	load_data_t data = {
+	INIT(data,
 		.request = request,
 		.authority = authority_create(name),
-	};
+		.slot = -1,
+	);
 
 	DBG2(DBG_CFG, " authority %s:", name);
 
-	if (!message->parse(message, ctx, NULL, authority_kv, authority_li, &data) ||
-		!data.authority->cert)
+	if (!message->parse(message, ctx, NULL, authority_kv, authority_li, data))
 	{
-		authority_destroy(data.authority);
+		free_load_data(data);
 		return FALSE;
 	}
-	log_authority_data(data.authority);
+	if (!data->authority->cert)
+	{
+		if (data->file)
+		{
+			data->authority->cert = lib->creds->create(lib->creds,
+										CRED_CERTIFICATE, CERT_X509,
+										BUILD_FROM_FILE, data->file, BUILD_END);
+		}
+		else if (data->handle)
+		{
+			handle = chunk_from_hex(chunk_from_str(data->handle), NULL);
+			if (data->slot != -1)
+			{
+				data->authority->cert = lib->creds->create(lib->creds,
+								CRED_CERTIFICATE, CERT_X509,
+								BUILD_PKCS11_KEYID, handle,
+								BUILD_PKCS11_SLOT, data->slot,
+								data->module ? BUILD_PKCS11_MODULE : BUILD_END,
+								data->module, BUILD_END);
+			}
+			else
+			{
+				data->authority->cert = lib->creds->create(lib->creds,
+								CRED_CERTIFICATE, CERT_X509,
+								BUILD_PKCS11_KEYID, handle,
+								data->module ? BUILD_PKCS11_MODULE : BUILD_END,
+								data->module, BUILD_END);
+			}
+			chunk_free(&handle);
+		}
+	}
+	if (!data->authority->cert)
+	{
+		request->reply = create_reply("CA certificate missing: %s", name);
+		free_load_data(data);
+		return FALSE;
+	}
+	log_authority_data(data->authority);
 
 	request->this->lock->write_lock(request->this->lock);
 
@@ -372,12 +450,14 @@ CALLBACK(authority_sn, bool,
 		}
 	}
 	enumerator->destroy(enumerator);
-	authorities->insert_last(authorities, data.authority);
+	authorities->insert_last(authorities, data->authority);
 
 	cred = request->this->cred;
-	data.authority->cert = cred->add_cert(cred, data.authority->cert);
+	data->authority->cert = cred->add_cert(cred, data->authority->cert);
+	data->authority = NULL;
 
 	request->this->lock->unlock(request->this->lock);
+	free_load_data(data);
 
 	return TRUE;
 }
@@ -607,32 +687,18 @@ static enumerator_t *create_inner_cdp(authority_t *authority, cdp_data_t *data)
 static enumerator_t *create_inner_cdp_hashandurl(authority_t *authority,
 												 cdp_data_t *data)
 {
-	enumerator_t *enumerator = NULL, *hash_enum;
-	identification_t *current;
+	enumerator_t *enumerator = NULL;
 
 	if (!data->id || !authority->cert_uri_base)
 	{
 		return NULL;
 	}
 
-	hash_enum = authority->hashes->create_enumerator(authority->hashes);
-	while (hash_enum->enumerate(hash_enum, &current))
+	if (authority->cert->has_subject(authority->cert, data->id) != ID_MATCH_NONE)
 	{
-		if (current->matches(current, data->id))
-		{
-			char *url, *hash;
-
-			url = malloc(strlen(authority->cert_uri_base) + 40 + 1);
-			strcpy(url, authority->cert_uri_base);
-			hash = chunk_to_hex(current->get_encoding(current), NULL, FALSE).ptr;
-			strncat(url, hash, 40);
-			free(hash);
-
-			enumerator = enumerator_create_single(url, free);
-			break;
-		}
+		enumerator = enumerator_create_single(strdup(authority->cert_uri_base),
+											  free);
 	}
-	hash_enum->destroy(hash_enum);
 	return enumerator;
 }
 
@@ -665,48 +731,6 @@ METHOD(credential_set_t, create_cdp_enumerator, enumerator_t*,
 			(void*)create_inner_cdp, data, (void*)cdp_data_destroy);
 }
 
-METHOD(vici_authority_t, check_for_hash_and_url, void,
-	private_vici_authority_t *this, certificate_t* cert)
-{
-	authority_t *authority;
-	enumerator_t *enumerator;
-	hasher_t *hasher;
-
-	hasher = lib->crypto->create_hasher(lib->crypto, HASH_SHA1);
-	if (hasher == NULL)
-	{
-		DBG1(DBG_CFG, "unable to use hash-and-url: sha1 not supported");
-		return;
-	}
-
-	this->lock->write_lock(this->lock);
-	enumerator = this->authorities->create_enumerator(this->authorities);
-	while (enumerator->enumerate(enumerator, &authority))
-	{
-		if (authority->cert_uri_base &&
-			cert->issued_by(cert, authority->cert, NULL))
-		{
-			chunk_t hash, encoded;
-
-			if (cert->get_encoding(cert, CERT_ASN1_DER, &encoded))
-			{
-				if (hasher->allocate_hash(hasher, encoded, &hash))
-				{
-					authority->hashes->insert_last(authority->hashes,
-						identification_create_from_encoding(ID_KEY_ID, hash));
-					chunk_free(&hash);
-				}
-				chunk_free(&encoded);
-			}
-			break;
-		}
-	}
-	enumerator->destroy(enumerator);
-	this->lock->unlock(this->lock);
-
-	hasher->destroy(hasher);
-}
-
 METHOD(vici_authority_t, destroy, void,
 	private_vici_authority_t *this)
 {
@@ -735,7 +759,6 @@ vici_authority_t *vici_authority_create(vici_dispatcher_t *dispatcher,
 				.create_cdp_enumerator = _create_cdp_enumerator,
 				.cache_cert = (void*)nop,
 			},
-			.check_for_hash_and_url = _check_for_hash_and_url,
 			.destroy = _destroy,
 		},
 		.dispatcher = dispatcher,

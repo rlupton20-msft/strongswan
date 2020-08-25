@@ -1,6 +1,6 @@
 /*
  * Copyright (C) 2007 Martin Willi
- * Hochschule fuer Technik Rapperswil
+ * HSR Hochschule fuer Technik Rapperswil
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -17,7 +17,6 @@
 
 #include "smp.h"
 
-#include <inttypes.h>
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <sys/socket.h>
@@ -25,6 +24,7 @@
 #include <unistd.h>
 #include <errno.h>
 #include <signal.h>
+#include <inttypes.h>
 #include <libxml/xmlreader.h>
 #include <libxml/xmlwriter.h>
 
@@ -56,7 +56,9 @@ ENUM(ike_sa_state_lower_names, IKE_CREATED, IKE_DELETING,
 	"created",
 	"connecting",
 	"established",
+	"passive",
 	"rekeying",
+	"rekeyed",
 	"deleting",
 );
 
@@ -77,7 +79,8 @@ static void write_id(xmlTextWriterPtr writer, char *element, identification_t *i
 	switch (id->get_type(id))
 	{
 		{
-			char *type = "";
+			char *type;
+
 			while (TRUE)
 			{
 				case ID_ANY:
@@ -178,10 +181,6 @@ static void write_childend(xmlTextWriterPtr writer, child_sa_t *child, bool loca
 static void write_child(xmlTextWriterPtr writer, child_sa_t *child)
 {
 	child_cfg_t *config;
-	time_t now, rekey_time, reauth_time;
-	time_t use_in, use_out;
-	u_int64_t bytes_in, bytes_out, packets_in, packets_out;
-	proposal_t *proposal;
 
 	config = child->get_config(child);
 
@@ -190,48 +189,11 @@ static void write_child(xmlTextWriterPtr writer, child_sa_t *child)
 									child->get_reqid(child));
 	xmlTextWriterWriteFormatElement(writer, "childconfig", "%s",
 									config->get_name(config));
-	now = time_monotonic(NULL);
-	reauth_time = child->get_lifetime(child, TRUE);
-	if (reauth_time)
-	{
-	  xmlTextWriterWriteFormatElement(writer, "lifetime", "%V", &now, &reauth_time);
-	}
-	rekey_time = child->get_lifetime(child, FALSE);
-	if (rekey_time)
-	{
-	  xmlTextWriterWriteFormatElement(writer, "rekeytime", "%V", &now, &rekey_time);
-	}
 	xmlTextWriterStartElement(writer, "local");
 	write_childend(writer, child, TRUE);
 	xmlTextWriterEndElement(writer);
 	xmlTextWriterStartElement(writer, "remote");
 	write_childend(writer, child, FALSE);
-	xmlTextWriterEndElement(writer);
-	proposal = child->get_proposal(child);
-	if (proposal)
-	{
-		xmlTextWriterWriteFormatElement(writer, "proposal", "%P", proposal);
-	}
-
-	xmlTextWriterStartElement(writer, "stats");
-	child->get_usestats(child, TRUE,
-									&use_in, &bytes_in, &packets_in);
-	xmlTextWriterWriteFormatElement(writer, "rcvbytes", "%"PRIu64, bytes_in);
-	if (use_in)
-	{
-		xmlTextWriterWriteFormatElement(writer, "rcvpackets", "%"PRIu64, packets_in);
-		xmlTextWriterWriteFormatElement(writer, "lastrcv", "%V", &now, &use_in);
-	}
-
-	child->get_usestats(child, TRUE,
-									&use_out, &bytes_out, &packets_out);
-	xmlTextWriterWriteFormatElement(writer, "sndbytes", "%"PRIu64, bytes_out);
-	if (use_out)
-	{
-		xmlTextWriterWriteFormatElement(writer, "sndpackets", "%"PRIu64, packets_out);
-		xmlTextWriterWriteFormatElement(writer, "lastsend", "%V", &now, &use_out);
-	}
-
 	xmlTextWriterEndElement(writer);
 	xmlTextWriterEndElement(writer);
 }
@@ -254,9 +216,7 @@ static void request_query_ikesa(xmlTextReaderPtr reader, xmlTextWriterPtr writer
 		ike_sa_id_t *id;
 		host_t *local, *remote;
 		enumerator_t *children;
-		proposal_t *ike_proposal;
 		child_sa_t *child_sa;
-		time_t now, rekey_time, reauth_time;
 
 		id = ike_sa->get_id(ike_sa);
 
@@ -269,29 +229,10 @@ static void request_query_ikesa(xmlTextReaderPtr reader, xmlTextWriterPtr writer
 							id->is_initiator(id) ? "initiator" : "responder");
 		xmlTextWriterWriteElement(writer, "peerconfig", ike_sa->get_name(ike_sa));
 
-		now = time_monotonic(NULL);
-		rekey_time = ike_sa->get_statistic(ike_sa, STAT_REKEY);
-		if (rekey_time)
-		{
-			xmlTextWriterWriteFormatElement(writer, "rekeytime", "%V", &now, &rekey_time);
-		}
-		
-		reauth_time = ike_sa->get_statistic(ike_sa, STAT_REAUTH);
-		if (reauth_time)
-		{
-			xmlTextWriterWriteFormatElement(writer, "lifetime", "%V", &now, &reauth_time);
-		}
-
-		ike_proposal = ike_sa->get_proposal(ike_sa);
-		if (ike_proposal)
-		{
-			xmlTextWriterWriteFormatElement(writer, "proposal", "%P", ike_proposal);
-		}
-
 		/* <local> */
 		local = ike_sa->get_my_host(ike_sa);
 		xmlTextWriterStartElement(writer, "local");
-		xmlTextWriterWriteFormatElement(writer, "spi", "%.16llx",
+		xmlTextWriterWriteFormatElement(writer, "spi", "%.16"PRIx64,
 					be64toh(id->is_initiator(id) ? id->get_initiator_spi(id)
 												 : id->get_responder_spi(id)));
 		write_id(writer, "identification", ike_sa->get_my_id(ike_sa));
@@ -308,7 +249,7 @@ static void request_query_ikesa(xmlTextReaderPtr reader, xmlTextWriterPtr writer
 		/* <remote> */
 		remote = ike_sa->get_other_host(ike_sa);
 		xmlTextWriterStartElement(writer, "remote");
-		xmlTextWriterWriteFormatElement(writer, "spi", "%.16llx",
+		xmlTextWriterWriteFormatElement(writer, "spi", "%.16"PRIx64,
 					be64toh(id->is_initiator(id) ? id->get_responder_spi(id)
 												 : id->get_initiator_spi(id)));
 		write_id(writer, "identification", ike_sa->get_other_id(ike_sa));
@@ -387,10 +328,12 @@ static void request_query_config(xmlTextReaderPtr reader, xmlTextWriterPtr write
 			xmlTextWriterStartElement(writer, "childconfig");
 			xmlTextWriterWriteElement(writer, "name",
 									  child_cfg->get_name(child_cfg));
-			list = child_cfg->get_traffic_selectors(child_cfg, TRUE, NULL, NULL);
+			list = child_cfg->get_traffic_selectors(child_cfg, TRUE, NULL,
+													NULL, FALSE);
 			write_networks(writer, "local", list);
 			list->destroy_offset(list, offsetof(traffic_selector_t, destroy));
-			list = child_cfg->get_traffic_selectors(child_cfg, FALSE, NULL, NULL);
+			list = child_cfg->get_traffic_selectors(child_cfg, FALSE, NULL,
+													NULL, FALSE);
 			write_networks(writer, "remote", list);
 			list->destroy_offset(list, offsetof(traffic_selector_t, destroy));
 			xmlTextWriterEndElement(writer);
@@ -437,7 +380,7 @@ static void request_control_terminate(xmlTextReaderPtr reader,
 		xmlTextReaderNodeType(reader) == XML_READER_TYPE_TEXT)
 	{
 		const char *str;
-		u_int32_t id;
+		uint32_t id;
 		status_t status;
 
 		str = xmlTextReaderConstValue(reader);
@@ -478,7 +421,7 @@ static void request_control_terminate(xmlTextReaderPtr reader,
 		if (ike)
 		{
 			status = charon->controller->terminate_ike(
-					charon->controller, id,
+					charon->controller, id, FALSE,
 					(controller_cb_t)xml_callback, writer, 0);
 		}
 		else

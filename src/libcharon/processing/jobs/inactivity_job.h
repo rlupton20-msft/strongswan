@@ -1,6 +1,6 @@
 /*
  * Copyright (C) 2010 Martin Willi
- * Hochschule fuer Technik Rapperswil
+ * HSR Hochschule fuer Technik Rapperswil
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -47,7 +47,7 @@ struct inactivity_job_t {
  * @param close_ike	close IKE_SA if the last remaining CHILD_SA is inactive?
  * @return			inactivity checking job
  */
-inactivity_job_t *inactivity_job_create(u_int32_t unique_id, u_int32_t timeout,
+inactivity_job_t *inactivity_job_create(uint32_t unique_id, uint32_t timeout,
 										bool close_ike);
 
 #endif /** INACTIVITY_JOB_H_ @}*/

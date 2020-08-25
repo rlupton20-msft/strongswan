@@ -1,6 +1,6 @@
 /*
  * Copyright (C) 2008-2011 Martin Willi
- * Hochschule fuer Technik Rapperswil
+ * HSR Hochschule fuer Technik Rapperswil
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -84,7 +84,7 @@ struct simaka_manager_t {
 	 * @param ck		buffer receiving encryption key ck
 	 * @param ik		buffer receiving integrity key ik
 	 * @param res		buffer receiving authentication result res
-	 * @param res_len	nubmer of bytes written to res buffer
+	 * @param res_len	number of bytes written to res buffer
 	 * @return			SUCCESS, FAILED, or INVALID_STATE if out of sync
 	 */
 	status_t (*card_get_quintuplet)(simaka_manager_t *this, identification_t *id,
@@ -98,7 +98,7 @@ struct simaka_manager_t {
 	 * @param id		permanent identity to request quintuplet for
 	 * @param rand		random value rand
 	 * @param auts		resynchronization parameter auts
-	 * @return			TRUE if calculated, FALSE if no matcing card found
+	 * @return			TRUE if calculated, FALSE if no matching card found
 	 */
 	bool (*card_resync)(simaka_manager_t *this, identification_t *id,
 						char rand[AKA_RAND_LEN], char auts[AKA_AUTS_LEN]);
@@ -131,7 +131,7 @@ struct simaka_manager_t {
 	 */
 	void (*card_set_reauth)(simaka_manager_t *this, identification_t *id,
 							identification_t *next, char mk[HASH_SIZE_SHA1],
-							u_int16_t counter);
+							uint16_t counter);
 
 	/**
 	 * Retrieve fast reauthentication parameters from one of the registered cards.
@@ -143,7 +143,7 @@ struct simaka_manager_t {
 	 */
 	identification_t* (*card_get_reauth)(simaka_manager_t *this,
 								identification_t *id, char mk[HASH_SIZE_SHA1],
-								u_int16_t *counter);
+								uint16_t *counter);
 
 	/**
 	 * Register a triplet provider (server) at the manager.
@@ -228,7 +228,7 @@ struct simaka_manager_t {
 	 */
 	identification_t* (*provider_is_reauth)(simaka_manager_t *this,
 								identification_t *id, char mk[HASH_SIZE_SHA1],
-								u_int16_t *counter);
+								uint16_t *counter);
 
 	/**
 	 * Generate a fast reauth id using one of the registered providers.

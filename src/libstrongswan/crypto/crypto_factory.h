@@ -1,6 +1,7 @@
 /*
  * Copyright (C) 2008 Martin Willi
- * Hochschule fuer Technik Rapperswil
+ * Copyright (C) 2016-2019 Andreas Steffen
+ * HSR Hochschule fuer Technik Rapperswil
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -31,6 +32,8 @@ typedef struct crypto_factory_t crypto_factory_t;
 #include <crypto/hashers/hasher.h>
 #include <crypto/prfs/prf.h>
 #include <crypto/rngs/rng.h>
+#include <crypto/xofs/xof.h>
+#include <crypto/drbgs/drbg.h>
 #include <crypto/nonce_gen.h>
 #include <crypto/diffie_hellman.h>
 #include <crypto/transform.h>
@@ -61,6 +64,17 @@ typedef hasher_t* (*hasher_constructor_t)(hash_algorithm_t algo);
  * Constructor function for pseudo random functions
  */
 typedef prf_t* (*prf_constructor_t)(pseudo_random_function_t algo);
+
+/**
+ * Constructor function for extended output functions
+ */
+typedef xof_t* (*xof_constructor_t)(ext_out_function_t algo);
+
+/**
+ * Constructor function for deterministic random bit generators
+ */
+typedef drbg_t* (*drbg_constructor_t)(drbg_type_t type, uint32_t strength,
+								rng_t *entropy, chunk_t personalization_str);
 
 /**
  * Constructor function for source of randomness
@@ -133,6 +147,27 @@ struct crypto_factory_t {
 	prf_t* (*create_prf)(crypto_factory_t *this, pseudo_random_function_t algo);
 
 	/**
+	 * Create an extended output function instance.
+	 *
+	 * @param algo			XOF algorithm to use
+	 * @return				xof_t instance, NULL if not supported
+	 */
+	xof_t* (*create_xof)(crypto_factory_t *this, ext_out_function_t algo);
+
+	/**
+	 * Create a deterministic random bit generator instance.
+	 *
+	 * @param type					DRBG type to use
+	 * @param strength				security strength in bits
+	 * @param entropy				entropy source to be used (adopted)
+	 * @param personalization_str	optional personalization string
+	 * @return						drbg_t instance, NULL if not supported
+	 */
+	drbg_t* (*create_drbg)(crypto_factory_t *this, drbg_type_t type,
+						   uint32_t strength, rng_t *entropy,
+						   chunk_t personalization_str);
+
+	/**
 	 * Create a source of randomness.
 	 *
 	 * @param quality		required randomness quality
@@ -162,7 +197,7 @@ struct crypto_factory_t {
 	 * Register a crypter constructor.
 	 *
 	 * @param algo			algorithm to constructor
-	 * @param key size		key size to peform benchmarking for
+	 * @param key size		key size to perform benchmarking for
 	 * @param plugin_name	plugin that registered this algorithm
 	 * @param create		constructor function for that algorithm
 	 * @return				TRUE if registered, FALSE if test vector failed
@@ -189,7 +224,7 @@ struct crypto_factory_t {
 	 * Register a aead constructor.
 	 *
 	 * @param algo			algorithm to constructor
-	 * @param key size		key size to peform benchmarking for
+	 * @param key size		key size to perform benchmarking for
 	 * @param plugin_name	plugin that registered this algorithm
 	 * @param create		constructor function for that algorithm
 	 * @return				TRUE if registered, FALSE if test vector failed
@@ -251,6 +286,42 @@ struct crypto_factory_t {
 	 * @param create		constructor function to unregister
 	 */
 	void (*remove_prf)(crypto_factory_t *this, prf_constructor_t create);
+
+	/**
+	 * Register an xof constructor.
+	 *
+	 * @param algo			algorithm to constructor
+	 * @param plugin_name	plugin that registered this algorithm
+	 * @param create		constructor function for that algorithm
+	 * @return				TRUE if registered, FALSE if test vector failed
+	 */
+	bool (*add_xof)(crypto_factory_t *this, ext_out_function_t algo,
+					const char *plugin_name, xof_constructor_t create);
+
+	/**
+	 * Unregister an xof constructor.
+	 *
+	 * @param create		constructor function to unregister
+	 */
+	void (*remove_xof)(crypto_factory_t *this, xof_constructor_t create);
+
+	/**
+	 * Register a drbg constructor.
+	 *
+	 * @param type			type to constructor
+	 * @param plugin_name	plugin that registered this algorithm
+	 * @param create		constructor function for that algorithm
+	 * @return				TRUE if registered, FALSE if test vector failed
+	 */
+	bool (*add_drbg)(crypto_factory_t *this, drbg_type_t type,
+					 const char *plugin_name, drbg_constructor_t create);
+
+	/**
+	 * Unregister a drbg constructor.
+	 *
+	 * @param create		constructor function to unregister
+	 */
+	void (*remove_drbg)(crypto_factory_t *this, drbg_constructor_t create);
 
 	/**
 	 * Register a source of randomness.
@@ -340,6 +411,20 @@ struct crypto_factory_t {
 	 * @return				enumerator over pseudo_random_function_t, plugin
 	 */
 	enumerator_t* (*create_prf_enumerator)(crypto_factory_t *this);
+
+	/**
+	 * Create an enumerator over all registered XOFs.
+	 *
+	 * @return				enumerator over ext_out_function_t, plugin
+	 */
+	enumerator_t* (*create_xof_enumerator)(crypto_factory_t *this);
+
+	/**
+	 * Create an enumerator over all registered DRBGs.
+	 *
+	 * @return				enumerator over drbg_type_t, plugin
+	 */
+	enumerator_t* (*create_drbg_enumerator)(crypto_factory_t *this);
 
 	/**
 	 * Create an enumerator over all registered diffie hellman groups.

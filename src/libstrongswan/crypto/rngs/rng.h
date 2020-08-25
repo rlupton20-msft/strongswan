@@ -1,7 +1,7 @@
 /*
  * Copyright (C) 2012 Tobias Brunner
  * Copyright (C) 2008 Martin Willi
- * Hochschule fuer Technik Rapperswil
+ * HSR Hochschule fuer Technik Rapperswil
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -57,7 +57,7 @@ struct rng_t {
 	 * @return			TRUE if bytes successfully written
 	 */
 	bool (*get_bytes)(rng_t *this, size_t len,
-					  u_int8_t *buffer) __attribute__((warn_unused_result));
+					  uint8_t *buffer) __attribute__((warn_unused_result));
 
 	/**
 	 * Generates random bytes and allocate space for them.
@@ -85,7 +85,7 @@ struct rng_t {
  * @param all			TRUE if all bytes have to be non-zero, FALSE for first
  * @return				TRUE if bytes successfully written
  */
-bool rng_get_bytes_not_zero(rng_t *rng, size_t len, u_int8_t *buffer,
+bool rng_get_bytes_not_zero(rng_t *rng, size_t len, uint8_t *buffer,
 							bool all) __attribute__((warn_unused_result));
 
 /**

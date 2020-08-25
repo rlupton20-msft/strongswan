@@ -1,7 +1,7 @@
 /*
  * Copyright (C) 2008-2015 Tobias Brunner
  * Copyright (C) 2005-2008 Martin Willi
- * Hochschule fuer Technik Rapperswil
+ * HSR Hochschule fuer Technik Rapperswil
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -33,7 +33,7 @@
 /* This is from the kernel sources.  We limit the length of directory names to
  * 256 as we only use it to enumerate FDs. */
 struct linux_dirent64 {
-	u_int64_t d_ino;
+	uint64_t d_ino;
 	int64_t d_off;
 	unsigned short	d_reclen;
 	unsigned char d_type;

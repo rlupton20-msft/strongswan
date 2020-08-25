@@ -1,6 +1,6 @@
 /*
  * Copyright (C) 2010 Martin Willi
- * Hochschule fuer Technik Rapperswil
+ * HSR Hochschule fuer Technik Rapperswil
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -20,6 +20,7 @@
 #include "openssl_sha1_prf.h"
 
 #include <openssl/sha.h>
+#include <crypto/hashers/hasher.h>
 
 typedef struct private_openssl_sha1_prf_t private_openssl_sha1_prf_t;
 
@@ -40,7 +41,7 @@ struct private_openssl_sha1_prf_t {
 };
 
 METHOD(prf_t, get_bytes, bool,
-	private_openssl_sha1_prf_t *this, chunk_t seed, u_int8_t *bytes)
+	private_openssl_sha1_prf_t *this, chunk_t seed, uint8_t *bytes)
 {
 #if OPENSSL_VERSION_NUMBER >= 0x10000000L
 	if (!SHA1_Update(&this->ctx, seed.ptr, seed.len))
@@ -53,7 +54,7 @@ METHOD(prf_t, get_bytes, bool,
 
 	if (bytes)
 	{
-		u_int32_t *hash = (u_int32_t*)bytes;
+		uint32_t *hash = (uint32_t*)bytes;
 
 		hash[0] = htonl(this->ctx.h0);
 		hash[1] = htonl(this->ctx.h1);

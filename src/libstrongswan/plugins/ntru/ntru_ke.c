@@ -14,33 +14,33 @@
  */
 
 #include "ntru_ke.h"
-#include "ntru_drbg.h"
 #include "ntru_param_set.h"
 #include "ntru_private_key.h"
 #include "ntru_public_key.h"
 
 #include <crypto/diffie_hellman.h>
+#include <crypto/drbgs/drbg.h>
 #include <utils/debug.h>
 
 typedef struct private_ntru_ke_t private_ntru_ke_t;
 
 /* Best bandwidth and speed, no X9.98 compatibility */
-static ntru_param_set_id_t param_sets_optimum[] = {
+static const ntru_param_set_id_t param_sets_optimum[] = {
 	NTRU_EES401EP2, NTRU_EES439EP1, NTRU_EES593EP1, NTRU_EES743EP1
 };
 
 /* X9.98/IEEE 1363.1 parameter sets for best speed */
-static ntru_param_set_id_t param_sets_x9_98_speed[] = {
+static const ntru_param_set_id_t param_sets_x9_98_speed[] = {
 	NTRU_EES659EP1, NTRU_EES761EP1, NTRU_EES1087EP1, NTRU_EES1499EP1
 };
 
 /* X9.98/IEEE 1363.1 parameter sets for best bandwidth (smallest size) */
-static ntru_param_set_id_t param_sets_x9_98_bandwidth[] = {
+static const ntru_param_set_id_t param_sets_x9_98_bandwidth[] = {
 	NTRU_EES401EP1, NTRU_EES449EP1, NTRU_EES677EP1, NTRU_EES1087EP2
 };
 
 /* X9.98/IEEE 1363.1 parameter sets balancing speed and bandwidth */
-static ntru_param_set_id_t param_sets_x9_98_balance[] = {
+static const ntru_param_set_id_t param_sets_x9_98_balance[] = {
 	NTRU_EES541EP1, NTRU_EES613EP1, NTRU_EES887EP1, NTRU_EES1171EP1
 };
 
@@ -61,12 +61,12 @@ struct private_ntru_ke_t {
 	/**
 	 * NTRU Parameter Set
 	 */
-	ntru_param_set_t *param_set;
+	const ntru_param_set_t *param_set;
 
 	/**
 	 * Cryptographical strength in bits of the NTRU Parameter Set
 	 */
-	u_int32_t strength;
+	uint32_t strength;
 
 	/**
 	 * NTRU Public Key
@@ -106,7 +106,7 @@ struct private_ntru_ke_t {
 	/**
 	 * Deterministic Random Bit Generator
 	 */
-	ntru_drbg_t *drbg;
+	drbg_t *drbg;
 };
 
 METHOD(diffie_hellman_t, get_my_public_value, bool,
@@ -129,7 +129,7 @@ METHOD(diffie_hellman_t, get_my_public_value, bool,
 			this->privkey = ntru_private_key_create(this->drbg, this->param_set);
 			if (!this->privkey)
 			{
-				DBG1(DBG_LIB, "NTRU keypair generation failed");
+				DBG1(DBG_LIB, "NTRU key pair generation failed");
 				return FALSE;
 			}
 			this->pubkey = this->privkey->get_public_key(this->privkey);
@@ -199,8 +199,8 @@ METHOD(diffie_hellman_t, set_other_public_value, bool,
 		this->shared_secret = chunk_alloc(2 * this->strength / BITS_PER_BYTE);
 
 		/* generate the random shared secret */
-		if (!this->drbg->generate(this->drbg, this->strength,
-				this->shared_secret.len, this->shared_secret.ptr))
+		if (!this->drbg->generate(this->drbg, this->shared_secret.len,
+											  this->shared_secret.ptr))
 		{
 			DBG1(DBG_LIB, "generation of shared secret failed");
 			chunk_free(&this->shared_secret);
@@ -231,7 +231,6 @@ METHOD(diffie_hellman_t, destroy, void,
 	DESTROY_IF(this->privkey);
 	DESTROY_IF(this->pubkey);
 	this->drbg->destroy(this->drbg);
-	this->entropy->destroy(this->entropy);
 	chunk_free(&this->ciphertext);
 	chunk_clear(&this->shared_secret);
 	free(this);
@@ -243,11 +242,12 @@ METHOD(diffie_hellman_t, destroy, void,
 ntru_ke_t *ntru_ke_create(diffie_hellman_group_t group, chunk_t g, chunk_t p)
 {
 	private_ntru_ke_t *this;
-	ntru_param_set_id_t *param_sets, param_set_id;
+	const ntru_param_set_id_t *param_sets;
+	ntru_param_set_id_t param_set_id;
 	rng_t *entropy;
-	ntru_drbg_t *drbg;
+	drbg_t *drbg;
 	char *parameter_set;
-	u_int32_t strength;
+	uint32_t strength;
 
 	parameter_set = lib->settings->get_str(lib->settings,
 						"%s.plugins.ntru.parameter_set", "optimum", lib->ns);
@@ -293,6 +293,7 @@ ntru_ke_t *ntru_ke_create(diffie_hellman_group_t group, chunk_t g, chunk_t p)
 	DBG1(DBG_LIB, "%u bit %s NTRU parameter set %N selected", strength,
 				   parameter_set, ntru_param_set_id_names, param_set_id);
 
+	/* entropy will be owned by drbg */
 	entropy = lib->crypto->create_rng(lib->crypto, RNG_TRUE);
 	if (!entropy)
 	{
@@ -300,7 +301,8 @@ ntru_ke_t *ntru_ke_create(diffie_hellman_group_t group, chunk_t g, chunk_t p)
 		return NULL;
 	}
 
-	drbg = ntru_drbg_create(strength, chunk_from_str("IKE NTRU-KE"), entropy);
+	drbg = lib->crypto->create_drbg(lib->crypto, DRBG_HMAC_SHA256, strength,
+									entropy, chunk_from_str("IKE NTRU-KE"));
 	if (!drbg)
 	{
 		DBG1(DBG_LIB, "could not instantiate DRBG at %u bit security", strength);

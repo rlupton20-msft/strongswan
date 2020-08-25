@@ -107,8 +107,8 @@ METHOD(af_alg_ops_t, hash, bool,
 	return TRUE;
 }
 
-METHOD(af_alg_ops_t, crypt, bool,
-	private_af_alg_ops_t *this, u_int32_t type, chunk_t iv, chunk_t data,
+METHOD(af_alg_ops_t, crypt_, bool,
+	private_af_alg_ops_t *this, uint32_t type, chunk_t iv, chunk_t data,
 	char *out)
 {
 	struct msghdr msg = {};
@@ -224,7 +224,7 @@ af_alg_ops_t *af_alg_ops_create(char *type, char *alg)
 		.public = {
 			.hash = _hash,
 			.reset = _reset,
-			.crypt = _crypt,
+			.crypt = _crypt_,
 			.set_key = _set_key,
 			.destroy = _destroy,
 		},

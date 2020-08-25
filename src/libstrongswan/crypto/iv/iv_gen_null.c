@@ -1,6 +1,6 @@
 /*
  * Copyright (C) 2015 Tobias Brunner
- * Hochschule fuer Technik Rapperswil
+ * HSR Hochschule fuer Technik Rapperswil
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -29,13 +29,13 @@ struct private_iv_gen_t {
 };
 
 METHOD(iv_gen_t, get_iv, bool,
-	private_iv_gen_t *this, u_int64_t seq, size_t size, u_int8_t *buffer)
+	private_iv_gen_t *this, uint64_t seq, size_t size, uint8_t *buffer)
 {
 	return size == 0;
 }
 
 METHOD(iv_gen_t, allocate_iv, bool,
-	private_iv_gen_t *this, u_int64_t seq, size_t size, chunk_t *chunk)
+	private_iv_gen_t *this, uint64_t seq, size_t size, chunk_t *chunk)
 {
 	*chunk = chunk_empty;
 	return size == 0;

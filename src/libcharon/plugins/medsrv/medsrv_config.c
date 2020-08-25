@@ -1,6 +1,6 @@
 /*
  * Copyright (C) 2008 Martin Willi
- * Hochschule fuer Technik Rapperswil
+ * HSR Hochschule fuer Technik Rapperswil
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -87,14 +87,18 @@ METHOD(backend_t, create_peer_cfg_enumerator, enumerator_t*,
 
 		if (e->enumerate(e, &name))
 		{
-			peer_cfg = peer_cfg_create(
-				name, this->ike->get_ref(this->ike),
-				CERT_NEVER_SEND, UNIQUE_REPLACE,
-				1, this->rekey*60, 0,			/* keytries, rekey, reauth */
-				this->rekey*5, this->rekey*3,	/* jitter, overtime */
-				TRUE, FALSE, TRUE,				/* mobike, aggressive, pull */
-				this->dpd, 0,					/* DPD delay, timeout */
-				TRUE, NULL, NULL);				/* mediation, med by, peer id */
+			peer_cfg_create_t peer = {
+				.cert_policy = CERT_NEVER_SEND,
+				.unique = UNIQUE_REPLACE,
+				.keyingtries = 1,
+				.rekey_time = this->rekey * 60,
+				.jitter_time = this->rekey * 5,
+				.over_time = this->rekey * 3,
+				.dpd = this->dpd,
+				.mediation = TRUE,
+			};
+			peer_cfg = peer_cfg_create(name, this->ike->get_ref(this->ike),
+									   &peer);
 			e->destroy(e);
 
 			auth = auth_cfg_create();
@@ -126,6 +130,14 @@ METHOD(medsrv_config_t, destroy, void,
 medsrv_config_t *medsrv_config_create(database_t *db)
 {
 	private_medsrv_config_t *this;
+	ike_cfg_create_t ike = {
+		.version = IKEV2,
+		.local = "0.0.0.0",
+		.local_port = charon->socket->get_port(charon->socket, FALSE),
+		.remote = "0.0.0.0",
+		.remote_port = IKEV2_UDP_PORT,
+		.no_certreq = TRUE,
+	};
 
 	INIT(this,
 		.public = {
@@ -139,10 +151,7 @@ medsrv_config_t *medsrv_config_create(database_t *db)
 		.db = db,
 		.rekey = lib->settings->get_time(lib->settings, "medsrv.rekey", 1200),
 		.dpd = lib->settings->get_time(lib->settings, "medsrv.dpd", 300),
-		.ike = ike_cfg_create(IKEV2, FALSE, FALSE, "0.0.0.0",
-							  charon->socket->get_port(charon->socket, FALSE),
-							  "0.0.0.0", IKEV2_UDP_PORT,
-							  FRAGMENTATION_NO, 0),
+		.ike = ike_cfg_create(&ike),
 	);
 	this->ike->add_proposal(this->ike, proposal_create_default(PROTO_IKE));
 	this->ike->add_proposal(this->ike, proposal_create_default_aead(PROTO_IKE));

@@ -48,7 +48,7 @@ enum pts_pcr_transform_t {
  * PTS Component Evidence Validation Result Flags
  */
 enum pts_comp_evid_validation_t {
-	/** No Validation was attempted */		
+	/** No Validation was attempted */
 	PTS_COMP_EVID_VALIDATION_NONE =		0x00,
 	/** Attempted validation, unable to verify */
 	PTS_COMP_EVID_VALIDATION_UNABLE =	0x20,
@@ -59,7 +59,7 @@ enum pts_comp_evid_validation_t {
 };
 
 /**
- * PTS Functional Component Interface 
+ * PTS Functional Component Interface
  */
 struct pts_comp_evidence_t {
 
@@ -70,14 +70,14 @@ struct pts_comp_evidence_t {
 	 * @result					Component Functional Name
 	 */
 	pts_comp_func_name_t* (*get_comp_func_name)(pts_comp_evidence_t *this,
-							   					u_int32_t *depth);
+							   					uint32_t *depth);
 
 	/**
 	 * Gets the PCR the measurement was extended into
 	 *
 	 * @result					PCR the measurement was extended into
 	 */
-	u_int32_t (*get_extended_pcr)(pts_comp_evidence_t *this);
+	uint32_t (*get_extended_pcr)(pts_comp_evidence_t *this);
 
 	/**
 	 * Gets the measurement and the algorithms used
@@ -89,7 +89,7 @@ struct pts_comp_evidence_t {
 	 * @result					Measurement hash value
 	 */
 	chunk_t (*get_measurement)(pts_comp_evidence_t *this,
-							   u_int32_t *extended_pcr,
+							   uint32_t *extended_pcr,
 							   pts_meas_algorithms_t *algo,
 							   pts_pcr_transform_t *transform,
 							   time_t *measurement_time);
@@ -140,7 +140,7 @@ struct pts_comp_evidence_t {
 
 /**
  * Creates a pts_comp_evidence_t object
- * 
+ *
  * @param name					Component Functional Name
  * @param depth					Sub-component depth
  * @param extended_pcr			PCR the measurement was extended into
@@ -150,8 +150,8 @@ struct pts_comp_evidence_t {
  * @param measurement			Measurement hash value
  */
 pts_comp_evidence_t* pts_comp_evidence_create(pts_comp_func_name_t *name,
-											  u_int32_t depth,
-											  u_int32_t extended_pcr,
+											  uint32_t depth,
+											  uint32_t extended_pcr,
 											  pts_meas_algorithms_t algo,
 											  pts_pcr_transform_t transform,
 											  time_t measurement_time,
@@ -160,7 +160,7 @@ pts_comp_evidence_t* pts_comp_evidence_create(pts_comp_func_name_t *name,
 /**
  * Determine transform to fit measurement hash into PCR register
  *
- * @param algo					Measurement hash algorithm 
+ * @param algo					Measurement hash algorithm
  * @param pcr_len				Length of the PCR registers in bytes
  * @return						PCR transform type
  */

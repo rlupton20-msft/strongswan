@@ -1,6 +1,6 @@
 /*
  * Copyright (C) 2007-2008 Tobias Brunner
- * Hochschule fuer Technik Rapperswil
+ * HSR Hochschule fuer Technik Rapperswil
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -128,7 +128,7 @@ static void gather_and_add_endpoints(private_ike_me_t *this, message_t *message)
 {
 	enumerator_t *enumerator;
 	host_t *addr, *host;
-	u_int16_t port;
+	uint16_t port;
 
 	/* get the port that is used to communicate with the ms */
 	host = this->ike_sa->get_my_host(this->ike_sa);

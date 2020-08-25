@@ -2,7 +2,7 @@
  * Copyright (C) 2013 Tobias Brunner
  * Copyright (C) 2009 Martin Willi
  * Copyright (C) 2001-2008 Andreas Steffen
- * Hochschule fuer Technik Rapperswil
+ * HSR Hochschule fuer Technik Rapperswil
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -61,7 +61,7 @@ static bool find_boundary(char* tag, chunk_t *line)
 
 	if (!present("-----", line) ||
 		!present(tag, line) ||
-		*line->ptr != ' ')
+		!line->len || *line->ptr != ' ')
 	{
 		return FALSE;
 	}
@@ -93,7 +93,7 @@ static status_t pem_decrypt(chunk_t *blob, encryption_algorithm_t alg,
 	chunk_t hash;
 	chunk_t decrypted;
 	chunk_t key = {alloca(key_size), key_size};
-	u_int8_t padding, *last_padding_pos, *first_padding_pos;
+	uint8_t padding, *last_padding_pos, *first_padding_pos;
 
 	/* build key from passphrase and IV */
 	hasher = lib->crypto->create_hasher(lib->crypto, HASH_MD5);
@@ -250,7 +250,7 @@ static status_t pem_to_bin(chunk_t *blob, bool *pgp)
 				{
 					continue;
 				}
-				if (match("Proc-Type", &name) && *value.ptr == '4')
+				if (match("Proc-Type", &name) && value.len && *value.ptr == '4')
 				{
 					encrypted = TRUE;
 				}
@@ -306,7 +306,7 @@ static status_t pem_to_bin(chunk_t *blob, bool *pgp)
 				}
 
 				/* check for PGP armor checksum */
-				if (*data.ptr == '=')
+				if (data.len && *data.ptr == '=')
 				{
 					*pgp = TRUE;
 					data.ptr++;

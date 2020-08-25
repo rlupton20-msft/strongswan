@@ -46,7 +46,7 @@ struct private_imc_agent_t {
 	/**
 	 * number of message types registered by IMC
 	 */
-	u_int32_t type_count;
+	uint32_t type_count;
 
 	/**
 	 * ID of IMC as assigned by TNCC
@@ -72,6 +72,11 @@ struct private_imc_agent_t {
 	 * rwlock to lock TNCC connection entries
 	 */
 	rwlock_t *connection_lock;
+
+	/**
+	 * Is the transport protocol PT-TLS?
+	 */
+	bool has_pt_tls;
 
 	/**
 	 * Inform a TNCC about the set of message types the IMC is able to receive
@@ -320,7 +325,7 @@ static char* get_str_attribute(private_imc_agent_t *this, TNC_ConnectionID id,
 /**
  * Read an UInt32 attribute
  */
-static u_int32_t get_uint_attribute(private_imc_agent_t *this, TNC_ConnectionID id,
+static uint32_t get_uint_attribute(private_imc_agent_t *this, TNC_ConnectionID id,
 									TNC_AttributeID attribute_id)
 {
 	TNC_UInt32 len;
@@ -341,7 +346,7 @@ METHOD(imc_agent_t, create_state, TNC_Result,
 	TNC_ConnectionID conn_id;
 	char *tnccs_p = NULL, *tnccs_v = NULL, *t_p = NULL, *t_v = NULL;
 	bool has_long = FALSE, has_excl = FALSE, has_soh = FALSE;
-	u_int32_t max_msg_len;
+	uint32_t max_msg_len;
 
 	conn_id = state->get_connection_id(state);
 	if (find_connection(this, conn_id))
@@ -371,6 +376,8 @@ METHOD(imc_agent_t, create_state, TNC_Result,
 			      has_long ? "+":"-", has_excl ? "+":"-", has_soh ? "+":"-");
 	DBG2(DBG_IMC, "  over %s %s with maximum PA-TNC message size of %u bytes",
 				  t_p ? t_p:"?", t_v ? t_v :"?", max_msg_len);
+
+	this->has_pt_tls = streq(t_p, "IF-T for TLS");
 
 	free(tnccs_p);
 	free(tnccs_v);
@@ -403,6 +410,7 @@ METHOD(imc_agent_t, change_state, TNC_Result,
 							   imc_state_t **state_p)
 {
 	imc_state_t *state;
+	TNC_ConnectionState old_state;
 
 	switch (new_state)
 	{
@@ -418,13 +426,20 @@ METHOD(imc_agent_t, change_state, TNC_Result,
 							  this->id, this->name, connection_id);
 				return TNC_RESULT_FATAL;
 			}
-			state->change_state(state, new_state);
+			old_state = state->change_state(state, new_state);
 			DBG2(DBG_IMC, "IMC %u \"%s\" changed state of Connection ID %u to '%N'",
 						  this->id, this->name, connection_id,
 						  TNC_Connection_State_names, new_state);
 			if (state_p)
 			{
 				*state_p = state;
+			}
+			if (new_state == TNC_CONNECTION_STATE_HANDSHAKE &&
+				old_state != TNC_CONNECTION_STATE_CREATE)
+			{
+				state->reset(state);
+				DBG2(DBG_IMC, "IMC %u \"%s\" reset state of Connection ID %u",
+							   this->id, this->name, connection_id);
 			}
 			break;
 		case TNC_CONNECTION_STATE_CREATE:
@@ -531,6 +546,12 @@ METHOD(imc_agent_t, get_non_fatal_attr_types, linked_list_t*,
 	return this->non_fatal_attr_types;
 }
 
+METHOD(imc_agent_t, has_pt_tls, bool,
+	private_imc_agent_t *this)
+{
+	return	this->has_pt_tls;
+}
+
 METHOD(imc_agent_t, destroy, void,
 	private_imc_agent_t *this)
 {
@@ -550,7 +571,7 @@ METHOD(imc_agent_t, destroy, void,
  * Described in header.
  */
 imc_agent_t *imc_agent_create(const char *name,
-							  pen_type_t *supported_types, u_int32_t type_count,
+							  pen_type_t *supported_types, uint32_t type_count,
 							  TNC_IMCID id, TNC_Version *actual_version)
 {
 	private_imc_agent_t *this;
@@ -575,6 +596,7 @@ imc_agent_t *imc_agent_create(const char *name,
 			.create_id_enumerator = _create_id_enumerator,
 			.add_non_fatal_attr_type = _add_non_fatal_attr_type,
 			.get_non_fatal_attr_types = _get_non_fatal_attr_types,
+			.has_pt_tls = _has_pt_tls,
 			.destroy = _destroy,
 		},
 		.name = name,

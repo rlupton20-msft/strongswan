@@ -1,8 +1,8 @@
 /*
- * Copyright (C) 2008-2013 Tobias Brunner
+ * Copyright (C) 2008-2019 Tobias Brunner
  * Copyright (C) 2005-2006 Martin Willi
  * Copyright (C) 2005 Jan Hutter
- * Hochschule fuer Technik Rapperswil
+ * HSR Hochschule fuer Technik Rapperswil
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -478,7 +478,7 @@ chunk_t chunk_to_hex(chunk_t chunk, char *buf, bool uppercase)
 }
 
 /**
- * convert a signle hex character to its binary value
+ * convert a single hex character to its binary value
  */
 static char hex2bin(char hex)
 {
@@ -504,7 +504,13 @@ chunk_t chunk_from_hex(chunk_t hex, char *buf)
 	u_char *ptr;
 	bool odd = FALSE;
 
-   /* subtract the number of optional ':' separation characters */
+	/* skip an optional 0x prefix */
+	if (hex.len > 1 && hex.ptr[1] == 'x' && hex.ptr[0] == '0')
+	{
+		hex = chunk_skip(hex, 2);
+	}
+
+	/* subtract the number of optional ':' separation characters */
 	len = hex.len;
 	ptr = hex.ptr;
 	for (i = 0; i < hex.len; i++)
@@ -637,7 +643,7 @@ chunk_t chunk_from_base64(chunk_t base64, char *buf)
 		outlen += 3;
 		for (j = 0; j < 4; j++)
 		{
-			if (*pos == '=')
+			if (*pos == '=' && outlen > 0)
 			{
 				outlen--;
 			}
@@ -746,6 +752,26 @@ bool chunk_increment(chunk_t chunk)
 	return TRUE;
 }
 
+/*
+ * Described in header
+ */
+chunk_t chunk_copy_pad(chunk_t dst, chunk_t src, u_char chr)
+{
+	if (dst.ptr)
+	{
+		if (dst.len > src.len)
+		{
+			memcpy(dst.ptr + dst.len - src.len, src.ptr, src.len);
+			memset(dst.ptr, chr, dst.len - src.len);
+		}
+		else
+		{
+			memcpy(dst.ptr, src.ptr + src.len - dst.len, dst.len);
+		}
+	}
+	return dst;
+}
+
 /**
  * Remove non-printable characters from a chunk.
  */
@@ -775,25 +801,25 @@ bool chunk_printable(chunk_t chunk, chunk_t *sane, char replace)
 /**
  * Helper functions for chunk_mac()
  */
-static inline u_int64_t sipget(u_char *in)
+static inline uint64_t sipget(u_char *in)
 {
-	u_int64_t v = 0;
+	uint64_t v = 0;
 	int i;
 
 	for (i = 0; i < 64; i += 8, ++in)
 	{
-		v |= ((u_int64_t)*in) << i;
+		v |= ((uint64_t)*in) << i;
 	}
 	return v;
 }
 
-static inline u_int64_t siprotate(u_int64_t v, int shift)
+static inline uint64_t siprotate(uint64_t v, int shift)
 {
         return (v << shift) | (v >> (64 - shift));
 }
 
-static inline void sipround(u_int64_t *v0, u_int64_t *v1, u_int64_t *v2,
-							u_int64_t *v3)
+static inline void sipround(uint64_t *v0, uint64_t *v1, uint64_t *v2,
+							uint64_t *v3)
 {
 	*v0 += *v1;
 	*v1 = siprotate(*v1, 13);
@@ -814,8 +840,8 @@ static inline void sipround(u_int64_t *v0, u_int64_t *v1, u_int64_t *v2,
 	*v3 ^= *v0;
 }
 
-static inline void sipcompress(u_int64_t *v0, u_int64_t *v1, u_int64_t *v2,
-							   u_int64_t *v3, u_int64_t m)
+static inline void sipcompress(uint64_t *v0, uint64_t *v1, uint64_t *v2,
+							   uint64_t *v3, uint64_t m)
 {
 	*v3 ^= m;
 	sipround(v0, v1, v2, v3);
@@ -823,28 +849,28 @@ static inline void sipcompress(u_int64_t *v0, u_int64_t *v1, u_int64_t *v2,
 	*v0 ^= m;
 }
 
-static inline u_int64_t siplast(size_t len, u_char *pos)
+static inline uint64_t siplast(size_t len, u_char *pos)
 {
-	u_int64_t b;
+	uint64_t b;
 	int rem = len & 7;
 
-	b = ((u_int64_t)len) << 56;
+	b = ((uint64_t)len) << 56;
 	switch (rem)
 	{
 		case 7:
-			b |= ((u_int64_t)pos[6]) << 48;
+			b |= ((uint64_t)pos[6]) << 48;
 		case 6:
-			b |= ((u_int64_t)pos[5]) << 40;
+			b |= ((uint64_t)pos[5]) << 40;
 		case 5:
-			b |= ((u_int64_t)pos[4]) << 32;
+			b |= ((uint64_t)pos[4]) << 32;
 		case 4:
-			b |= ((u_int64_t)pos[3]) << 24;
+			b |= ((uint64_t)pos[3]) << 24;
 		case 3:
-			b |= ((u_int64_t)pos[2]) << 16;
+			b |= ((uint64_t)pos[2]) << 16;
 		case 2:
-			b |= ((u_int64_t)pos[1]) <<  8;
+			b |= ((uint64_t)pos[1]) <<  8;
 		case 1:
-			b |= ((u_int64_t)pos[0]);
+			b |= ((uint64_t)pos[0]);
 			break;
 		case 0:
 			break;
@@ -853,11 +879,11 @@ static inline u_int64_t siplast(size_t len, u_char *pos)
 }
 
 /**
- * Caculate SipHash-2-4 with an optional first block given as argument.
+ * Calculate SipHash-2-4 with an optional first block given as argument.
  */
-static u_int64_t chunk_mac_inc(chunk_t chunk, u_char *key, u_int64_t m)
+static uint64_t chunk_mac_inc(chunk_t chunk, u_char *key, uint64_t m)
 {
-	u_int64_t v0, v1, v2, v3, k0, k1;
+	uint64_t v0, v1, v2, v3, k0, k1;
 	size_t len = chunk.len;
 	u_char *pos = chunk.ptr, *end;
 
@@ -896,7 +922,7 @@ static u_int64_t chunk_mac_inc(chunk_t chunk, u_char *key, u_int64_t m)
 /**
  * Described in header.
  */
-u_int64_t chunk_mac(chunk_t chunk, u_char *key)
+uint64_t chunk_mac(chunk_t chunk, u_char *key)
 {
 	return chunk_mac_inc(chunk, key, 0);
 }
@@ -904,7 +930,7 @@ u_int64_t chunk_mac(chunk_t chunk, u_char *key)
 /**
  * Secret key allocated randomly with chunk_hash_seed().
  */
-static u_char key[16] = {};
+static u_char hash_key[16] = {};
 
 /**
  * Static key used in case predictable hash values are required.
@@ -931,9 +957,9 @@ void chunk_hash_seed()
 	fd = open("/dev/urandom", O_RDONLY);
 	if (fd >= 0)
 	{
-		while (done < sizeof(key))
+		while (done < sizeof(hash_key))
 		{
-			len = read(fd, key + done, sizeof(key) - done);
+			len = read(fd, hash_key + done, sizeof(hash_key) - done);
 			if (len < 0)
 			{
 				break;
@@ -943,12 +969,12 @@ void chunk_hash_seed()
 		close(fd);
 	}
 	/* on error we use random() to generate the key (better than nothing) */
-	if (done < sizeof(key))
+	if (done < sizeof(hash_key))
 	{
 		srandom(time(NULL) + getpid());
-		for (; done < sizeof(key); done++)
+		for (; done < sizeof(hash_key); done++)
 		{
-			key[done] = (u_char)random();
+			hash_key[done] = (u_char)random();
 		}
 	}
 	seeded = TRUE;
@@ -957,32 +983,32 @@ void chunk_hash_seed()
 /**
  * Described in header.
  */
-u_int32_t chunk_hash_inc(chunk_t chunk, u_int32_t hash)
+uint32_t chunk_hash_inc(chunk_t chunk, uint32_t hash)
 {
 	/* we could use a mac of the previous hash, but this is faster */
-	return chunk_mac_inc(chunk, key, ((u_int64_t)hash) << 32 | hash);
+	return chunk_mac_inc(chunk, hash_key, ((uint64_t)hash) << 32 | hash);
 }
 
 /**
  * Described in header.
  */
-u_int32_t chunk_hash(chunk_t chunk)
+uint32_t chunk_hash(chunk_t chunk)
 {
-	return chunk_mac(chunk, key);
+	return chunk_mac(chunk, hash_key);
 }
 
 /**
  * Described in header.
  */
-u_int32_t chunk_hash_static_inc(chunk_t chunk, u_int32_t hash)
+uint32_t chunk_hash_static_inc(chunk_t chunk, uint32_t hash)
 {	/* we could use a mac of the previous hash, but this is faster */
-	return chunk_mac_inc(chunk, static_key, ((u_int64_t)hash) << 32 | hash);
+	return chunk_mac_inc(chunk, static_key, ((uint64_t)hash) << 32 | hash);
 }
 
 /**
  * Described in header.
  */
-u_int32_t chunk_hash_static(chunk_t chunk)
+uint32_t chunk_hash_static(chunk_t chunk)
 {
 	return chunk_mac(chunk, static_key);
 }
@@ -990,9 +1016,9 @@ u_int32_t chunk_hash_static(chunk_t chunk)
 /**
  * Described in header.
  */
-u_int16_t chunk_internet_checksum_inc(chunk_t data, u_int16_t checksum)
+uint16_t chunk_internet_checksum_inc(chunk_t data, uint16_t checksum)
 {
-	u_int32_t sum = ntohs((u_int16_t)~checksum);
+	uint32_t sum = ntohs((uint16_t)~checksum);
 
 	while (data.len > 1)
 	{
@@ -1001,7 +1027,7 @@ u_int16_t chunk_internet_checksum_inc(chunk_t data, u_int16_t checksum)
 	}
 	if (data.len)
 	{
-		sum += (u_int16_t)*data.ptr << 8;
+		sum += (uint16_t)*data.ptr << 8;
 	}
 	while (sum >> 16)
 	{
@@ -1013,7 +1039,7 @@ u_int16_t chunk_internet_checksum_inc(chunk_t data, u_int16_t checksum)
 /**
  * Described in header.
  */
-u_int16_t chunk_internet_checksum(chunk_t data)
+uint16_t chunk_internet_checksum(chunk_t data)
 {
 	return chunk_internet_checksum_inc(data, 0xffff);
 }

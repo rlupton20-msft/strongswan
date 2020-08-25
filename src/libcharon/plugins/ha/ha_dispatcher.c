@@ -1,6 +1,6 @@
 /*
  * Copyright (C) 2008 Martin Willi
- * Hochschule fuer Technik Rapperswil
+ * HSR Hochschule fuer Technik Rapperswil
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -131,13 +131,14 @@ static void process_ike_add(private_ha_dispatcher_t *this, ha_message_t *message
 	enumerator_t *enumerator;
 	ike_sa_t *ike_sa = NULL, *old_sa = NULL;
 	ike_version_t version = IKEV2;
-	u_int16_t encr = 0, len = 0, integ = 0, prf = 0, old_prf = PRF_UNDEFINED;
-	u_int16_t dh_grp = 0;
+	uint16_t encr = 0, len = 0, integ = 0, prf = 0, old_prf = PRF_UNDEFINED;
+	uint16_t dh_grp = 0;
 	chunk_t nonce_i = chunk_empty, nonce_r = chunk_empty;
 	chunk_t secret = chunk_empty, old_skd = chunk_empty;
 	chunk_t dh_local = chunk_empty, dh_remote = chunk_empty, psk = chunk_empty;
 	host_t *other = NULL;
 	bool ok = FALSE;
+	auth_method_t method = AUTH_RSA;
 
 	enumerator = message->create_attribute_enumerator(message);
 	while (enumerator->enumerate(enumerator, &attribute, &value))
@@ -197,6 +198,8 @@ static void process_ike_add(private_ha_dispatcher_t *this, ha_message_t *message
 			case HA_ALG_DH:
 				dh_grp = value.u16;
 				break;
+			case HA_AUTH_METHOD:
+				method = value.u16;
 			default:
 				break;
 		}
@@ -238,7 +241,6 @@ static void process_ike_add(private_ha_dispatcher_t *this, ha_message_t *message
 		{
 			keymat_v1_t *keymat_v1 = (keymat_v1_t*)ike_sa->get_keymat(ike_sa);
 			shared_key_t *shared = NULL;
-			auth_method_t method = AUTH_RSA;
 
 			if (psk.len)
 			{
@@ -486,7 +488,7 @@ static void process_ike_mid(private_ha_dispatcher_t *this,
 	ha_message_value_t value;
 	enumerator_t *enumerator;
 	ike_sa_t *ike_sa = NULL;
-	u_int32_t mid = 0;
+	uint32_t mid = 0;
 
 	enumerator = message->create_attribute_enumerator(message);
 	while (enumerator->enumerate(enumerator, &attribute, &value))
@@ -652,11 +654,11 @@ static void process_child_add(private_ha_dispatcher_t *this,
 	child_sa_t *child_sa;
 	proposal_t *proposal;
 	bool initiator = FALSE, failed = FALSE, ok = FALSE;
-	u_int32_t inbound_spi = 0, outbound_spi = 0;
-	u_int16_t inbound_cpi = 0, outbound_cpi = 0;
-	u_int8_t mode = MODE_TUNNEL, ipcomp = 0;
-	u_int16_t encr = 0, integ = 0, len = 0, dh_grp = 0;
-	u_int16_t esn = NO_EXT_SEQ_NUMBERS;
+	uint32_t inbound_spi = 0, outbound_spi = 0;
+	uint16_t inbound_cpi = 0, outbound_cpi = 0;
+	uint8_t mode = MODE_TUNNEL, ipcomp = 0;
+	uint16_t encr = 0, integ = 0, len = 0, dh_grp = 0;
+	uint16_t esn = NO_EXT_SEQ_NUMBERS;
 	u_int seg_i, seg_o;
 	chunk_t nonce_i = chunk_empty, nonce_r = chunk_empty, secret = chunk_empty;
 	chunk_t encr_i, integ_i, encr_r, integ_r;
@@ -741,10 +743,11 @@ static void process_child_add(private_ha_dispatcher_t *this,
 		return;
 	}
 
+	child_sa_create_t data = {
+		.encap = ike_sa->has_condition(ike_sa, COND_NAT_ANY),
+	};
 	child_sa = child_sa_create(ike_sa->get_my_host(ike_sa),
-							   ike_sa->get_other_host(ike_sa), config, 0,
-							   ike_sa->has_condition(ike_sa, COND_NAT_ANY),
-							   0, 0);
+							   ike_sa->get_other_host(ike_sa), config, &data);
 	child_sa->set_mode(child_sa, mode);
 	child_sa->set_protocol(child_sa, PROTO_ESP);
 	child_sa->set_ipcomp(child_sa, ipcomp);
@@ -777,7 +780,7 @@ static void process_child_add(private_ha_dispatcher_t *this,
 	if (ike_sa->get_version(ike_sa) == IKEV1)
 	{
 		keymat_v1_t *keymat_v1 = (keymat_v1_t*)ike_sa->get_keymat(ike_sa);
-		u_int32_t spi_i, spi_r;
+		uint32_t spi_i, spi_r;
 
 		spi_i = initiator ? inbound_spi : outbound_spi;
 		spi_r = initiator ? outbound_spi : inbound_spi;
@@ -818,14 +821,14 @@ static void process_child_add(private_ha_dispatcher_t *this,
 	}
 	enumerator->destroy(enumerator);
 
+	child_sa->set_policies(child_sa, local_ts, remote_ts);
+
 	if (initiator)
 	{
 		if (child_sa->install(child_sa, encr_r, integ_r, inbound_spi,
-							  inbound_cpi, initiator, TRUE, TRUE,
-							  local_ts, remote_ts) != SUCCESS ||
+							  inbound_cpi, initiator, TRUE, TRUE) != SUCCESS ||
 			child_sa->install(child_sa, encr_i, integ_i, outbound_spi,
-							  outbound_cpi, initiator, FALSE, TRUE,
-							  local_ts, remote_ts) != SUCCESS)
+							  outbound_cpi, initiator, FALSE, TRUE) != SUCCESS)
 		{
 			failed = TRUE;
 		}
@@ -833,11 +836,9 @@ static void process_child_add(private_ha_dispatcher_t *this,
 	else
 	{
 		if (child_sa->install(child_sa, encr_i, integ_i, inbound_spi,
-							  inbound_cpi, initiator, TRUE, TRUE,
-							  local_ts, remote_ts) != SUCCESS ||
+							  inbound_cpi, initiator, TRUE, TRUE) != SUCCESS ||
 			child_sa->install(child_sa, encr_r, integ_r, outbound_spi,
-							  outbound_cpi, initiator, FALSE, TRUE,
-							  local_ts, remote_ts) != SUCCESS)
+							  outbound_cpi, initiator, FALSE, TRUE) != SUCCESS)
 		{
 			failed = TRUE;
 		}
@@ -868,7 +869,7 @@ static void process_child_add(private_ha_dispatcher_t *this,
 		child_sa->get_unique_id(child_sa), local_ts, remote_ts,
 		seg_i, this->segments->is_active(this->segments, seg_i) ? "*" : "",
 		seg_o, this->segments->is_active(this->segments, seg_o) ? "*" : "");
-	child_sa->add_policies(child_sa, local_ts, remote_ts);
+	child_sa->install_policies(child_sa);
 	local_ts->destroy_offset(local_ts, offsetof(traffic_selector_t, destroy));
 	remote_ts->destroy_offset(remote_ts, offsetof(traffic_selector_t, destroy));
 
@@ -889,7 +890,7 @@ static void process_child_delete(private_ha_dispatcher_t *this,
 	enumerator_t *enumerator;
 	ike_sa_t *ike_sa = NULL;
 	child_sa_t *child_sa;
-	u_int32_t spi = 0;
+	uint32_t spi = 0;
 
 	enumerator = message->create_attribute_enumerator(message);
 	while (enumerator->enumerate(enumerator, &attribute, &value))

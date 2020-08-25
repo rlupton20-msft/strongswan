@@ -3,7 +3,7 @@
  * Copyright (C) 2005-2009 Martin Willi
  * Copyright (C) 2006 Daniel Roethlisberger
  * Copyright (C) 2005 Jan Hutter
- * Hochschule fuer Technik Rapperswil
+ * HSR Hochschule fuer Technik Rapperswil
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -49,56 +49,56 @@ struct message_t {
 	 *
 	 * @param major_version	major version to set
 	 */
-	void (*set_major_version) (message_t *this, u_int8_t major_version);
+	void (*set_major_version) (message_t *this, uint8_t major_version);
 
 	/**
 	 * Gets the IKE major version of the message.
 	 *
 	 * @return				major version of the message
 	 */
-	u_int8_t (*get_major_version) (message_t *this);
+	uint8_t (*get_major_version) (message_t *this);
 
 	/**
 	 * Sets the IKE minor version of the message.
 	 *
 	 * @param minor_version	minor version to set
 	 */
-	void (*set_minor_version) (message_t *this, u_int8_t minor_version);
+	void (*set_minor_version) (message_t *this, uint8_t minor_version);
 
 	/**
 	 * Gets the IKE minor version of the message.
 	 *
 	 * @return				minor version of the message
 	 */
-	u_int8_t (*get_minor_version) (message_t *this);
+	uint8_t (*get_minor_version) (message_t *this);
 
 	/**
 	 * Sets the Message ID of the message.
 	 *
 	 * @param message_id	message_id to set
 	 */
-	void (*set_message_id) (message_t *this, u_int32_t message_id);
+	void (*set_message_id) (message_t *this, uint32_t message_id);
 
 	/**
 	 * Gets the Message ID of the message.
 	 *
 	 * @return				message_id type of the message
 	 */
-	u_int32_t (*get_message_id) (message_t *this);
+	uint32_t (*get_message_id) (message_t *this);
 
 	/**
 	 * Gets the initiator SPI of the message.
 	 *
 	 * @return				initiator spi of the message
 	 */
-	u_int64_t (*get_initiator_spi) (message_t *this);
+	uint64_t (*get_initiator_spi) (message_t *this);
 
 	/**
 	 * Gets the responder SPI of the message.
 	 *
 	 * @return				responder spi of the message
 	 */
-	u_int64_t (*get_responder_spi) (message_t *this);
+	uint64_t (*get_responder_spi) (message_t *this);
 
 	/**
 	 * Sets the IKE_SA ID of the message.
@@ -312,7 +312,7 @@ struct message_t {
 	status_t (*add_fragment)(message_t *this, message_t *fragment);
 
 	/**
-	 * Gets the source host informations.
+	 * Gets the source host information.
 	 *
 	 * @warning Returned host_t object is not getting cloned,
 	 * do not destroy nor modify.
@@ -322,7 +322,7 @@ struct message_t {
 	host_t * (*get_source) (message_t *this);
 
 	/**
-	 * Sets the source host informations.
+	 * Sets the source host information.
 	 *
 	 * @warning host_t object is not getting cloned and gets destroyed by
 	 *			message_t.destroy or next call of message_t.set_source.
@@ -332,7 +332,7 @@ struct message_t {
 	void (*set_source) (message_t *this, host_t *host);
 
 	/**
-	 * Gets the destination host informations.
+	 * Gets the destination host information.
 	 *
 	 * @warning Returned host_t object is not getting cloned,
 	 * do not destroy nor modify.
@@ -342,7 +342,7 @@ struct message_t {
 	host_t * (*get_destination) (message_t *this);
 
 	/**
-	 * Sets the destination host informations.
+	 * Sets the destination host information.
 	 *
 	 * @warning host_t object is not getting cloned and gets destroyed by
 	 *			message_t.destroy or next call of message_t.set_destination.

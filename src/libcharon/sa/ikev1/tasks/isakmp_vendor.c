@@ -1,7 +1,7 @@
 /*
  * Copyright (C) 2012-2013 Tobias Brunner
  * Copyright (C) 2009 Martin Willi
- * Hochschule fuer Technik Rapperswil
+ * HSR Hochschule fuer Technik Rapperswil
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -59,7 +59,7 @@ struct private_isakmp_vendor_t {
 	ike_sa_t *ike_sa;
 
 	/**
-	 * Are we the inititator of this task
+	 * Are we the initiator of this task
 	 */
 	bool initiator;
 
@@ -102,6 +102,7 @@ static struct {
 	{ "DPD", EXT_DPD, TRUE, 16,
 	  "\xaf\xca\xd7\x13\x68\xa1\xf1\xc9\x6b\x86\x96\xfc\x77\x57\x01\x00"},
 
+	/* CISCO-UNITY, similar to DPD the last two bytes indicate the version */
 	{ "Cisco Unity", EXT_CISCO_UNITY, FALSE, 16,
 	  "\x12\xf5\xf2\x8c\x45\x71\x68\xa9\x70\x2d\x9f\xe2\x74\xcc\x01\x00"},
 
@@ -170,7 +171,7 @@ static struct {
  * for fragmentation of base ISAKMP messages (Cisco adds that and thus sends
  * 0xc0000000)
  */
-static const u_int32_t fragmentation_ike = 0x80000000;
+static const uint32_t fragmentation_ike = 0x80000000;
 
 static bool is_known_vid(chunk_t data, int i)
 {
@@ -190,6 +191,8 @@ static bool is_known_vid(chunk_t data, int i)
 			break;
 		case EXT_MS_WINDOWS:
 			return data.len == 20 && memeq(data.ptr, vendor_ids[i].id, 16);
+		case EXT_CISCO_UNITY:
+			return data.len == 16 && memeq(data.ptr, vendor_ids[i].id, 14);
 		default:
 			return chunk_equals(data, chunk_create(vendor_ids[i].id,
 												   vendor_ids[i].len));

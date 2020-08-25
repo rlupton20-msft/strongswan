@@ -1,6 +1,6 @@
 /*
  * Copyright (C) 2013 Tobias Brunner
- * Hochschule fuer Technik Rapperswil
+ * HSR Hochschule fuer Technik Rapperswil
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -110,7 +110,7 @@ static bool add_key(private_pkcs12_t *this, EVP_PKEY *private)
 	{	/* no private key is ok */
 		return TRUE;
 	}
-	switch (EVP_PKEY_type(private->type))
+	switch (EVP_PKEY_base_id(private))
 	{
 		case EVP_PKEY_RSA:
 			type = KEY_RSA;

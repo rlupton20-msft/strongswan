@@ -1,7 +1,7 @@
 /*
  * Copyright (C) 2008-2014 Tobias Brunner
  * Copyright (C) 2005-2008 Martin Willi
- * Hochschule fuer Technik Rapperswil
+ * HSR Hochschule fuer Technik Rapperswil
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -20,9 +20,9 @@
 /**
  * Described in header.
  */
-void* malloc_align(size_t size, u_int8_t align)
+void* malloc_align(size_t size, uint8_t align)
 {
-	u_int8_t pad;
+	uint8_t pad;
 	void *ptr;
 
 	if (align == 0)
@@ -46,7 +46,7 @@ void* malloc_align(size_t size, u_int8_t align)
  */
 void free_align(void *ptr)
 {
-	u_int8_t pad, *pos;
+	uint8_t pad, *pos;
 
 	pos = ptr - 1;
 	/* verify padding to check any corruption */

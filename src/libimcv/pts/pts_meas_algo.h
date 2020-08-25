@@ -47,11 +47,11 @@ extern enum_name_t *pts_meas_algorithm_names;
  * see section 3.8.5 of PTS Protocol: Binding to TNC IF-M Specification
  *
  *					   1
- *   0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 
+ *   0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5
  *  +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
  *  |1|2|3|R|R|R|R|R|R|R|R|R|R|R|R|R|
  *  +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
- *  
+ *
  */
 
 /**
@@ -94,6 +94,14 @@ pts_meas_algorithms_t pts_meas_algo_select(pts_meas_algorithms_t supported_algos
  * @return				libstrongswan hash algorithm type
  */
 hash_algorithm_t pts_meas_algo_to_hash(pts_meas_algorithms_t algorithm);
+
+/**
+ * Convert hash_algorithm_t to pts_meas_algorithms_t
+ *
+ * @param algorithm		PTS measurement algorithm type
+ * @return				libstrongswan hash algorithm type
+ */
+pts_meas_algorithms_t pts_meas_algo_from_hash(hash_algorithm_t algorithm);
 
 /**
  * Return the hash size of a pts_meas_algorithm

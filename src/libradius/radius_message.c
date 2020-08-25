@@ -1,6 +1,6 @@
 /*
  * Copyright (C) 2009 Martin Willi
- * Hochschule fuer Technik Rapperswil
+ * HSR Hochschule fuer Technik Rapperswil
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -28,15 +28,15 @@ typedef struct rattr_t rattr_t;
  */
 struct rmsg_t {
 	/** message code, radius_message_code_t */
-	u_int8_t code;
+	uint8_t code;
 	/** message identifier */
-	u_int8_t identifier;
+	uint8_t identifier;
 	/** length of Code, Identifier, Length, Authenticator and Attributes */
-	u_int16_t length;
+	uint16_t length;
 	/** message authenticator, MD5 hash */
-	u_int8_t authenticator[HASH_SIZE_MD5];
+	uint8_t authenticator[HASH_SIZE_MD5];
 	/** variable list of packed attributes */
-	u_int8_t attributes[];
+	uint8_t attributes[];
 } __attribute__((packed));
 
 /**
@@ -44,11 +44,11 @@ struct rmsg_t {
  */
 struct rattr_t {
 	/** attribute type, radius_attribute_type_t */
-	u_int8_t type;
+	uint8_t type;
 	/** length of the attriubte, including the Type, Length and Value fields */
-	u_int8_t length;
+	uint8_t length;
 	/** variable length attribute value */
-	u_int8_t value[];
+	uint8_t value[];
 } __attribute__((packed));
 
 /**
@@ -244,8 +244,12 @@ typedef struct {
 } attribute_enumerator_t;
 
 METHOD(enumerator_t, attribute_enumerate, bool,
-	attribute_enumerator_t *this, int *type, chunk_t *data)
+	attribute_enumerator_t *this, va_list args)
 {
+	chunk_t *data;
+	int *type;
+
+	VA_ARGS_VGET(args, type, data);
 	if (this->left == 0)
 	{
 		return FALSE;
@@ -275,7 +279,8 @@ METHOD(radius_message_t, create_enumerator, enumerator_t*,
 	}
 	INIT(e,
 		.public = {
-			.enumerate = (void*)_attribute_enumerate,
+			.enumerate = enumerator_enumerate_default,
+			.venumerate = _attribute_enumerate,
 			.destroy = (void*)free,
 		},
 		.next = (rattr_t*)this->msg->attributes,
@@ -293,17 +298,19 @@ typedef struct {
 	/** inner attribute enumerator */
 	enumerator_t *inner;
 	/** current vendor ID */
-	u_int32_t vendor;
+	uint32_t vendor;
 	/** reader for current vendor ID */
 	bio_reader_t *reader;
 } vendor_enumerator_t;
 
 METHOD(enumerator_t, vendor_enumerate, bool,
-	vendor_enumerator_t *this, int *vendor, int *type, chunk_t *data)
+	vendor_enumerator_t *this, va_list args)
 {
-	chunk_t inner_data;
-	int inner_type;
-	u_int8_t type8, len;
+	chunk_t inner_data, *data;
+	int inner_type, *vendor, *type;
+	uint8_t type8, len;
+
+	VA_ARGS_VGET(args, vendor, type, data);
 
 	while (TRUE)
 	{
@@ -354,7 +361,8 @@ METHOD(radius_message_t, create_vendor_enumerator, enumerator_t*,
 
 	INIT(e,
 		.public = {
-			.enumerate = (void*)_vendor_enumerate,
+			.enumerate = enumerator_enumerate_default,
+			.venumerate = _vendor_enumerate,
 			.destroy = _vendor_destroy,
 		},
 		.inner = create_enumerator(this),
@@ -449,7 +457,7 @@ METHOD(radius_message_t, crypt, bool,
 }
 
 METHOD(radius_message_t, sign, bool,
-	private_radius_message_t *this, u_int8_t *req_auth, chunk_t secret,
+	private_radius_message_t *this, uint8_t *req_auth, chunk_t secret,
 	hasher_t *hasher, signer_t *signer, rng_t *rng, bool msg_auth)
 {
 	if (rng)
@@ -516,7 +524,7 @@ METHOD(radius_message_t, sign, bool,
 }
 
 METHOD(radius_message_t, verify, bool,
-	private_radius_message_t *this, u_int8_t *req_auth, chunk_t secret,
+	private_radius_message_t *this, uint8_t *req_auth, chunk_t secret,
 	hasher_t *hasher, signer_t *signer)
 {
 	char buf[HASH_SIZE_MD5], res_auth[HASH_SIZE_MD5];
@@ -606,19 +614,19 @@ METHOD(radius_message_t, get_code, radius_message_code_t,
 	return this->msg->code;
 }
 
-METHOD(radius_message_t, get_identifier, u_int8_t,
+METHOD(radius_message_t, get_identifier, uint8_t,
 	private_radius_message_t *this)
 {
 	return this->msg->identifier;
 }
 
 METHOD(radius_message_t, set_identifier, void,
-	private_radius_message_t *this, u_int8_t identifier)
+	private_radius_message_t *this, uint8_t identifier)
 {
 	this->msg->identifier = identifier;
 }
 
-METHOD(radius_message_t, get_authenticator, u_int8_t*,
+METHOD(radius_message_t, get_authenticator, uint8_t*,
 	private_radius_message_t *this)
 {
 	return this->msg->authenticator;

@@ -1,6 +1,6 @@
 /*
  * Copyright (C) 2015 Tobias Brunner
- * Hochschule fuer Technik Rapperswil
+ * HSR Hochschule fuer Technik Rapperswil
  *
  * Copyright (C) 2015 Martin Willi
  * Copyright (C) 2015 revosec AG
@@ -25,6 +25,11 @@ static void verify(const char *str, const char *alt, traffic_selector_t *ts)
 {
 	char buf[512];
 
+	if (!str)
+	{
+		ck_assert_msg(!ts, "traffic selector not null: %R", ts);
+		return;
+	}
 	snprintf(buf, sizeof(buf), "%R", ts);
 	DESTROY_IF(ts);
 	if (!streq(buf, str) && (!alt || !streq(buf, alt)))
@@ -48,12 +53,14 @@ START_TEST(test_create_from_string)
 	verify("fec1::1..fec1::ffff:ffff:ffff:ffff", NULL,
 		traffic_selector_create_from_string(0, TS_IPV6_ADDR_RANGE,
 							"fec1::1", 0, "fec1::ffff:ffff:ffff:ffff", 65535));
-
-	ck_assert(!traffic_selector_create_from_string(IPPROTO_TCP, 0,
+	verify(NULL, NULL,
+		traffic_selector_create_from_string(IPPROTO_TCP, 0,
 							"10.1.0.0", 80, "10.1.255.255", 80));
-	ck_assert(!traffic_selector_create_from_string(IPPROTO_TCP, TS_IPV4_ADDR_RANGE,
+	verify(NULL, NULL,
+		traffic_selector_create_from_string(IPPROTO_TCP, TS_IPV4_ADDR_RANGE,
 							"a.b.c.d", 80, "10.1.255.255", 80));
-	ck_assert(!traffic_selector_create_from_string(IPPROTO_TCP, TS_IPV4_ADDR_RANGE,
+	verify(NULL, NULL,
+		traffic_selector_create_from_string(IPPROTO_TCP, TS_IPV4_ADDR_RANGE,
 							"10.1.0.0", 80, "a.b.c.d", 80));
 }
 END_TEST
@@ -62,13 +69,20 @@ START_TEST(test_create_from_cidr)
 {
 	verify("10.1.0.0/16", NULL,
 		traffic_selector_create_from_cidr("10.1.0.0/16", 0, 0, 65535));
+	verify("10.1.0.1/32[udp]", "10.1.0.1/32[17]",
+		traffic_selector_create_from_cidr("10.1.0.1/32", IPPROTO_UDP,
+										  0, 65535));
+	verify("10.1.0.1/32[0/domain]", "10.1.0.1/32[0/53]",
+		traffic_selector_create_from_cidr("10.1.0.1/32", 0,
+										  53, 53));
 	verify("10.1.0.1/32[udp/1234-1235]", "10.1.0.1/32[17/1234-1235]",
 		traffic_selector_create_from_cidr("10.1.0.1/32", IPPROTO_UDP,
 										  1234, 1235));
-	verify("10.1.0.0/16[OPAQUE]", NULL,
+	verify("10.1.0.0/16[0/OPAQUE]", NULL,
 		traffic_selector_create_from_cidr("10.1.0.0/16", 0, 65535, 0));
 
-	ck_assert(!traffic_selector_create_from_cidr("a.b.c.d/16", 0, 0, 65535));
+	verify(NULL, NULL,
+		traffic_selector_create_from_cidr("a.b.c.d/16", 0, 0, 65535));
 }
 END_TEST
 
@@ -78,14 +92,20 @@ START_TEST(test_create_from_bytes)
 		traffic_selector_create_from_bytes(0, TS_IPV4_ADDR_RANGE,
 			chunk_from_chars(0x0a,0x01,0x00,0x00), 0,
 			chunk_from_chars(0x0a,0x01,0xff,0xff), 65535));
-
-	ck_assert(!traffic_selector_create_from_bytes(0, TS_IPV4_ADDR_RANGE,
+	verify(NULL, NULL,
+		traffic_selector_create_from_bytes(0, TS_IPV4_ADDR_RANGE,
+			chunk_from_chars(0x0a,0x01,0x00,0x00), 0,
+			chunk_from_chars(0x0a,0x01,0xff,0xff,0xff), 65535));
+	verify(NULL, NULL,
+		traffic_selector_create_from_bytes(0, TS_IPV4_ADDR_RANGE,
 			chunk_empty, 0,
 			chunk_empty, 65535));
-	ck_assert(!traffic_selector_create_from_bytes(0, TS_IPV6_ADDR_RANGE,
+	verify(NULL, NULL,
+		traffic_selector_create_from_bytes(0, TS_IPV6_ADDR_RANGE,
 			chunk_from_chars(0x0a,0x01,0x00,0x00), 0,
 			chunk_from_chars(0x0a,0x01,0xff,0xff), 65535));
-	ck_assert(!traffic_selector_create_from_bytes(0, 0,
+	verify(NULL, NULL,
+		traffic_selector_create_from_bytes(0, 0,
 			chunk_from_chars(0x0a,0x01,0x00,0x00), 0,
 			chunk_from_chars(0x0a,0x01,0xff,0xff), 65535));
 }
@@ -117,6 +137,7 @@ struct {
 	{ "128.0.0.0/4",	TS_IPV4_ADDR_RANGE,	chunk_from_chars(0x04,0x80),				},
 	{ "172.16.0.0/12",	TS_IPV4_ADDR_RANGE,	chunk_from_chars(0x04,0xac,0x10),			},
 	{ "0.0.0.0/0",		TS_IPV4_ADDR_RANGE,	chunk_from_chars(0x00),						},
+	{ NULL,				0,					chunk_from_chars(0x00),						},
 	/* FIXME: not a correct encoding, so we might want to fail here */
 	{ "0.0.0.0/0",		TS_IPV4_ADDR_RANGE,	{NULL, 0},									},
 	{ "2001:0:2::/48",	TS_IPV6_ADDR_RANGE,	chunk_from_chars(0x00,0x20,0x01,0x00,0x00,0x00,0x02),},
@@ -198,7 +219,7 @@ struct {
 	char *from;
 	char *to;
 	char *net;
-	u_int8_t mask;
+	uint8_t mask;
 	bool exact;
 } to_subnet_tests[] = {
 	{ TS_IPV4_ADDR_RANGE,	"10.0.0.1",	"10.0.0.1",			"10.0.0.1",	32,	TRUE	},
@@ -218,7 +239,7 @@ START_TEST(test_to_subnet)
 {
 	traffic_selector_t *ts;
 	host_t *net, *exp_net;
-	u_int8_t mask;
+	uint8_t mask;
 
 	ts = traffic_selector_create_from_string(0, to_subnet_tests[_i].type,
 					to_subnet_tests[_i].from, 0, to_subnet_tests[_i].to, 0);
@@ -234,9 +255,9 @@ END_TEST
 
 struct {
 	char *cidr;
-	u_int16_t from_port;
-	u_int16_t to_port;
-	u_int16_t port;
+	uint16_t from_port;
+	uint16_t to_port;
+	uint16_t port;
 } to_subnet_port_tests[] = {
 	{ "10.0.0.0/8",		0,		0,		0	},
 	{ "10.0.0.1/32",	80,		80,		80	},
@@ -252,7 +273,7 @@ START_TEST(test_to_subnet_port)
 {
 	traffic_selector_t *ts;
 	host_t *net, *exp_net;
-	u_int8_t mask;
+	uint8_t mask;
 	int exp_mask;
 
 	ts = traffic_selector_create_from_cidr(to_subnet_port_tests[_i].cidr, 0,
@@ -411,6 +432,7 @@ struct {
 	{ "0.0.0.0/0",		"fec2::1",				FALSE },
 	{ "::/0",			"1.2.3.4",				FALSE },
 	{ "10.0.0.0/16",	"10.1.0.0",				FALSE },
+	{ "10.1.0.0/16",	"10.0.255.255",			FALSE },
 	{ "fec2::/64",		"fec2:0:0:1::afaf",		FALSE },
 };
 
@@ -431,9 +453,9 @@ struct {
 	bool contained;
 	struct {
 		char *net;
-		u_int8_t proto;
-		u_int16_t from_port;
-		u_int16_t to_port;
+		uint8_t proto;
+		uint16_t from_port;
+		uint16_t to_port;
 	} a, b;
 } is_contained_in_tests[] = {
 	{  TRUE,  { "10.0.0.0/16", 0, 0, 65535 },	{ "10.0.0.0/16", 0, 0, 65535 },	},
@@ -469,6 +491,7 @@ struct {
 } is_host_tests[] = {
 	{ "0.0.0.0/0",		"192.168.1.2",	FALSE, FALSE },
 	{ "::/0",			"fec2::1",		FALSE, FALSE },
+	{ "192.168.1.0/24",	"192.168.1.0",	FALSE, FALSE },
 	{ "192.168.1.2/32",	"192.168.1.2",	TRUE,  TRUE },
 	{ "192.168.1.2/32",	"192.168.1.1",	FALSE, TRUE },
 	{ "192.168.1.2/32",	"fec2::1",		FALSE, TRUE },
@@ -511,16 +534,24 @@ struct {
 	char *host;
 	char *after;
 } set_address_tests[] = {
-	{ "0.0.0.0/0",		"192.168.1.2",	"0.0.0.0/0" },
-	{ "::/0",			"fec2::1",		"::/0" },
+	{ "0.0.0.0/0",		"192.168.1.2",	"192.168.1.2/32" },
+	{ "::/0",			"fec2::1",		"fec2::1/128" },
 	{ "192.168.1.2/32",	"192.168.1.1",	"192.168.1.1/32" },
+	{ "192.168.1.0/24",	"192.168.1.1",	"192.168.1.1/32" },
 	{ "192.168.1.2/32",	"fec2::1",		"fec2::1/128" },
+	{ "192.168.1.0/24",	"fec2::1",		"fec2::1/128" },
 	{ "192.168.1.2/32",	"%any",			"0.0.0.0/0" },
+	{ "192.168.1.0/24",	"%any",			"0.0.0.0/0" },
 	{ "192.168.1.2/32",	"%any6",		"::/0" },
+	{ "192.168.1.0/24",	"%any6",		"::/0" },
 	{ "fec2::1/128",	"192.168.1.1",	"192.168.1.1/32" },
+	{ "fec2::/64",		"192.168.1.1",	"192.168.1.1/32" },
 	{ "fec2::1/128",	"fec2::2",		"fec2::2/128" },
+	{ "fec2::/64",		"fec2::2",		"fec2::2/128" },
 	{ "fec2::1/128",	"%any",			"0.0.0.0/0" },
+	{ "fec2::/64",		"%any",			"0.0.0.0/0" },
 	{ "fec2::1/128",	"%any6",		"::/0" },
+	{ "fec2::/64",		"%any6",		"::/0" },
 	{ NULL,				"192.168.1.1",	"192.168.1.1/32" },
 	{ NULL,				"fec2::1",		"fec2::1/128" },
 	{ NULL,				"%any",			"0.0.0.0/0" },
@@ -555,9 +586,9 @@ struct {
 	int res;
 	struct {
 		char *net;
-		u_int8_t proto;
-		u_int16_t from_port;
-		u_int16_t to_port;
+		uint8_t proto;
+		uint16_t from_port;
+		uint16_t to_port;
 	} a, b;
 } cmp_tests[] = {
 	{  0, { "10.0.0.0/8", 0, 0, 65535 },	{ "10.0.0.0/8", 0, 0, 65535 },	},
@@ -706,13 +737,13 @@ START_TEST(test_hash)
 END_TEST
 
 struct {
-	u_int8_t proto;
-	u_int16_t from_port;
-	u_int16_t to_port;
-	u_int8_t from_type;
-	u_int8_t from_code;
-	u_int8_t to_type;
-	u_int8_t to_code;
+	uint8_t proto;
+	uint16_t from_port;
+	uint16_t to_port;
+	uint8_t from_type;
+	uint8_t from_code;
+	uint8_t to_type;
+	uint8_t to_code;
 	char *str;
 	char *str_alt;
 } icmp_tests[] = {
@@ -731,7 +762,7 @@ struct {
 START_TEST(test_icmp)
 {
 	traffic_selector_t *ts;
-	u_int16_t from, to;
+	uint16_t from, to;
 
 	ts = traffic_selector_create_dynamic(icmp_tests[_i].proto,
 							icmp_tests[_i].from_port, icmp_tests[_i].to_port);

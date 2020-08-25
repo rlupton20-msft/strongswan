@@ -1,7 +1,7 @@
 /*
- * Copyright (C) 2008-2013 Tobias Brunner
+ * Copyright (C) 2008-2018 Tobias Brunner
  * Copyright (C) 2008 Martin Willi
- * Hochschule fuer Technik Rapperswil
+ * HSR Hochschule fuer Technik Rapperswil
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -46,7 +46,10 @@
 #include "openssl_pkcs12.h"
 #include "openssl_rng.h"
 #include "openssl_hmac.h"
-#include "openssl_gcm.h"
+#include "openssl_aead.h"
+#include "openssl_x_diffie_hellman.h"
+#include "openssl_ed_public_key.h"
+#include "openssl_ed_private_key.h"
 
 #ifndef FIPS_MODE
 #define FIPS_MODE 0
@@ -64,6 +67,11 @@ struct private_openssl_plugin_t {
 	 */
 	openssl_plugin_t public;
 };
+
+/**
+ * OpenSSL is thread-safe since 1.1.0
+ */
+#if OPENSSL_VERSION_NUMBER < 0x10100000L
 
 /**
  * Array of static mutexs, with CRYPTO_num_locks() mutex
@@ -227,8 +235,19 @@ static void threading_cleanup()
 	cleanup->destroy(cleanup);
 }
 
+#else /* OPENSSL_VERSION_NUMBER */
+
+#define threading_init()
+
+#define threading_cleanup()
+
+#endif
+
+#if OPENSSL_VERSION_NUMBER < 0x1010100fL
 /**
  * Seed the OpenSSL RNG, if required
+ * Not necessary anymore with OpenSSL 1.1.1 (maybe wasn't already earlier, but
+ * it's now explicitly mentioned in the documentation).
  */
 static bool seed_rng()
 {
@@ -255,6 +274,210 @@ static bool seed_rng()
 	DESTROY_IF(rng);
 	return TRUE;
 }
+#endif /* OPENSSL_VERSION_NUMBER */
+
+/**
+ * Generic key loader
+ */
+static private_key_t *openssl_private_key_load(key_type_t type, va_list args)
+{
+	chunk_t blob = chunk_empty;
+	EVP_PKEY *key;
+
+	while (TRUE)
+	{
+		switch (va_arg(args, builder_part_t))
+		{
+			case BUILD_BLOB_ASN1_DER:
+				blob = va_arg(args, chunk_t);
+				continue;
+			case BUILD_END:
+				break;
+			default:
+				return NULL;
+		}
+		break;
+	}
+
+	if (blob.ptr)
+	{
+		key = d2i_AutoPrivateKey(NULL, (const u_char**)&blob.ptr, blob.len);
+		if (key)
+		{
+			switch (EVP_PKEY_base_id(key))
+			{
+#ifndef OPENSSL_NO_RSA
+				case EVP_PKEY_RSA:
+					return openssl_rsa_private_key_create(key, FALSE);
+#endif
+#ifndef OPENSSL_NO_ECDSA
+				case EVP_PKEY_EC:
+					return openssl_ec_private_key_create(key, FALSE);
+#endif
+#if OPENSSL_VERSION_NUMBER >= 0x1010100fL && !defined(OPENSSL_NO_EC)
+				case EVP_PKEY_ED25519:
+				case EVP_PKEY_ED448:
+					return openssl_ed_private_key_create(key, FALSE);
+#endif /* OPENSSL_VERSION_NUMBER */
+				default:
+					EVP_PKEY_free(key);
+					break;
+			}
+		}
+	}
+	return NULL;
+}
+
+#ifndef OPENSSL_NO_ENGINE
+/**
+ * Login to engine with a PIN specified for a keyid
+ */
+static bool login(ENGINE *engine, chunk_t keyid)
+{
+	enumerator_t *enumerator;
+	shared_key_t *shared;
+	identification_t *id;
+	chunk_t key;
+	char pin[64];
+	bool found = FALSE, success = FALSE;
+
+	id = identification_create_from_encoding(ID_KEY_ID, keyid);
+	enumerator = lib->credmgr->create_shared_enumerator(lib->credmgr,
+														SHARED_PIN, id, NULL);
+	while (enumerator->enumerate(enumerator, &shared, NULL, NULL))
+	{
+		found = TRUE;
+		key = shared->get_key(shared);
+		if (snprintf(pin, sizeof(pin),
+					 "%.*s", (int)key.len, key.ptr) >= sizeof(pin))
+		{
+			continue;
+		}
+		if (ENGINE_ctrl_cmd_string(engine, "PIN", pin, 0))
+		{
+			success = TRUE;
+			break;
+		}
+		else
+		{
+			DBG1(DBG_CFG, "setting PIN on engine failed");
+		}
+	}
+	enumerator->destroy(enumerator);
+	id->destroy(id);
+	if (!found)
+	{
+		DBG1(DBG_CFG, "no PIN found for %#B", &keyid);
+	}
+	return success;
+}
+#endif /* OPENSSL_NO_ENGINE */
+
+/**
+ * Load private key via engine
+ */
+static private_key_t *openssl_private_key_connect(key_type_t type,
+												  va_list args)
+{
+#ifndef OPENSSL_NO_ENGINE
+	char *engine_id = NULL;
+	char keyname[BUF_LEN];
+	chunk_t keyid = chunk_empty;
+	EVP_PKEY *key;
+	ENGINE *engine;
+	int slot = -1;
+
+	while (TRUE)
+	{
+		switch (va_arg(args, builder_part_t))
+		{
+			case BUILD_PKCS11_KEYID:
+				keyid = va_arg(args, chunk_t);
+				continue;
+			case BUILD_PKCS11_SLOT:
+				slot = va_arg(args, int);
+				continue;
+			case BUILD_PKCS11_MODULE:
+				engine_id = va_arg(args, char*);
+				continue;
+			case BUILD_END:
+				break;
+			default:
+				return NULL;
+		}
+		break;
+	}
+	if (!keyid.len)
+	{
+		return NULL;
+	}
+
+	memset(keyname, 0, sizeof(keyname));
+	if (slot != -1)
+	{
+		snprintf(keyname, sizeof(keyname), "%d:", slot);
+	}
+	if (sizeof(keyname) - strlen(keyname) <= keyid.len * 2 + 1)
+	{
+		return NULL;
+	}
+	chunk_to_hex(keyid, keyname + strlen(keyname), FALSE);
+
+	if (!engine_id)
+	{
+		engine_id = lib->settings->get_str(lib->settings,
+							"%s.plugins.openssl.engine_id", "pkcs11", lib->ns);
+	}
+	engine = ENGINE_by_id(engine_id);
+	if (!engine)
+	{
+		DBG2(DBG_LIB, "engine '%s' is not available", engine_id);
+		return NULL;
+	}
+	if (!ENGINE_init(engine))
+	{
+		DBG1(DBG_LIB, "failed to initialize engine '%s'", engine_id);
+		ENGINE_free(engine);
+		return NULL;
+	}
+	ENGINE_free(engine);
+	if (!login(engine, keyid))
+	{
+		DBG1(DBG_LIB, "login to engine '%s' failed", engine_id);
+		ENGINE_finish(engine);
+		return NULL;
+	}
+	key = ENGINE_load_private_key(engine, keyname, NULL, NULL);
+	ENGINE_finish(engine);
+	if (!key)
+	{
+		DBG1(DBG_LIB, "failed to load private key with ID '%s' from "
+			 "engine '%s'", keyname, engine_id);
+		return NULL;
+	}
+
+	switch (EVP_PKEY_base_id(key))
+	{
+#ifndef OPENSSL_NO_RSA
+		case EVP_PKEY_RSA:
+			return openssl_rsa_private_key_create(key, TRUE);
+#endif
+#ifndef OPENSSL_NO_ECDSA
+		case EVP_PKEY_EC:
+			return openssl_ec_private_key_create(key, TRUE);
+#endif
+#if OPENSSL_VERSION_NUMBER >= 0x1010100fL && !defined(OPENSSL_NO_EC)
+		case EVP_PKEY_ED25519:
+		case EVP_PKEY_ED448:
+			return openssl_ed_private_key_create(key, TRUE);
+#endif /* OPENSSL_VERSION_NUMBER */
+		default:
+			EVP_PKEY_free(key);
+			break;
+	}
+#endif /* OPENSSL_NO_ENGINE */
+	return NULL;
+}
 
 METHOD(plugin_t, get_name, char*,
 	private_openssl_plugin_t *this)
@@ -274,6 +497,9 @@ METHOD(plugin_t, get_features, int,
 			PLUGIN_PROVIDE(CRYPTER, ENCR_AES_CBC, 16),
 			PLUGIN_PROVIDE(CRYPTER, ENCR_AES_CBC, 24),
 			PLUGIN_PROVIDE(CRYPTER, ENCR_AES_CBC, 32),
+			PLUGIN_PROVIDE(CRYPTER, ENCR_AES_ECB, 16),
+			PLUGIN_PROVIDE(CRYPTER, ENCR_AES_ECB, 24),
+			PLUGIN_PROVIDE(CRYPTER, ENCR_AES_ECB, 32),
 #endif
 #ifndef OPENSSL_NO_CAMELLIA
 			PLUGIN_PROVIDE(CRYPTER, ENCR_CAMELLIA_CBC, 16),
@@ -361,10 +587,11 @@ METHOD(plugin_t, get_features, int,
 			PLUGIN_PROVIDE(SIGNER, AUTH_HMAC_SHA2_512_512),
 #endif
 #endif /* OPENSSL_NO_HMAC */
-#if OPENSSL_VERSION_NUMBER >= 0x1000100fL
+#if (OPENSSL_VERSION_NUMBER >= 0x1000100fL && !defined(OPENSSL_NO_AES)) || \
+	(OPENSSL_VERSION_NUMBER >= 0x1010000fL && !defined(OPENSSL_NO_CHACHA))
+		/* AEAD (AES GCM since 1.0.1, ChaCha20-Poly1305 since 1.1.0) */
+		PLUGIN_REGISTER(AEAD, openssl_aead_create),
 #ifndef OPENSSL_NO_AES
-		/* AES GCM */
-		PLUGIN_REGISTER(AEAD, openssl_gcm_create),
 			PLUGIN_PROVIDE(AEAD, ENCR_AES_GCM_ICV16, 16),
 			PLUGIN_PROVIDE(AEAD, ENCR_AES_GCM_ICV16, 24),
 			PLUGIN_PROVIDE(AEAD, ENCR_AES_GCM_ICV16, 32),
@@ -375,6 +602,9 @@ METHOD(plugin_t, get_features, int,
 			PLUGIN_PROVIDE(AEAD, ENCR_AES_GCM_ICV8,  24),
 			PLUGIN_PROVIDE(AEAD, ENCR_AES_GCM_ICV8,  32),
 #endif /* OPENSSL_NO_AES */
+#if OPENSSL_VERSION_NUMBER >= 0x1010000fL && !defined(OPENSSL_NO_CHACHA)
+			PLUGIN_PROVIDE(AEAD, ENCR_CHACHA20_POLY1305, 32),
+#endif /* OPENSSL_NO_CHACHA */
 #endif /* OPENSSL_VERSION_NUMBER */
 #ifndef OPENSSL_NO_ECDH
 		/* EC DH groups */
@@ -388,7 +618,7 @@ METHOD(plugin_t, get_features, int,
 			PLUGIN_PROVIDE(DH, ECP_384_BP),
 			PLUGIN_PROVIDE(DH, ECP_512_BP),
 			PLUGIN_PROVIDE(DH, ECP_224_BP),
-#endif
+#endif /* OPENSSL_NO_ECDH */
 #ifndef OPENSSL_NO_DH
 		/* MODP DH groups */
 		PLUGIN_REGISTER(DH, openssl_diffie_hellman_create),
@@ -409,8 +639,6 @@ METHOD(plugin_t, get_features, int,
 		/* RSA private/public key loading */
 		PLUGIN_REGISTER(PRIVKEY, openssl_rsa_private_key_load, TRUE),
 			PLUGIN_PROVIDE(PRIVKEY, KEY_RSA),
-		PLUGIN_REGISTER(PRIVKEY, openssl_rsa_private_key_connect, FALSE),
-			PLUGIN_PROVIDE(PRIVKEY, KEY_ANY),
 		PLUGIN_REGISTER(PRIVKEY_GEN, openssl_rsa_private_key_gen, FALSE),
 			PLUGIN_PROVIDE(PRIVKEY_GEN, KEY_RSA),
 		PLUGIN_REGISTER(PUBKEY, openssl_rsa_public_key_load, TRUE),
@@ -420,21 +648,25 @@ METHOD(plugin_t, get_features, int,
 		/* signature/encryption schemes */
 		PLUGIN_PROVIDE(PRIVKEY_SIGN, SIGN_RSA_EMSA_PKCS1_NULL),
 		PLUGIN_PROVIDE(PUBKEY_VERIFY, SIGN_RSA_EMSA_PKCS1_NULL),
+#if OPENSSL_VERSION_NUMBER >=  0x10000000L
+		PLUGIN_PROVIDE(PRIVKEY_SIGN, SIGN_RSA_EMSA_PSS),
+		PLUGIN_PROVIDE(PUBKEY_VERIFY, SIGN_RSA_EMSA_PSS),
+#endif
 #ifndef OPENSSL_NO_SHA1
 		PLUGIN_PROVIDE(PRIVKEY_SIGN, SIGN_RSA_EMSA_PKCS1_SHA1),
 		PLUGIN_PROVIDE(PUBKEY_VERIFY, SIGN_RSA_EMSA_PKCS1_SHA1),
 #endif
 #ifndef OPENSSL_NO_SHA256
-		PLUGIN_PROVIDE(PRIVKEY_SIGN, SIGN_RSA_EMSA_PKCS1_SHA224),
-		PLUGIN_PROVIDE(PRIVKEY_SIGN, SIGN_RSA_EMSA_PKCS1_SHA256),
-		PLUGIN_PROVIDE(PUBKEY_VERIFY, SIGN_RSA_EMSA_PKCS1_SHA224),
-		PLUGIN_PROVIDE(PUBKEY_VERIFY, SIGN_RSA_EMSA_PKCS1_SHA256),
+		PLUGIN_PROVIDE(PRIVKEY_SIGN, SIGN_RSA_EMSA_PKCS1_SHA2_224),
+		PLUGIN_PROVIDE(PRIVKEY_SIGN, SIGN_RSA_EMSA_PKCS1_SHA2_256),
+		PLUGIN_PROVIDE(PUBKEY_VERIFY, SIGN_RSA_EMSA_PKCS1_SHA2_224),
+		PLUGIN_PROVIDE(PUBKEY_VERIFY, SIGN_RSA_EMSA_PKCS1_SHA2_256),
 #endif
 #ifndef OPENSSL_NO_SHA512
-		PLUGIN_PROVIDE(PRIVKEY_SIGN, SIGN_RSA_EMSA_PKCS1_SHA384),
-		PLUGIN_PROVIDE(PRIVKEY_SIGN, SIGN_RSA_EMSA_PKCS1_SHA512),
-		PLUGIN_PROVIDE(PUBKEY_VERIFY, SIGN_RSA_EMSA_PKCS1_SHA384),
-		PLUGIN_PROVIDE(PUBKEY_VERIFY, SIGN_RSA_EMSA_PKCS1_SHA512),
+		PLUGIN_PROVIDE(PRIVKEY_SIGN, SIGN_RSA_EMSA_PKCS1_SHA2_384),
+		PLUGIN_PROVIDE(PRIVKEY_SIGN, SIGN_RSA_EMSA_PKCS1_SHA2_512),
+		PLUGIN_PROVIDE(PUBKEY_VERIFY, SIGN_RSA_EMSA_PKCS1_SHA2_384),
+		PLUGIN_PROVIDE(PUBKEY_VERIFY, SIGN_RSA_EMSA_PKCS1_SHA2_512),
 #endif
 #ifndef OPENSSL_NO_MD5
 		PLUGIN_PROVIDE(PRIVKEY_SIGN, SIGN_RSA_EMSA_PKCS1_MD5),
@@ -491,6 +723,35 @@ METHOD(plugin_t, get_features, int,
 		PLUGIN_PROVIDE(PUBKEY_VERIFY, SIGN_ECDSA_521),
 #endif
 #endif /* OPENSSL_NO_ECDSA */
+#if OPENSSL_VERSION_NUMBER >= 0x1010100fL && !defined(OPENSSL_NO_EC)
+		PLUGIN_REGISTER(DH, openssl_x_diffie_hellman_create),
+			/* available since 1.1.0a, but we require 1.1.1 features */
+			PLUGIN_PROVIDE(DH, CURVE_25519),
+			/* available since 1.1.1 */
+			PLUGIN_PROVIDE(DH, CURVE_448),
+		/* EdDSA private/public key loading */
+		PLUGIN_REGISTER(PUBKEY, openssl_ed_public_key_load, TRUE),
+			PLUGIN_PROVIDE(PUBKEY, KEY_ED25519),
+			PLUGIN_PROVIDE(PUBKEY, KEY_ED448),
+		PLUGIN_REGISTER(PRIVKEY, openssl_ed_private_key_load, TRUE),
+			PLUGIN_PROVIDE(PRIVKEY, KEY_ED25519),
+			PLUGIN_PROVIDE(PRIVKEY, KEY_ED448),
+		PLUGIN_REGISTER(PRIVKEY_GEN, openssl_ed_private_key_gen, FALSE),
+			PLUGIN_PROVIDE(PRIVKEY_GEN, KEY_ED25519),
+			PLUGIN_PROVIDE(PRIVKEY_GEN, KEY_ED448),
+		PLUGIN_PROVIDE(PRIVKEY_SIGN, SIGN_ED25519),
+		PLUGIN_PROVIDE(PRIVKEY_SIGN, SIGN_ED448),
+		PLUGIN_PROVIDE(PUBKEY_VERIFY, SIGN_ED25519),
+		PLUGIN_PROVIDE(PUBKEY_VERIFY, SIGN_ED448),
+		/* register a pro forma identity hasher, never instantiated */
+		PLUGIN_REGISTER(HASHER, return_null),
+			PLUGIN_PROVIDE(HASHER, HASH_IDENTITY),
+#endif /* OPENSSL_VERSION_NUMBER && !OPENSSL_NO_EC */
+		/* generic key loader */
+		PLUGIN_REGISTER(PRIVKEY, openssl_private_key_load, TRUE),
+			PLUGIN_PROVIDE(PRIVKEY, KEY_ANY),
+		PLUGIN_REGISTER(PRIVKEY, openssl_private_key_connect, FALSE),
+			PLUGIN_PROVIDE(PRIVKEY, KEY_ANY),
 		PLUGIN_REGISTER(RNG, openssl_rng_create),
 			PLUGIN_PROVIDE(RNG, RNG_STRONG),
 			PLUGIN_PROVIDE(RNG, RNG_WEAK),
@@ -502,8 +763,14 @@ METHOD(plugin_t, get_features, int,
 METHOD(plugin_t, destroy, void,
 	private_openssl_plugin_t *this)
 {
+/* OpenSSL 1.1.0 cleans up itself at exit and while OPENSSL_cleanup() exists we
+ * can't call it as we couldn't re-initialize the library (as required by the
+ * unit tests and the Android app) */
+#if OPENSSL_VERSION_NUMBER < 0x10100000L
+#ifndef OPENSSL_IS_BORINGSSL
 	CONF_modules_free();
 	OBJ_cleanup();
+#endif
 	EVP_cleanup();
 #ifndef OPENSSL_NO_ENGINE
 	ENGINE_cleanup();
@@ -511,6 +778,7 @@ METHOD(plugin_t, destroy, void,
 	CRYPTO_cleanup_all_ex_data();
 	threading_cleanup();
 	ERR_free_strings();
+#endif /* OPENSSL_VERSION_NUMBER */
 
 	free(this);
 }
@@ -553,10 +821,23 @@ plugin_t *openssl_plugin_create()
 		},
 	);
 
+#if OPENSSL_VERSION_NUMBER >= 0x10100000L
+	/* note that we can't call OPENSSL_cleanup() when the plugin is destroyed
+	 * as we couldn't initialize the library again afterwards */
+	OPENSSL_init_crypto(OPENSSL_INIT_LOAD_CONFIG |
+						OPENSSL_INIT_ENGINE_ALL_BUILTIN, NULL);
+#else /* OPENSSL_VERSION_NUMBER */
 	threading_init();
-
+#ifndef OPENSSL_IS_BORINGSSL
 	OPENSSL_config(NULL);
+#endif
 	OpenSSL_add_all_algorithms();
+#ifndef OPENSSL_NO_ENGINE
+	/* activate support for hardware accelerators */
+	ENGINE_load_builtin_engines();
+	ENGINE_register_all_complete();
+#endif /* OPENSSL_NO_ENGINE */
+#endif /* OPENSSL_VERSION_NUMBER */
 
 #ifdef OPENSSL_FIPS
 	/* we do this here as it may have been enabled via openssl.conf */
@@ -565,18 +846,14 @@ plugin_t *openssl_plugin_create()
 		"openssl FIPS mode(%d) - %sabled ", fips_mode, fips_mode ? "en" : "dis");
 #endif /* OPENSSL_FIPS */
 
-#ifndef OPENSSL_NO_ENGINE
-	/* activate support for hardware accelerators */
-	ENGINE_load_builtin_engines();
-	ENGINE_register_all_complete();
-#endif /* OPENSSL_NO_ENGINE */
-
+#if OPENSSL_VERSION_NUMBER < 0x1010100fL
 	if (!seed_rng())
 	{
 		DBG1(DBG_CFG, "no RNG found to seed OpenSSL");
 		destroy(this);
 		return NULL;
 	}
+#endif /* OPENSSL_VERSION_NUMBER */
 
 	return &this->public.plugin;
 }

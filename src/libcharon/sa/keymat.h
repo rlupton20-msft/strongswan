@@ -1,6 +1,6 @@
 /*
  * Copyright (C) 2008 Martin Willi
- * Hochschule fuer Technik Rapperswil
+ * HSR Hochschule fuer Technik Rapperswil
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -27,7 +27,7 @@ typedef struct keymat_t keymat_t;
 #include <utils/identification.h>
 #include <crypto/prfs/prf.h>
 #include <crypto/aead.h>
-#include <config/proposal.h>
+#include <crypto/proposal/proposal.h>
 #include <config/peer_cfg.h>
 #include <sa/ike_sa_id.h>
 
@@ -98,7 +98,7 @@ struct keymat_t {
  *
  * @param version			requested IKE version
  * @param initiator			TRUE if we are initiator
- * @return					keymat_t implmenetation
+ * @return					keymat_t implementation
  */
 keymat_t *keymat_create(ike_version_t version, bool initiator);
 

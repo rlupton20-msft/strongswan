@@ -2,7 +2,7 @@
  * Copyright (C) 2012 Tobias Brunner
  * Copyright (C) 2005-2006 Martin Willi
  * Copyright (C) 2005 Jan Hutter
- * Hochschule fuer Technik Rapperswil
+ * HSR Hochschule fuer Technik Rapperswil
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -85,14 +85,14 @@ struct packet_t {
 	 *
 	 * @return			DSCP value
 	 */
-	u_int8_t (*get_dscp)(packet_t *this);
+	uint8_t (*get_dscp)(packet_t *this);
 
 	/**
 	 * Set the DiffServ Code Point to use on this packet.
 	 *
 	 * @param value		DSCP value
 	 */
-	void (*set_dscp)(packet_t *this, u_int8_t value);
+	void (*set_dscp)(packet_t *this, uint8_t value);
 
 	/**
 	 * Increase the offset where the actual packet data starts.

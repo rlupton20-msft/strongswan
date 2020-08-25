@@ -2,7 +2,7 @@
  * Copyright (C) 2012 Tobias Brunner
  * Copyright (C) 2005-2006 Martin Willi
  * Copyright (C) 2005 Jan Hutter
- * Hochschule fuer Technik Rapperswil
+ * HSR Hochschule fuer Technik Rapperswil
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -36,7 +36,7 @@ struct private_prf_t {
 };
 
 METHOD(prf_t, get_bytes, bool,
-	private_prf_t *this, chunk_t seed, u_int8_t *buffer)
+	private_prf_t *this, chunk_t seed, uint8_t *buffer)
 {
 	return this->mac->get_mac(this->mac, seed, buffer);
 }

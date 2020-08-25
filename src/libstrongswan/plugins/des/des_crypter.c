@@ -1,7 +1,7 @@
 /*
  * Copyright (C) 2009 Tobias Brunner
  * Copyright (C) 2006 Martin Willi
- * Hochschule fuer Technik Rapperswil
+ * HSR Hochschule fuer Technik Rapperswil
  *
  * Derived from Plutos DES library by Eric Young.
  *
@@ -13,7 +13,7 @@
  * The implementation was written so as to conform with Netscapes SSL.
  *
  * This library is free for commercial and non-commercial use as long as
- * the following conditions are aheared to.
+ * the following conditions are adhered to.
  *
  * Copyright remains Eric Young's, and as such any Copyright notices in
  * the code are not to be removed.
@@ -34,7 +34,7 @@
  *    must display the following acknowledgement:
  *    "This product includes cryptographic software written by
  *     Eric Young (eay@cryptsoft.com)"
- *    The word 'cryptographic' can be left out if the rouines from the library
+ *    The word 'cryptographic' can be left out if the routines from the library
  *    being used are not cryptographic related :-).
  * 4. If you include any Windows specific code (or a derivative thereof) from
  *    the apps directory (application code) you must include an acknowledgement:
@@ -52,7 +52,7 @@
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
  *
- * The licence and distribution terms for any publically available version or
+ * The licence and distribution terms for any publicly available version or
  * derivative of this code cannot be changed.  i.e. this code cannot simply be
  * copied and put under another distribution licence
  * [including the GNU Public Licence.]
@@ -96,7 +96,7 @@ struct private_des_crypter_t {
 #define DES_ENCRYPT 1
 #define DES_DECRYPT 0
 
-#define DES_LONG u_int32_t
+#define DES_LONG uint32_t
 
 #if defined(WIN32) || defined(WIN16)
 #ifndef MSDOS
@@ -309,7 +309,7 @@ YOU SHOULD NOT HAVE BOTH DES_RISC1 AND DES_RISC2 DEFINED!!!!!
 #endif
 
 /* The changes to this macro may help or hinder, depending on the
- * compiler and the achitecture.  gcc2 always seems to do well :-).
+ * compiler and the architecture.  gcc2 always seems to do well :-).
  * Inspired by Dana How <how@isl.stanford.edu>
  * DO NOT use the alternative version on machines with 8 byte longs.
  * It does not seem to work on the Alpha, even when DES_LONG is 4
@@ -1420,7 +1420,7 @@ METHOD(crypter_t, decrypt, bool,
 	private_des_crypter_t *this, chunk_t data, chunk_t iv, chunk_t *decrypted)
 {
 	des_cblock ivb;
-	u_int8_t *out;
+	uint8_t *out;
 
 	out = data.ptr;
 	if (decrypted)
@@ -1439,7 +1439,7 @@ METHOD(crypter_t, encrypt, bool,
 	private_des_crypter_t *this, chunk_t data, chunk_t iv, chunk_t *encrypted)
 {
 	des_cblock ivb;
-	u_int8_t *out;
+	uint8_t *out;
 
 	out = data.ptr;
 	if (encrypted)
@@ -1456,7 +1456,7 @@ METHOD(crypter_t, encrypt, bool,
 METHOD(crypter_t, decrypt_ecb, bool,
 	private_des_crypter_t *this, chunk_t data, chunk_t iv, chunk_t *decrypted)
 {
-	u_int8_t *out;
+	uint8_t *out;
 
 	out = data.ptr;
 	if (decrypted)
@@ -1472,7 +1472,7 @@ METHOD(crypter_t, decrypt_ecb, bool,
 METHOD(crypter_t, encrypt_ecb, bool,
 	private_des_crypter_t *this, chunk_t data, chunk_t iv, chunk_t *encrypted)
 {
-	u_int8_t *out;
+	uint8_t *out;
 
 	out = data.ptr;
 	if (encrypted)
@@ -1489,7 +1489,7 @@ METHOD(crypter_t, decrypt3, bool,
 	private_des_crypter_t *this, chunk_t data, chunk_t iv, chunk_t *decrypted)
 {
 	des_cblock ivb;
-	u_int8_t *out;
+	uint8_t *out;
 
 	out = data.ptr;
 	if (decrypted)
@@ -1508,7 +1508,7 @@ METHOD(crypter_t, encrypt3, bool,
 	private_des_crypter_t *this, chunk_t data, chunk_t iv, chunk_t *encrypted)
 {
 	des_cblock ivb;
-	u_int8_t *out;
+	uint8_t *out;
 
 	out = data.ptr;
 	if (encrypted)

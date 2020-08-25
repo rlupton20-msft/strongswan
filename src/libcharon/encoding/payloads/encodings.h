@@ -1,7 +1,7 @@
 /*
  * Copyright (C) 2005-2006 Martin Willi
  * Copyright (C) 2005 Jan Hutter
- * Hochschule fuer Technik Rapperswil
+ * HSR Hochschule fuer Technik Rapperswil
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -37,7 +37,7 @@ typedef struct encoding_rule_t encoding_rule_t;
  * Header is parsed like a payload and gets its one payload_id
  * from PRIVATE USE space. Also the substructures
  * of specific payload types get their own payload_id
- * from PRIVATE_USE space. See IKEv2-Draft for more informations.
+ * from PRIVATE_USE space. See IKEv2-Draft for more information.
  */
 enum encoding_type_t {
 
@@ -138,7 +138,7 @@ enum encoding_type_t {
 	FLAG,
 
 	/**
-	 * Representating a length field of a payload.
+	 * Representing a length field of a payload.
 	 *
 	 * When generating it must be changed from host to network order.
 	 * The value is read from the associated data struct.
@@ -151,7 +151,7 @@ enum encoding_type_t {
 	PAYLOAD_LENGTH,
 
 	/**
-	 * Representating a length field of a header.
+	 * Representing a length field of a header.
 	 *
 	 * When generating it must be changed from host to network order.
 	 * The value is read from the associated data struct.
@@ -164,7 +164,7 @@ enum encoding_type_t {
 	HEADER_LENGTH,
 
 	/**
-	 * Representating a spi size field.
+	 * Representing a spi size field.
 	 *
 	 * When generating it must be changed from host to network order.
 	 * The value is read from the associated data struct.
@@ -177,7 +177,7 @@ enum encoding_type_t {
 	SPI_SIZE,
 
 	/**
-	 * Representating a spi field.
+	 * Representing a spi field.
 	 *
 	 * When generating the content of the chunkt pointing to
 	 * is written.
@@ -256,7 +256,7 @@ enum encoding_type_t {
 	ATTRIBUTE_VALUE,
 
 	/**
-	 * Representating a Traffic selector type field.
+	 * Representing a Traffic selector type field.
 	 *
 	 * When generating it must be changed from host to network order.
 	 * The value is read from the associated data struct.
@@ -269,7 +269,7 @@ enum encoding_type_t {
 	TS_TYPE,
 
 	/**
-	 * Representating an address field in a traffic selector.
+	 * Representing an address field in a traffic selector.
 	 *
 	 * Depending on the last field of type TS_TYPE
 	 * this field is either 4 or 16 byte long.
@@ -287,17 +287,17 @@ enum encoding_type_t {
 	CHUNK_DATA,
 
 	/**
-	 * Representating an IKE_SPI field in an IKEv2 Header.
+	 * Representing an IKE_SPI field in an IKEv2 Header.
 	 *
-	 * When generating the value of the u_int64_t pointing to
+	 * When generating the value of the uint64_t pointing to
 	 * is written (host and networ order is not changed).
 	 *
-	 * When parsing 8 bytes are read and written into the u_int64_t pointing to.
+	 * When parsing 8 bytes are read and written into the uint64_t pointing to.
 	 */
 	IKE_SPI,
 
 	/**
-	 * Representating an encrypted IKEv1 message.
+	 * Representing an encrypted IKEv1 message.
 	 */
 	ENCRYPTED_DATA,
 
@@ -342,7 +342,7 @@ struct encoding_rule_t {
 	 * When generating, data are read from this offset in the
 	 * data struct.
 	 */
-	u_int32_t offset;
+	uint32_t offset;
 };
 
 #endif /** ENCODINGS_H_ @}*/

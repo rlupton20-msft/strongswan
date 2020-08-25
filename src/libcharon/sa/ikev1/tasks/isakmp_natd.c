@@ -2,7 +2,7 @@
  * Copyright (C) 2006-2011 Tobias Brunner,
  * Copyright (C) 2006-2007 Martin Willi
  * Copyright (C) 2006 Daniel Roethlisberger
- * Hochschule fuer Technik Rapperswil
+ * HSR Hochschule fuer Technik Rapperswil
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -129,8 +129,8 @@ static chunk_t generate_natd_hash(private_isakmp_natd_t *this,
 {
 	hasher_t *hasher;
 	chunk_t natd_chunk, natd_hash;
-	u_int64_t spi_i, spi_r;
-	u_int16_t port;
+	uint64_t spi_i, spi_r;
+	uint16_t port;
 
 	hasher = this->keymat->get_hasher(this->keymat);
 	if (!hasher)

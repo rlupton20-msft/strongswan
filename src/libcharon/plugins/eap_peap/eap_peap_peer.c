@@ -1,6 +1,6 @@
 /*
  * Copyright (C) 2011 Andreas Steffen
- * Copyright (C) 2011 HSR Hochschule fuer Technik Rapperswil
+ * HSR Hochschule fuer Technik Rapperswil
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -71,7 +71,7 @@ METHOD(tls_application_t, process, status_t,
 	eap_payload_t *in;
 	eap_code_t code;
 	eap_type_t type, received_type;
-	u_int32_t vendor, received_vendor;
+	uint32_t vendor, received_vendor;
 
 	status = this->avp->process(this->avp, reader, &data,
 							this->ph1_method->get_identifier(this->ph1_method));
@@ -191,7 +191,7 @@ METHOD(tls_application_t, build, status_t,
 	chunk_t data;
 	eap_code_t code;
 	eap_type_t type;
-	u_int32_t vendor;
+	uint32_t vendor;
 
 	if (this->out)
 	{

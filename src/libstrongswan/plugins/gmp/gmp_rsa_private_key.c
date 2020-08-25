@@ -1,7 +1,8 @@
 /*
+ * Copyright (C) 2017-2018 Tobias Brunner
  * Copyright (C) 2005 Jan Hutter
  * Copyright (C) 2005-2009 Martin Willi
- * Copyright (C) 2012 Andreas Steffen
+ * Copyright (C) 2012-2019 Andreas Steffen
  * HSR Hochschule fuer Technik Rapperswil
  *
  * This program is free software; you can redistribute it and/or modify it
@@ -27,6 +28,7 @@
 #include <asn1/oid.h>
 #include <asn1/asn1.h>
 #include <asn1/asn1_parser.h>
+#include <credentials/keys/signature_params.h>
 
 #ifdef HAVE_MPZ_POWM_SEC
 # undef mpz_powm
@@ -142,7 +144,7 @@ chunk_t gmp_mpz_to_chunk(const mpz_t value)
 static void mpz_clear_sensitive(mpz_t z)
 {
 	size_t len = mpz_size(z) * GMP_LIMB_BITS / BITS_PER_BYTE;
-	u_int8_t *zeros = alloca(len);
+	uint8_t *zeros = alloca(len);
 
 	memset(zeros, 0, len);
 	/* overwrite mpz_t with zero bytes before clearing it */
@@ -153,31 +155,23 @@ static void mpz_clear_sensitive(mpz_t z)
 /**
  * Create a mpz prime of at least prime_size
  */
-static status_t compute_prime(size_t prime_size, bool safe, mpz_t *p, mpz_t *q)
+static status_t compute_prime(drbg_t *drbg, size_t prime_size, bool safe, mpz_t *p, mpz_t *q)
 {
-	rng_t *rng;
 	chunk_t random_bytes;
 	int count = 0;
 
-	rng = lib->crypto->create_rng(lib->crypto, RNG_TRUE);
-	if (!rng)
-	{
-		DBG1(DBG_LIB, "no RNG of quality %N found", rng_quality_names,
-			 RNG_TRUE);
-		return FAILED;
-	}
-
 	mpz_init(*p);
 	mpz_init(*q);
+	random_bytes = chunk_alloc(prime_size);
 
 	do
 	{
-		if (!rng->allocate_bytes(rng, prime_size, &random_bytes))
+		if (!drbg->generate(drbg, random_bytes.len, random_bytes.ptr))
 		{
 			DBG1(DBG_LIB, "failed to allocate random prime");
 			mpz_clear(*p);
 			mpz_clear(*q);
-			rng->destroy(rng);
+			chunk_free(&random_bytes);
 			return FAILED;
 		}
 
@@ -203,13 +197,11 @@ static status_t compute_prime(size_t prime_size, bool safe, mpz_t *p, mpz_t *q)
 			mpz_import(*p, random_bytes.len, 1, 1, 1, 0, random_bytes.ptr);
 			mpz_nextprime (*p, *p);
 		}
-		chunk_clear(&random_bytes);
 	}
-
 	/* check if the prime isn't too large */
 	while (((mpz_sizeinbase(*p, 2) + 7) / 8) > prime_size);
 
-	rng->destroy(rng);
+	chunk_clear(&random_bytes);
 
 	/* additionally return p-1 */
 	mpz_sub_ui(*q, *p, 1);
@@ -347,6 +339,116 @@ static bool build_emsa_pkcs1_signature(private_gmp_rsa_private_key_t *this,
 	return TRUE;
 }
 
+/**
+ * Build a signature using the PKCS#1 EMSA PSS scheme
+ */
+static bool build_emsa_pss_signature(private_gmp_rsa_private_key_t *this,
+									 rsa_pss_params_t *params, chunk_t data,
+									 chunk_t *signature)
+{
+	ext_out_function_t xof;
+	hasher_t *hasher = NULL;
+	rng_t *rng = NULL;
+	xof_t *mgf = NULL;
+	chunk_t hash, salt = chunk_empty, m, ps, db, dbmask, em;
+	size_t embits, emlen, maskbits;
+	bool success = FALSE;
+
+	if (!params)
+	{
+		return FALSE;
+	}
+	xof = xof_mgf1_from_hash_algorithm(params->mgf1_hash);
+	if (xof == XOF_UNDEFINED)
+	{
+		DBG1(DBG_LIB, "%N is not supported for MGF1", hash_algorithm_names,
+			 params->mgf1_hash);
+		return FALSE;
+	}
+	/* emBits = modBits - 1 */
+	embits = mpz_sizeinbase(this->n, 2) - 1;
+	/* emLen = ceil(emBits/8) */
+	emlen = (embits + 7) / BITS_PER_BYTE;
+	/* mHash = Hash(M) */
+	hasher = lib->crypto->create_hasher(lib->crypto, params->hash);
+	if (!hasher)
+	{
+		DBG1(DBG_LIB, "hash algorithm %N not supported",
+			 hash_algorithm_names, params->hash);
+		return FALSE;
+	}
+	hash = chunk_alloca(hasher->get_hash_size(hasher));
+	if (!hasher->get_hash(hasher, data, hash.ptr))
+	{
+		goto error;
+	}
+
+	salt.len = params->salt_len;
+	if (params->salt.len)
+	{
+		salt = params->salt;
+	}
+	if (emlen < (hash.len + salt.len + 2))
+	{	/* too long */
+		goto error;
+	}
+	if (salt.len && !params->salt.len)
+	{
+		salt = chunk_alloca(salt.len);
+		rng = lib->crypto->create_rng(lib->crypto, RNG_STRONG);
+		if (!rng || !rng->get_bytes(rng, salt.len, salt.ptr))
+		{
+			goto error;
+		}
+	}
+	/* M' = 0x0000000000000000 | mHash | salt */
+	m = chunk_cata("ccc",
+				   chunk_from_chars(0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00),
+				   hash, salt);
+	/* H = Hash(M') */
+	if (!hasher->get_hash(hasher, m, hash.ptr))
+	{
+		goto error;
+	}
+	/* PS = 00...<padding depending on hash and salt length> */
+	ps = chunk_alloca(emlen - salt.len - hash.len - 2);
+	memset(ps.ptr, 0, ps.len);
+	/* DB = PS | 0x01 | salt */
+	db = chunk_cata("ccc", ps, chunk_from_chars(0x01), salt);
+	/* dbMask = MGF(H, emLen - hLen - 1) */
+	mgf = lib->crypto->create_xof(lib->crypto, xof);
+	dbmask = chunk_alloca(db.len);
+	if (!mgf)
+	{
+		DBG1(DBG_LIB, "%N not supported", ext_out_function_names, xof);
+		goto error;
+	}
+	if (!mgf->set_seed(mgf, hash) ||
+		!mgf->get_bytes(mgf, dbmask.len, dbmask.ptr))
+	{
+		goto error;
+	}
+	/* maskedDB = DB xor dbMask */
+	memxor(db.ptr, dbmask.ptr, db.len);
+	/* zero out unused bits */
+	maskbits = (8 * emlen) - embits;
+	if (maskbits)
+	{
+		db.ptr[0] &= (0xff >> maskbits);
+	}
+	/* EM = maskedDB | H | 0xbc */
+	em = chunk_cata("ccc", db, hash, chunk_from_chars(0xbc));
+	/* S = RSASP1(K, EM) */
+	*signature = rsasp1(this, em);
+	success = TRUE;
+
+error:
+	DESTROY_IF(hasher);
+	DESTROY_IF(rng);
+	DESTROY_IF(mgf);
+	return success;
+}
+
 METHOD(private_key_t, get_type, key_type_t,
 	private_gmp_rsa_private_key_t *this)
 {
@@ -355,24 +457,34 @@ METHOD(private_key_t, get_type, key_type_t,
 
 METHOD(private_key_t, sign, bool,
 	private_gmp_rsa_private_key_t *this, signature_scheme_t scheme,
-	chunk_t data, chunk_t *signature)
+	void *params, chunk_t data, chunk_t *signature)
 {
 	switch (scheme)
 	{
 		case SIGN_RSA_EMSA_PKCS1_NULL:
 			return build_emsa_pkcs1_signature(this, HASH_UNKNOWN, data, signature);
+		case SIGN_RSA_EMSA_PKCS1_SHA2_224:
+			return build_emsa_pkcs1_signature(this, HASH_SHA224, data, signature);
+		case SIGN_RSA_EMSA_PKCS1_SHA2_256:
+			return build_emsa_pkcs1_signature(this, HASH_SHA256, data, signature);
+		case SIGN_RSA_EMSA_PKCS1_SHA2_384:
+			return build_emsa_pkcs1_signature(this, HASH_SHA384, data, signature);
+		case SIGN_RSA_EMSA_PKCS1_SHA2_512:
+			return build_emsa_pkcs1_signature(this, HASH_SHA512, data, signature);
+		case SIGN_RSA_EMSA_PKCS1_SHA3_224:
+			return build_emsa_pkcs1_signature(this, HASH_SHA3_224, data, signature);
+		case SIGN_RSA_EMSA_PKCS1_SHA3_256:
+			return build_emsa_pkcs1_signature(this, HASH_SHA3_256, data, signature);
+		case SIGN_RSA_EMSA_PKCS1_SHA3_384:
+			return build_emsa_pkcs1_signature(this, HASH_SHA3_384, data, signature);
+		case SIGN_RSA_EMSA_PKCS1_SHA3_512:
+			return build_emsa_pkcs1_signature(this, HASH_SHA3_512, data, signature);
 		case SIGN_RSA_EMSA_PKCS1_SHA1:
 			return build_emsa_pkcs1_signature(this, HASH_SHA1, data, signature);
-		case SIGN_RSA_EMSA_PKCS1_SHA224:
-			return build_emsa_pkcs1_signature(this, HASH_SHA224, data, signature);
-		case SIGN_RSA_EMSA_PKCS1_SHA256:
-			return build_emsa_pkcs1_signature(this, HASH_SHA256, data, signature);
-		case SIGN_RSA_EMSA_PKCS1_SHA384:
-			return build_emsa_pkcs1_signature(this, HASH_SHA384, data, signature);
-		case SIGN_RSA_EMSA_PKCS1_SHA512:
-			return build_emsa_pkcs1_signature(this, HASH_SHA512, data, signature);
 		case SIGN_RSA_EMSA_PKCS1_MD5:
 			return build_emsa_pkcs1_signature(this, HASH_MD5, data, signature);
+		case SIGN_RSA_EMSA_PSS:
+			return build_emsa_pss_signature(this, params, data, signature);
 		default:
 			DBG1(DBG_LIB, "signature scheme %N not supported in RSA",
 				 signature_scheme_names, scheme);
@@ -667,10 +779,14 @@ static private_gmp_rsa_private_key_t *gmp_rsa_private_key_create_empty(void)
 gmp_rsa_private_key_t *gmp_rsa_private_key_gen(key_type_t type, va_list args)
 {
 	private_gmp_rsa_private_key_t *this;
-	u_int key_size = 0, shares = 0, threshold = 1;
-	bool safe_prime = FALSE, rng_failed = FALSE, invert_failed = FALSE;
-	mpz_t p, q, p1, q1, d;
-;
+	drbg_type_t drbg_type = DRBG_HMAC_SHA512;
+	drbg_t* drbg;
+	rng_t *rng;
+	u_int strength = 256, key_size = 0, shares = 0, threshold = 1;
+	bool safe_prime = FALSE, drbg_failed = FALSE, invert_failed = FALSE;
+	mpz_t p, q, p1, q1;
+	int i;
+
 
 	while (TRUE)
 	{
@@ -701,15 +817,33 @@ gmp_rsa_private_key_t *gmp_rsa_private_key_gen(key_type_t type, va_list args)
 	}
 	key_size = key_size / BITS_PER_BYTE;
 
-	/* Get values of primes p and q  */
-	if (compute_prime(key_size/2, safe_prime, &p, &p1) != SUCCESS)
+	/* Initiate a NIST SP 800-90A DRBG fed by a true rng owned by the drbg */
+	rng = lib->crypto->create_rng(lib->crypto, RNG_TRUE);
+	if (!rng)
 	{
+		DBG1(DBG_LIB, "no RNG of quality %N found", rng_quality_names, RNG_TRUE);
 		return NULL;
 	}
-	if (compute_prime(key_size/2, safe_prime, &q, &q1) != SUCCESS)
+	drbg = lib->crypto->create_drbg(lib->crypto, drbg_type, strength, rng,
+									chunk_empty);
+	if (!drbg)
+	{
+		DBG1(DBG_LIB, "instantiation of %N failed", drbg_type_names, drbg_type);
+		rng->destroy(rng);
+		return NULL;
+	}
+
+	/* Get values of primes p and q  */
+	if (compute_prime(drbg, key_size/2, safe_prime, &p, &p1) != SUCCESS)
+	{
+		drbg->destroy(drbg);
+		return NULL;
+	}
+	if (compute_prime(drbg, key_size/2, safe_prime, &q, &q1) != SUCCESS)
 	{
 		mpz_clear(p);
 		mpz_clear(p1);
+		drbg->destroy(drbg);
 		return NULL;
 	}
 
@@ -722,11 +856,17 @@ gmp_rsa_private_key_t *gmp_rsa_private_key_gen(key_type_t type, va_list args)
 
 	/* Create and initialize RSA private key object */
 	this = gmp_rsa_private_key_create_empty();
+	*this->p = *p;
+	*this->q = *q;
+
+	/* allocate space for private exponent d with optional threshold scheme */
 	this->shares = shares;
 	this->threshold = threshold;
 	this->d = malloc(threshold * sizeof(mpz_t));
-	*this->p = *p;
-	*this->q = *q;
+	for (i = 0; i < threshold; i++)
+	{
+		mpz_init(this->d[i]);
+	}
 
 	mpz_init_set_ui(this->e, PUBLIC_EXPONENT);
 	mpz_init(this->n);
@@ -735,71 +875,61 @@ gmp_rsa_private_key_t *gmp_rsa_private_key_gen(key_type_t type, va_list args)
 	mpz_init(this->exp2);
 	mpz_init(this->coeff);
 	mpz_init(this->v);
-	mpz_init(d);
 
-	mpz_mul(this->n, p, q);					/* n = p*q */
-	mpz_lcm(this->m, p1, q1);				/* m = lcm(p-1,q-1) */
-	mpz_invert(d, this->e, this->m);		/* e has an inverse mod m */
-	mpz_mod(this->exp1, d, p1);				/* exp1 = d mod p-1 */
-	mpz_mod(this->exp2, d, q1);				/* exp2 = d mod q-1 */
-	mpz_invert(this->coeff, q, p);			/* coeff = q^-1 mod p */
+	mpz_mul(this->n, p, q);                    /* n = p*q */
+	mpz_lcm(this->m, p1, q1);                  /* m = lcm(p-1,q-1) */
+	mpz_invert(this->d[0], this->e, this->m);  /* e has an inverse mod m */
+	mpz_mod(this->exp1, this->d[0], p1);       /* exp1 = d mod p-1 */
+	mpz_mod(this->exp2, this->d[0], q1);       /* exp2 = d mod q-1 */
+	mpz_invert(this->coeff, q, p);             /* coeff = q^-1 mod p */
 
 	invert_failed = mpz_cmp_ui(this->m, 0) == 0 ||
 					mpz_cmp_ui(this->coeff, 0) == 0;
 
-    /* store secret exponent d */
-	(*this->d)[0] = *d;
-
 	/* generate and store random coefficients of secret sharing polynomial */
 	if (threshold > 1)
 	{
-		rng_t *rng;
 		chunk_t random_bytes;
 		mpz_t u;
-		int i;
 
-		rng = lib->crypto->create_rng(lib->crypto, RNG_TRUE);
 		mpz_init(u);
+		random_bytes = chunk_alloc(key_size);
 
 		for (i = 1; i < threshold; i++)
 		{
-			mpz_init(d);
-
-			if (!rng->allocate_bytes(rng, key_size, &random_bytes))
+			if (!drbg->generate(drbg, random_bytes.len, random_bytes.ptr))
 			{
-				rng_failed = TRUE;
+				drbg_failed = TRUE;
 				continue;
 			}
-			mpz_import(d, random_bytes.len, 1, 1, 1, 0, random_bytes.ptr);
-			mpz_mod(d, d, this->m);
-			(*this->d)[i] = *d;
-			chunk_clear(&random_bytes);
+			mpz_import(this->d[i], random_bytes.len, 1, 1, 1, 0, random_bytes.ptr);
+			mpz_mod(this->d[i], this->d[i], this->m);
 		}
 
 		/* generate verification key v as a square number */
 		do
 		{
-			if (!rng->allocate_bytes(rng, key_size, &random_bytes))
+			if (!drbg->generate(drbg, random_bytes.len, random_bytes.ptr))
 			{
-				rng_failed = TRUE;
+				drbg_failed = TRUE;
 				break;
 			}
 			mpz_import(this->v, random_bytes.len, 1, 1, 1, 0, random_bytes.ptr);
 			mpz_mul(this->v, this->v, this->v);
 			mpz_mod(this->v, this->v, this->n);
 			mpz_gcd(u, this->v, this->n);
-			chunk_free(&random_bytes);
 		}
 		while (mpz_cmp_ui(u, 1) != 0);
 
 		mpz_clear(u);
-		rng->destroy(rng);
+		chunk_clear(&random_bytes);
 	}
 
 	mpz_clear_sensitive(p1);
 	mpz_clear_sensitive(q1);
+	drbg->destroy(drbg);
 
-	if (rng_failed || invert_failed)
+	if (drbg_failed || invert_failed)
 	{
 		DBG1(DBG_LIB, "rsa key generation failed");
 		destroy(this);
@@ -810,6 +940,87 @@ gmp_rsa_private_key_t *gmp_rsa_private_key_gen(key_type_t type, va_list args)
 	this->k = key_size;
 
 	return &this->public;
+}
+
+/**
+ * Recover the primes from n, e and d using the algorithm described in
+ * Appendix C of NIST SP 800-56B.
+ */
+static bool calculate_pq(private_gmp_rsa_private_key_t *this)
+{
+	gmp_randstate_t rstate;
+	mpz_t k, r, g, y, n1, x;
+	int i, t, j;
+	bool success = FALSE;
+
+	gmp_randinit_default(rstate);
+	mpz_init(k);
+	mpz_init(r);
+	mpz_init(g);
+	mpz_init(y);
+	mpz_init(n1);
+	mpz_init(x);
+	/* k = (d * e) - 1 */
+	mpz_mul(k, *this->d, this->e);
+	mpz_sub_ui(k, k, 1);
+	if (mpz_odd_p(k))
+	{
+		goto error;
+	}
+	/* k = 2^t * r, where r is the largest odd integer dividing k, and t >= 1 */
+	mpz_set(r, k);
+	for (t = 0; !mpz_odd_p(r); t++)
+	{	/* r = r/2 */
+		mpz_divexact_ui(r, r, 2);
+	}
+	/* we need n-1 below */
+	mpz_sub_ui(n1, this->n, 1);
+	for (i = 0; i < 100; i++)
+	{	/* generate random integer g in [0, n-1] */
+		mpz_urandomm(g, rstate, this->n);
+		/* y = g^r mod n */
+		mpz_powm(y, g, r, this->n);
+		/* try again if y == 1 or y == n-1 */
+		if (mpz_cmp_ui(y, 1) == 0 || mpz_cmp(y, n1) == 0)
+		{
+			continue;
+		}
+		for (j = 0; j < t; j++)
+		{	/* x = y^2 mod n */
+			mpz_powm_ui(x, y, 2, this->n);
+			/* stop if x == 1 */
+			if (mpz_cmp_ui(x, 1) == 0)
+			{
+				goto done;
+			}
+			/* retry with new g if x = n-1 */
+			if (mpz_cmp(x, n1) == 0)
+			{
+				break;
+			}
+			/* y = x */
+			mpz_set(y, x);
+		}
+	}
+	goto error;
+
+done:
+	/* p = gcd(y-1, n) */
+	mpz_sub_ui(y, y, 1);
+	mpz_gcd(this->p, y, this->n);
+	/* q = n/p */
+	mpz_divexact(this->q, this->n, this->p);
+	success = TRUE;
+
+error:
+	mpz_clear_sensitive(k);
+	mpz_clear_sensitive(r);
+	mpz_clear_sensitive(g);
+	mpz_clear_sensitive(y);
+	mpz_clear_sensitive(x);
+	mpz_clear(n1);
+	gmp_randclear(rstate);
+	return success;
 }
 
 /**
@@ -874,9 +1085,30 @@ gmp_rsa_private_key_t *gmp_rsa_private_key_load(key_type_t type, va_list args)
 	mpz_import(this->n, n.len, 1, 1, 1, 0, n.ptr);
 	mpz_import(this->e, e.len, 1, 1, 1, 0, e.ptr);
 	mpz_import(*this->d, d.len, 1, 1, 1, 0, d.ptr);
-	mpz_import(this->p, p.len, 1, 1, 1, 0, p.ptr);
-	mpz_import(this->q, q.len, 1, 1, 1, 0, q.ptr);
-	mpz_import(this->coeff, coeff.len, 1, 1, 1, 0, coeff.ptr);
+	if (p.len)
+	{
+		mpz_import(this->p, p.len, 1, 1, 1, 0, p.ptr);
+	}
+	if (q.len)
+	{
+		mpz_import(this->q, q.len, 1, 1, 1, 0, q.ptr);
+	}
+	if (!p.len && !q.len)
+	{	/* p and q missing in key, recalculate from n, e and d */
+		if (!calculate_pq(this))
+		{
+			destroy(this);
+			return NULL;
+		}
+	}
+	else if (!p.len)
+	{	/* p missing in key, recalculate: p = n / q */
+		mpz_divexact(this->p, this->n, this->q);
+	}
+	else if (!q.len)
+	{	/* q missing in key, recalculate: q = n / p */
+		mpz_divexact(this->q, this->n, this->p);
+	}
 	if (!exp1.len)
 	{	/* exp1 missing in key, recalculate: exp1 = d mod (p-1) */
 		mpz_sub_ui(this->exp1, this->p, 1);
@@ -895,6 +1127,14 @@ gmp_rsa_private_key_t *gmp_rsa_private_key_load(key_type_t type, va_list args)
 	{
 		mpz_import(this->exp2, exp2.len, 1, 1, 1, 0, exp2.ptr);
 	}
+	if (!coeff.len)
+	{	/* coeff missing in key, recalculate: coeff = q^-1 mod p */
+		mpz_invert(this->coeff, this->q, this->p);
+	}
+	else
+	{
+		mpz_import(this->coeff, coeff.len, 1, 1, 1, 0, coeff.ptr);
+	}
 	this->k = (mpz_sizeinbase(this->n, 2) + 7) / BITS_PER_BYTE;
 	if (check(this) != SUCCESS)
 	{
@@ -903,4 +1143,3 @@ gmp_rsa_private_key_t *gmp_rsa_private_key_load(key_type_t type, va_list args)
 	}
 	return &this->public;
 }
-

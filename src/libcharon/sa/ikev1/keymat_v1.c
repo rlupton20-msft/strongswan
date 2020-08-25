@@ -1,6 +1,6 @@
 /*
  * Copyright (C) 2011 Tobias Brunner
- * Hochschule fuer Technik Rapperswil
+ * HSR Hochschule fuer Technik Rapperswil
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -16,28 +16,11 @@
 #include "keymat_v1.h"
 
 #include <daemon.h>
+#include <sa/ikev1/iv_manager.h>
 #include <encoding/generator.h>
 #include <encoding/payloads/nonce_payload.h>
-#include <collections/linked_list.h>
 
 typedef struct private_keymat_v1_t private_keymat_v1_t;
-
-/**
- * Max. number of IVs/QMs to track.
- */
-#define MAX_EXCHANGES_DEFAULT 3
-
-/**
- * Data stored for IVs
- */
-typedef struct {
-	/** message ID */
-	u_int32_t mid;
-	/** current IV */
-	chunk_t iv;
-	/** last block of encrypted message */
-	chunk_t last_block;
-} iv_data_t;
 
 /**
  * Private data of an keymat_t object.
@@ -75,11 +58,6 @@ struct private_keymat_v1_t {
 	hasher_t *hasher;
 
 	/**
-	 * Key used for authentication during main mode
-	 */
-	chunk_t skeyid;
-
-	/**
 	 * Key to derive key material from for non-ISAKMP SAs, rekeying
 	 */
 	chunk_t skeyid_d;
@@ -90,60 +68,10 @@ struct private_keymat_v1_t {
 	chunk_t skeyid_a;
 
 	/**
-	 * Phase 1 IV
+	 * IV and QM manager
 	 */
-	iv_data_t phase1_iv;
-
-	/**
-	 * Keep track of IVs for exchanges after phase 1. We store only a limited
-	 * number of IVs in an MRU sort of way. Stores iv_data_t objects.
-	 */
-	linked_list_t *ivs;
-
-	/**
-	 * Keep track of Nonces during Quick Mode exchanges. Only a limited number
-	 * of QMs are tracked at the same time. Stores qm_data_t objects.
-	 */
-	linked_list_t *qms;
-
-	/**
-	 * Max. number of IVs/Quick Modes to track.
-	 */
-	int max_exchanges;
+	iv_manager_t *iv_manager;
 };
-
-
-/**
- * Destroy an iv_data_t object.
- */
-static void iv_data_destroy(iv_data_t *this)
-{
-	chunk_free(&this->last_block);
-	chunk_free(&this->iv);
-	free(this);
-}
-
-/**
- * Data stored for Quick Mode exchanges
- */
-typedef struct {
-	/** message ID */
-	u_int32_t mid;
-	/** Ni_b (Nonce from first message) */
-	chunk_t n_i;
-	/** Nr_b (Nonce from second message) */
-	chunk_t n_r;
-} qm_data_t;
-
-/**
- * Destroy a qm_data_t object.
- */
-static void qm_data_destroy(qm_data_t *this)
-{
-	chunk_free(&this->n_i);
-	chunk_free(&this->n_r);
-	free(this);
-}
 
 /**
  * Constants used in key derivation.
@@ -269,12 +197,12 @@ static bool expand_skeyid_e(chunk_t skeyid_e, size_t key_size, prf_t *prf,
  * Create a simple implementation of the aead_t interface which only encrypts
  * or decrypts data.
  */
-static aead_t *create_aead(proposal_t *proposal, prf_t *prf, chunk_t skeyid_e)
+static aead_t *create_aead(proposal_t *proposal, prf_t *prf, chunk_t skeyid_e,
+						   chunk_t *ka)
 {
 	private_aead_t *this;
-	u_int16_t alg, key_size;
+	uint16_t alg, key_size;
 	crypter_t *crypter;
-	chunk_t ka;
 
 	if (!proposal->get_algorithm(proposal, ENCRYPTION_ALGORITHM, &alg,
 								 &key_size))
@@ -291,18 +219,16 @@ static aead_t *create_aead(proposal_t *proposal, prf_t *prf, chunk_t skeyid_e)
 			 encryption_algorithm_names, alg, key_size);
 		return NULL;
 	}
-	key_size = crypter->get_key_size(crypter);
-	if (!expand_skeyid_e(skeyid_e, crypter->get_key_size(crypter), prf, &ka))
+	if (!expand_skeyid_e(skeyid_e, crypter->get_key_size(crypter), prf, ka))
 	{
 		return NULL;
 	}
-	DBG4(DBG_IKE, "encryption key Ka %B", &ka);
-	if (!crypter->set_key(crypter, ka))
+	DBG4(DBG_IKE, "encryption key Ka %B", ka);
+	if (!crypter->set_key(crypter, *ka))
 	{
-		chunk_clear(&ka);
+		chunk_clear(ka);
 		return NULL;
 	}
-	chunk_clear(&ka);
 
 	INIT(this,
 		.aead = {
@@ -324,7 +250,7 @@ static aead_t *create_aead(proposal_t *proposal, prf_t *prf, chunk_t skeyid_e)
 /**
  * Converts integrity algorithm to PRF algorithm
  */
-static u_int16_t auth_to_prf(u_int16_t alg)
+static uint16_t auth_to_prf(uint16_t alg)
 {
 	switch (alg)
 	{
@@ -348,7 +274,7 @@ static u_int16_t auth_to_prf(u_int16_t alg)
 /**
  * Converts integrity algorithm to hash algorithm
  */
-static u_int16_t auth_to_hash(u_int16_t alg)
+static uint16_t auth_to_hash(uint16_t alg)
 {
 	switch (alg)
 	{
@@ -370,7 +296,7 @@ static u_int16_t auth_to_hash(u_int16_t alg)
 /**
  * Adjust the key length for PRF algorithms that expect a fixed key length.
  */
-static void adjust_keylen(u_int16_t alg, chunk_t *key)
+static void adjust_keylen(uint16_t alg, chunk_t *key)
 {
 	switch (alg)
 	{
@@ -392,11 +318,11 @@ METHOD(keymat_v1_t, derive_ike_keys, bool,
 	auth_method_t auth, shared_key_t *shared_key)
 {
 	chunk_t g_xy, g_xi, g_xr, dh_me, spi_i, spi_r, nonces, data, skeyid_e;
-	chunk_t skeyid;
-	u_int16_t alg;
+	chunk_t skeyid, ka;
+	uint16_t alg;
 
-	spi_i = chunk_alloca(sizeof(u_int64_t));
-	spi_r = chunk_alloca(sizeof(u_int64_t));
+	spi_i = chunk_alloca(sizeof(uint64_t));
+	spi_r = chunk_alloca(sizeof(uint64_t));
 
 	if (!proposal->get_algorithm(proposal, PSEUDO_RANDOM_FUNCTION, &alg, NULL))
 	{	/* no PRF negotiated, use HMAC version of integrity algorithm instead */
@@ -431,8 +357,8 @@ METHOD(keymat_v1_t, derive_ike_keys, bool,
 	}
 	DBG4(DBG_IKE, "shared Diffie Hellman secret %B", &g_xy);
 
-	*((u_int64_t*)spi_i.ptr) = id->get_initiator_spi(id);
-	*((u_int64_t*)spi_r.ptr) = id->get_responder_spi(id);
+	*((uint64_t*)spi_i.ptr) = id->get_initiator_spi(id);
+	*((uint64_t*)spi_r.ptr) = id->get_responder_spi(id);
 	nonces = chunk_cata("cc", nonce_i, nonce_r);
 
 	switch (auth)
@@ -490,6 +416,7 @@ METHOD(keymat_v1_t, derive_ike_keys, bool,
 	{
 		chunk_clear(&g_xy);
 		chunk_clear(&data);
+		chunk_clear(&skeyid);
 		return FALSE;
 	}
 	chunk_clear(&data);
@@ -501,6 +428,7 @@ METHOD(keymat_v1_t, derive_ike_keys, bool,
 	{
 		chunk_clear(&g_xy);
 		chunk_clear(&data);
+		chunk_clear(&skeyid);
 		return FALSE;
 	}
 	chunk_clear(&data);
@@ -512,6 +440,7 @@ METHOD(keymat_v1_t, derive_ike_keys, bool,
 	{
 		chunk_clear(&g_xy);
 		chunk_clear(&data);
+		chunk_clear(&skeyid);
 		return FALSE;
 	}
 	chunk_clear(&data);
@@ -550,11 +479,14 @@ METHOD(keymat_v1_t, derive_ike_keys, bool,
 	}
 	chunk_clear(&skeyid);
 
-	this->aead = create_aead(proposal, this->prf, skeyid_e);
+	this->aead = create_aead(proposal, this->prf, skeyid_e, &ka);
 	if (!this->aead)
 	{
 		return FALSE;
 	}
+	charon->bus->ike_derived_keys(charon->bus, ka, chunk_empty, this->skeyid_a,
+								  chunk_empty);
+	chunk_clear(&ka);
 	if (!this->hasher && !this->public.create_hasher(&this->public, proposal))
 	{
 		return FALSE;
@@ -570,26 +502,17 @@ METHOD(keymat_v1_t, derive_ike_keys, bool,
 	/* initial IV = hash(g^xi | g^xr) */
 	data = chunk_cata("cc", g_xi, g_xr);
 	chunk_free(&dh_me);
-	if (!this->hasher->allocate_hash(this->hasher, data, &this->phase1_iv.iv))
-	{
-		return FALSE;
-	}
-	if (this->phase1_iv.iv.len > this->aead->get_block_size(this->aead))
-	{
-		this->phase1_iv.iv.len = this->aead->get_block_size(this->aead);
-	}
-	DBG4(DBG_IKE, "initial IV %B", &this->phase1_iv.iv);
-
-	return TRUE;
+	return this->iv_manager->init_iv_chain(this->iv_manager, data, this->hasher,
+										this->aead->get_block_size(this->aead));
 }
 
 METHOD(keymat_v1_t, derive_child_keys, bool,
 	private_keymat_v1_t *this, proposal_t *proposal, diffie_hellman_t *dh,
-	u_int32_t spi_i, u_int32_t spi_r, chunk_t nonce_i, chunk_t nonce_r,
+	uint32_t spi_i, uint32_t spi_r, chunk_t nonce_i, chunk_t nonce_r,
 	chunk_t *encr_i, chunk_t *integ_i, chunk_t *encr_r, chunk_t *integ_r)
 {
-	u_int16_t enc_alg, int_alg, enc_size = 0, int_size = 0;
-	u_int8_t protocol;
+	uint16_t enc_alg, int_alg, enc_size = 0, int_size = 0;
+	uint8_t protocol;
 	prf_plus_t *prf_plus;
 	chunk_t seed, secret = chunk_empty;
 	bool success = FALSE;
@@ -725,7 +648,7 @@ failure:
 METHOD(keymat_v1_t, create_hasher, bool,
 	private_keymat_v1_t *this, proposal_t *proposal)
 {
-	u_int16_t alg;
+	uint16_t alg;
 	if (!proposal->get_algorithm(proposal, INTEGRITY_ALGORITHM, &alg, NULL) ||
 		(alg = auth_to_hash(alg)) == HASH_UNKNOWN)
 	{
@@ -751,10 +674,11 @@ METHOD(keymat_v1_t, get_hasher, hasher_t*,
 
 METHOD(keymat_v1_t, get_hash, bool,
 	private_keymat_v1_t *this, bool initiator, chunk_t dh, chunk_t dh_other,
-	ike_sa_id_t *ike_sa_id, chunk_t sa_i, chunk_t id, chunk_t *hash)
+	ike_sa_id_t *ike_sa_id, chunk_t sa_i, chunk_t id, chunk_t *hash,
+	signature_scheme_t *scheme)
 {
 	chunk_t data;
-	u_int64_t spi, spi_other;
+	uint64_t spi, spi_other;
 
 	/* HASH_I = prf(SKEYID, g^xi | g^xr | CKY-I | CKY-R | SAi_b | IDii_b )
 	 * HASH_R = prf(SKEYID, g^xr | g^xi | CKY-R | CKY-I | SAi_b | IDir_b )
@@ -810,7 +734,7 @@ static chunk_t get_message_data(message_t *message, generator_t *generator)
 {
 	payload_t *payload, *next;
 	enumerator_t *enumerator;
-	u_int32_t *lenpos;
+	uint32_t *lenpos;
 
 	if (message->is_encoded(message))
 	{	/* inbound, although the message is generated, we cannot access the
@@ -846,47 +770,11 @@ static chunk_t get_message_data(message_t *message, generator_t *generator)
 	return generator->get_chunk(generator, &lenpos);
 }
 
-/**
- * Try to find data about a Quick Mode with the given message ID,
- * if none is found, state is generated.
- */
-static qm_data_t *lookup_quick_mode(private_keymat_v1_t *this, u_int32_t mid)
-{
-	enumerator_t *enumerator;
-	qm_data_t *qm, *found = NULL;
-
-	enumerator = this->qms->create_enumerator(this->qms);
-	while (enumerator->enumerate(enumerator, &qm))
-	{
-		if (qm->mid == mid)
-		{	/* state gets moved to the front of the list */
-			this->qms->remove_at(this->qms, enumerator);
-			found = qm;
-			break;
-		}
-	}
-	enumerator->destroy(enumerator);
-	if (!found)
-	{
-		INIT(found,
-			.mid = mid,
-		);
-	}
-	this->qms->insert_first(this->qms, found);
-	/* remove least recently used state if maximum reached */
-	if (this->qms->get_count(this->qms) > this->max_exchanges &&
-		this->qms->remove_last(this->qms, (void**)&qm) == SUCCESS)
-	{
-		qm_data_destroy(qm);
-	}
-	return found;
-}
-
 METHOD(keymat_v1_t, get_hash_phase2, bool,
 	private_keymat_v1_t *this, message_t *message, chunk_t *hash)
 {
-	u_int32_t mid, mid_n;
-	chunk_t data = chunk_empty;
+	uint32_t mid, mid_n;
+	chunk_t data = chunk_empty, *n_i, *n_r;
 	bool add_message = TRUE;
 	char *name = "Hash";
 
@@ -910,34 +798,34 @@ METHOD(keymat_v1_t, get_hash_phase2, bool,
 	{
 		case QUICK_MODE:
 		{
-			qm_data_t *qm = lookup_quick_mode(this, mid);
-			if (!qm->n_i.ptr)
+			this->iv_manager->lookup_quick_mode(this->iv_manager, mid, &n_i,
+												&n_r);
+			if (!n_i->ptr)
 			{	/* Hash(1) = prf(SKEYID_a, M-ID | Message after HASH payload) */
 				name = "Hash(1)";
-				if (!get_nonce(message, &qm->n_i))
+				if (!get_nonce(message, n_i))
 				{
 					return FALSE;
 				}
 				data = chunk_from_thing(mid_n);
 			}
-			else if (!qm->n_r.ptr)
+			else if (!n_r->ptr)
 			{	/* Hash(2) = prf(SKEYID_a, M-ID | Ni_b | Message after HASH) */
 				name = "Hash(2)";
-				if (!get_nonce(message, &qm->n_r))
+				if (!get_nonce(message, n_r))
 				{
 					return FALSE;
 				}
-				data = chunk_cata("cc", chunk_from_thing(mid_n), qm->n_i);
+				data = chunk_cata("cc", chunk_from_thing(mid_n), *n_i);
 			}
 			else
 			{	/* Hash(3) = prf(SKEYID_a, 0 | M-ID | Ni_b | Nr_b) */
 				name = "Hash(3)";
 				data = chunk_cata("cccc", octet_0, chunk_from_thing(mid_n),
-								  qm->n_i, qm->n_r);
+								  *n_i, *n_r);
 				add_message = FALSE;
 				/* we don't need the state anymore */
-				this->qms->remove(this->qms, qm, NULL);
-				qm_data_destroy(qm);
+				this->iv_manager->remove_quick_mode(this->iv_manager, mid);
 			}
 			break;
 		}
@@ -979,119 +867,22 @@ METHOD(keymat_v1_t, get_hash_phase2, bool,
 	return TRUE;
 }
 
-/**
- * Generate an IV
- */
-static bool generate_iv(private_keymat_v1_t *this, iv_data_t *iv)
-{
-	if (iv->mid == 0 || iv->iv.ptr)
-	{	/* use last block of previous encrypted message */
-		chunk_free(&iv->iv);
-		iv->iv = iv->last_block;
-		iv->last_block = chunk_empty;
-	}
-	else
-	{
-		/* initial phase 2 IV = hash(last_phase1_block | mid) */
-		u_int32_t net;;
-		chunk_t data;
-
-		net = htonl(iv->mid);
-		data = chunk_cata("cc", this->phase1_iv.iv, chunk_from_thing(net));
-		if (!this->hasher->allocate_hash(this->hasher, data, &iv->iv))
-		{
-			return FALSE;
-		}
-		if (iv->iv.len > this->aead->get_block_size(this->aead))
-		{
-			iv->iv.len = this->aead->get_block_size(this->aead);
-		}
-	}
-	DBG4(DBG_IKE, "next IV for MID %u %B", iv->mid, &iv->iv);
-	return TRUE;
-}
-
-/**
- * Try to find an IV for the given message ID, if not found, generate it.
- */
-static iv_data_t *lookup_iv(private_keymat_v1_t *this, u_int32_t mid)
-{
-	enumerator_t *enumerator;
-	iv_data_t *iv, *found = NULL;
-
-	if (mid == 0)
-	{
-		return &this->phase1_iv;
-	}
-
-	enumerator = this->ivs->create_enumerator(this->ivs);
-	while (enumerator->enumerate(enumerator, &iv))
-	{
-		if (iv->mid == mid)
-		{	/* IV gets moved to the front of the list */
-			this->ivs->remove_at(this->ivs, enumerator);
-			found = iv;
-			break;
-		}
-	}
-	enumerator->destroy(enumerator);
-	if (!found)
-	{
-		INIT(found,
-			.mid = mid,
-		);
-		if (!generate_iv(this, found))
-		{
-			iv_data_destroy(found);
-			return NULL;
-		}
-	}
-	this->ivs->insert_first(this->ivs, found);
-	/* remove least recently used IV if maximum reached */
-	if (this->ivs->get_count(this->ivs) > this->max_exchanges &&
-		this->ivs->remove_last(this->ivs, (void**)&iv) == SUCCESS)
-	{
-		iv_data_destroy(iv);
-	}
-	return found;
-}
-
 METHOD(keymat_v1_t, get_iv, bool,
-	private_keymat_v1_t *this, u_int32_t mid, chunk_t *out)
+	private_keymat_v1_t *this, uint32_t mid, chunk_t *out)
 {
-	iv_data_t *iv;
-
-	iv = lookup_iv(this, mid);
-	if (iv)
-	{
-		*out = iv->iv;
-		return TRUE;
-	}
-	return FALSE;
+	return this->iv_manager->get_iv(this->iv_manager, mid, out);
 }
 
 METHOD(keymat_v1_t, update_iv, bool,
-	private_keymat_v1_t *this, u_int32_t mid, chunk_t last_block)
+	private_keymat_v1_t *this, uint32_t mid, chunk_t last_block)
 {
-	iv_data_t *iv = lookup_iv(this, mid);
-	if (iv)
-	{	/* update last block */
-		chunk_free(&iv->last_block);
-		iv->last_block = chunk_clone(last_block);
-		return TRUE;
-	}
-	return FALSE;
+	return this->iv_manager->update_iv(this->iv_manager, mid, last_block);
 }
 
 METHOD(keymat_v1_t, confirm_iv, bool,
-	private_keymat_v1_t *this, u_int32_t mid)
+	private_keymat_v1_t *this, uint32_t mid)
 {
-	iv_data_t *iv = lookup_iv(this, mid);
-	if (iv)
-	{
-		return generate_iv(this, iv);
-	}
-	return FALSE;
+	return this->iv_manager->confirm_iv(this->iv_manager, mid);
 }
 
 METHOD(keymat_t, get_version, ike_version_t,
@@ -1127,10 +918,7 @@ METHOD(keymat_t, destroy, void,
 	DESTROY_IF(this->hasher);
 	chunk_clear(&this->skeyid_d);
 	chunk_clear(&this->skeyid_a);
-	chunk_free(&this->phase1_iv.iv);
-	chunk_free(&this->phase1_iv.last_block);
-	this->ivs->destroy_function(this->ivs, (void*)iv_data_destroy);
-	this->qms->destroy_function(this->qms, (void*)qm_data_destroy);
+	this->iv_manager->destroy(this->iv_manager);
 	free(this);
 }
 
@@ -1160,12 +948,8 @@ keymat_v1_t *keymat_v1_create(bool initiator)
 			.update_iv = _update_iv,
 			.confirm_iv = _confirm_iv,
 		},
-		.ivs = linked_list_create(),
-		.qms = linked_list_create(),
 		.initiator = initiator,
-		.max_exchanges = lib->settings->get_int(lib->settings,
-					"%s.max_ikev1_exchanges", MAX_EXCHANGES_DEFAULT, lib->ns),
+		.iv_manager = iv_manager_create(0),
 	);
-
 	return &this->public;
 }

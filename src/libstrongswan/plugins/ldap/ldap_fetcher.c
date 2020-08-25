@@ -1,7 +1,7 @@
 /*
  * Copyright (C) 2008 Martin Willi
  * Copyright (C) 2007 Andreas Steffen
- * Hochschule fuer Technik Rapperswil
+ * HSR Hochschule fuer Technik Rapperswil
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -93,8 +93,7 @@ static bool parse(LDAP *ldap, LDAPMessage *result, chunk_t *response)
 	}
 	else
 	{
-		DBG1(DBG_LIB, "finding first LDAP entry failed: %s",
-			 ldap_err2string(ldap_result2error(ldap, entry, 0)));
+		DBG1(DBG_LIB, "finding first LDAP entry failed");
 	}
 	return success;
 }

@@ -1,7 +1,7 @@
 /*
  * Copyright (C) 2012 Giuliano Grassi
  * Copyright (C) 2012 Ralf Sager
- * Hochschule fuer Technik Rapperswil
+ * HSR Hochschule fuer Technik Rapperswil
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -43,7 +43,7 @@ struct ipsec_event_relay_t {
 	 * @param dst			destination address of expired SA
 	 * @param hard			TRUE for a hard expire, FALSE otherwise
 	 */
-	void (*expire)(ipsec_event_relay_t *this, u_int8_t protocol, u_int32_t spi,
+	void (*expire)(ipsec_event_relay_t *this, uint8_t protocol, uint32_t spi,
 				   host_t *dst, bool hard);
 
 	/**

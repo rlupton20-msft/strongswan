@@ -1,7 +1,7 @@
 /*
- * Copyright (C) 2008-2015 Tobias Brunner
+ * Copyright (C) 2008-2019 Tobias Brunner
  * Copyright (C) 2008 Martin Willi
- * Hochschule fuer Technik Rapperswil
+ * HSR Hochschule fuer Technik Rapperswil
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -90,11 +90,6 @@ struct ca_section_t {
 	linked_list_t *ocsp;
 
 	/**
-	 * Hashes of certificates issued by this CA
-	 */
-	linked_list_t *hashes;
-
-	/**
 	 * Base URI used for certificates from this CA
 	 */
 	char *certuribase;
@@ -132,7 +127,6 @@ static ca_section_t *ca_section_create(char *name, char *path)
 	ca->path = strdup(path);
 	ca->crl = linked_list_create();
 	ca->ocsp = linked_list_create();
-	ca->hashes = linked_list_create();
 	ca->certuribase = NULL;
 	return ca;
 }
@@ -144,7 +138,6 @@ static void ca_section_destroy(ca_section_t *this)
 {
 	this->crl->destroy_function(this->crl, free);
 	this->ocsp->destroy_function(this->ocsp, free);
-	this->hashes->destroy_offset(this->hashes, offsetof(identification_t, destroy));
 	this->cert->destroy(this->cert);
 	free(this->certuribase);
 	free(this->path);
@@ -171,26 +164,30 @@ typedef struct {
 	identification_t *id;
 } cert_data_t;
 
-/**
- * destroy cert_data
- */
-static void cert_data_destroy(cert_data_t *data)
+CALLBACK(cert_data_destroy, void,
+	cert_data_t *data)
 {
 	data->this->lock->unlock(data->this->lock);
 	free(data);
 }
 
-/**
- * filter function for certs enumerator
- */
-static bool certs_filter(cert_data_t *data, ca_cert_t **in,
-						 certificate_t **out)
+CALLBACK(certs_filter, bool,
+	cert_data_t *data, enumerator_t *orig, va_list args)
 {
+	ca_cert_t *cacert;
 	public_key_t *public;
-	certificate_t *cert = (*in)->cert;
+	certificate_t **out;
 
-	if (data->cert == CERT_ANY || data->cert == cert->get_type(cert))
+	VA_ARGS_VGET(args, out);
+
+	while (orig->enumerate(orig, &cacert))
 	{
+		certificate_t *cert = cacert->cert;
+
+		if (data->cert != CERT_ANY && data->cert != cert->get_type(cert))
+		{
+			continue;
+		}
 		public = cert->get_public_key(cert);
 		if (public)
 		{
@@ -204,13 +201,18 @@ static bool certs_filter(cert_data_t *data, ca_cert_t **in,
 					return TRUE;
 				}
 			}
+			else
+			{
+				public->destroy(public);
+				continue;
+			}
 			public->destroy(public);
 		}
 		else if (data->key != KEY_ANY)
 		{
-			return FALSE;
+			continue;
 		}
-		if (data->id == NULL || cert->has_subject(cert, data->id))
+		if (!data->id || cert->has_subject(cert, data->id))
 		{
 			*out = cert;
 			return TRUE;
@@ -235,8 +237,8 @@ METHOD(credential_set_t, create_cert_enumerator, enumerator_t*,
 
 	this->lock->read_lock(this->lock);
 	enumerator = this->certs->create_enumerator(this->certs);
-	return enumerator_create_filter(enumerator, (void*)certs_filter, data,
-									(void*)cert_data_destroy);
+	return enumerator_create_filter(enumerator, certs_filter, data,
+									cert_data_destroy);
 }
 
 /**
@@ -299,32 +301,18 @@ static enumerator_t *create_inner_cdp(ca_section_t *section, cdp_data_t *data)
  */
 static enumerator_t *create_inner_cdp_hashandurl(ca_section_t *section, cdp_data_t *data)
 {
-	enumerator_t *enumerator = NULL, *hash_enum;
-	identification_t *current;
+	enumerator_t *enumerator = NULL;
 
 	if (!data->id || !section->certuribase)
 	{
 		return NULL;
 	}
 
-	hash_enum = section->hashes->create_enumerator(section->hashes);
-	while (hash_enum->enumerate(hash_enum, &current))
+	if (section->cert->has_subject(section->cert, data->id) != ID_MATCH_NONE)
 	{
-		if (current->matches(current, data->id))
-		{
-			char *url, *hash;
-
-			url = malloc(strlen(section->certuribase) + 40 + 1);
-			strcpy(url, section->certuribase);
-			hash = chunk_to_hex(current->get_encoding(current), NULL, FALSE).ptr;
-			strncat(url, hash, 40);
-			free(hash);
-
-			enumerator = enumerator_create_single(url, free);
-			break;
-		}
+		enumerator = enumerator_create_single(strdup(section->certuribase),
+											  free);
 	}
-	hash_enum->destroy(hash_enum);
 	return enumerator;
 }
 
@@ -354,11 +342,12 @@ METHOD(credential_set_t, create_cdp_enumerator, enumerator_t*,
 			data, (void*)cdp_data_destroy);
 }
 
-/**
- * Compare the given certificate to the ca_cert_t items in the list
- */
-static bool match_cert(ca_cert_t *item, certificate_t *cert)
+CALLBACK(match_cert, bool,
+	ca_cert_t *item, va_list args)
 {
+	certificate_t *cert;
+
+	VA_ARGS_VGET(args, cert);
 	return cert->equals(cert, item->cert);
 }
 
@@ -405,8 +394,7 @@ static certificate_t *add_cert_internal(private_stroke_ca_t *this,
 {
 	ca_cert_t *found;
 
-	if (this->certs->find_first(this->certs, (linked_list_match_t)match_cert,
-								(void**)&found, cert) == SUCCESS)
+	if (this->certs->find_first(this->certs, match_cert, (void**)&found, cert))
 	{
 		cert->destroy(cert);
 		cert = found->cert->get_ref(found->cert);
@@ -511,8 +499,7 @@ METHOD(stroke_ca_t, get_cert_ref, certificate_t*,
 	ca_cert_t *found;
 
 	this->lock->read_lock(this->lock);
-	if (this->certs->find_first(this->certs, (linked_list_match_t)match_cert,
-								(void**)&found, cert) == SUCCESS)
+	if (this->certs->find_first(this->certs, match_cert, (void**)&found, cert))
 	{
 		cert->destroy(cert);
 		cert = found->cert->get_ref(found->cert);
@@ -613,46 +600,6 @@ static void list_uris(linked_list_t *list, char *label, FILE *out)
 	enumerator->destroy(enumerator);
 }
 
-METHOD(stroke_ca_t, check_for_hash_and_url, void,
-	private_stroke_ca_t *this, certificate_t* cert)
-{
-	ca_section_t *section;
-	enumerator_t *enumerator;
-
-	hasher_t *hasher = lib->crypto->create_hasher(lib->crypto, HASH_SHA1);
-	if (hasher == NULL)
-	{
-		DBG1(DBG_IKE, "unable to use hash-and-url: sha1 not supported");
-		return;
-	}
-
-	this->lock->write_lock(this->lock);
-	enumerator = this->sections->create_enumerator(this->sections);
-	while (enumerator->enumerate(enumerator, (void**)&section))
-	{
-		if (section->certuribase && cert->issued_by(cert, section->cert, NULL))
-		{
-			chunk_t hash, encoded;
-
-			if (cert->get_encoding(cert, CERT_ASN1_DER, &encoded))
-			{
-				if (hasher->allocate_hash(hasher, encoded, &hash))
-				{
-					section->hashes->insert_last(section->hashes,
-						identification_create_from_encoding(ID_KEY_ID, hash));
-					chunk_free(&hash);
-				}
-				chunk_free(&encoded);
-			}
-			break;
-		}
-	}
-	enumerator->destroy(enumerator);
-	this->lock->unlock(this->lock);
-
-	hasher->destroy(hasher);
-}
-
 METHOD(stroke_ca_t, list, void,
 	private_stroke_ca_t *this, stroke_msg_t *msg, FILE *out)
 {
@@ -732,7 +679,6 @@ stroke_ca_t *stroke_ca_create()
 			.get_cert_ref = _get_cert_ref,
 			.reload_certs = _reload_certs,
 			.replace_certs = _replace_certs,
-			.check_for_hash_and_url = _check_for_hash_and_url,
 			.destroy = _destroy,
 		},
 		.sections = linked_list_create(),

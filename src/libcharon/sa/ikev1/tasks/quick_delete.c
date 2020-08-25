@@ -38,6 +38,7 @@
 
 #include <daemon.h>
 #include <encoding/payloads/delete_payload.h>
+#include <sa/ikev1/task_manager_v1.h>
 
 typedef struct private_quick_delete_t private_quick_delete_t;
 
@@ -69,7 +70,7 @@ struct private_quick_delete_t {
 	/**
 	 * Inbound SPI of CHILD_SA to delete
 	 */
-	u_int32_t spi;
+	uint32_t spi;
 
 	/**
 	 * Send delete even if SA does not exist
@@ -86,9 +87,9 @@ struct private_quick_delete_t {
  * Delete the specified CHILD_SA, if found
  */
 static bool delete_child(private_quick_delete_t *this, protocol_id_t protocol,
-						 u_int32_t spi, bool remote_close)
+						 uint32_t spi, bool remote_close)
 {
-	u_int64_t bytes_in, bytes_out;
+	uint64_t bytes_in, bytes_out;
 	child_sa_t *child_sa;
 	linked_list_t *my_ts, *other_ts;
 	child_cfg_t *child_cfg;
@@ -106,6 +107,10 @@ static bool delete_child(private_quick_delete_t *this, protocol_id_t protocol,
 	}
 
 	rekeyed = child_sa->get_state(child_sa) == CHILD_REKEYED;
+	if (!rekeyed)
+	{
+		rekeyed = ikev1_child_sa_is_redundant(this->ike_sa, child_sa, NULL);
+	}
 	child_sa->set_state(child_sa, CHILD_DELETING);
 
 	my_ts = linked_list_create_from_enumerator(
@@ -135,6 +140,7 @@ static bool delete_child(private_quick_delete_t *this, protocol_id_t protocol,
 	my_ts->destroy(my_ts);
 	other_ts->destroy(other_ts);
 
+	child_sa->set_state(child_sa, CHILD_DELETED);
 	if (!rekeyed)
 	{
 		charon->bus->child_updown(charon->bus, child_sa, FALSE);
@@ -154,7 +160,7 @@ static bool delete_child(private_quick_delete_t *this, protocol_id_t protocol,
 				case ACTION_ROUTE:
 					charon->traps->install(charon->traps,
 									this->ike_sa->get_peer_cfg(this->ike_sa),
-									child_cfg, child_sa->get_reqid(child_sa));
+									child_cfg);
 					break;
 				default:
 					break;
@@ -200,7 +206,7 @@ METHOD(task_t, process_r, status_t,
 	payload_t *payload;
 	delete_payload_t *delete_payload;
 	protocol_id_t protocol;
-	u_int32_t spi;
+	uint32_t spi;
 
 	payloads = message->create_payload_enumerator(message);
 	while (payloads->enumerate(payloads, &payload))
@@ -260,7 +266,7 @@ METHOD(task_t, destroy, void,
  * Described in header.
  */
 quick_delete_t *quick_delete_create(ike_sa_t *ike_sa, protocol_id_t protocol,
-									u_int32_t spi, bool force, bool expired)
+									uint32_t spi, bool force, bool expired)
 {
 	private_quick_delete_t *this;
 

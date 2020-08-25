@@ -55,7 +55,7 @@ struct private_kernel_listener_t {
 	/**
 	 * current broadcast address of internal network
 	 */
-	u_int32_t broadcast;
+	uint32_t broadcast;
 
 	/**
 	 * LAN interface index
@@ -105,7 +105,7 @@ static void send_net(private_forecast_forwarder_t *this,
 /**
  * Send a broadcast/multicast packet to a peer
  */
-static void send_peer(private_forecast_forwarder_t *this, u_int32_t dst,
+static void send_peer(private_forecast_forwarder_t *this, uint32_t dst,
 					  void *buf, size_t len, int mark)
 {
 	struct sockaddr_in addr = {
@@ -317,9 +317,15 @@ static void join_groups(private_kernel_listener_t *this, struct sockaddr *addr)
 /**
  * Attach the socket filter to the socket
  */
-static bool attach_filter(int fd, u_int32_t broadcast)
+static bool attach_filter(int fd, uint32_t broadcast, uint32_t ifindex)
 {
 	struct sock_filter filter_code[] = {
+		/* handle any marked packets (from clients) */
+		BPF_STMT(BPF_LD+BPF_B+BPF_ABS, SKF_AD_OFF+SKF_AD_MARK),
+		BPF_JUMP(BPF_JMP+BPF_JEQ+BPF_K, 0, 0, 2),
+		/* and those from the internal interface */
+		BPF_STMT(BPF_LD+BPF_B+BPF_ABS, SKF_AD_OFF+SKF_AD_IFINDEX),
+		BPF_JUMP(BPF_JMP+BPF_JEQ+BPF_K, ifindex, 0, 5),
 		/* destination address: is ... */
 		BPF_STMT(BPF_LD+BPF_W+BPF_ABS, offsetof(struct iphdr, daddr)),
 		/* broadcast, as received from the local network */
@@ -390,7 +396,7 @@ static void setup_interface(private_kernel_listener_t *this)
 				DBG1(DBG_NET, "using forecast interface %s", current->ifa_name);
 				this->ifindex = get_ifindex(this, current->ifa_name);
 				in = (struct sockaddr_in*)current->ifa_broadaddr;
-				attach_filter(this->pkt, in->sin_addr.s_addr);
+				attach_filter(this->pkt, in->sin_addr.s_addr, this->ifindex);
 				join_groups(this, current->ifa_addr);
 				host = host_create_from_sockaddr(current->ifa_broadaddr);
 				if (host)

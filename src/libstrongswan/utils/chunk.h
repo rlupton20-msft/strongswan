@@ -1,8 +1,8 @@
 /*
- * Copyright (C) 2008-2013 Tobias Brunner
+ * Copyright (C) 2008-2019 Tobias Brunner
  * Copyright (C) 2005-2008 Martin Willi
  * Copyright (C) 2005 Jan Hutter
- * Hochschule fuer Technik Rapperswil
+ * HSR Hochschule fuer Technik Rapperswil
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -280,11 +280,11 @@ static inline chunk_t chunk_skip(chunk_t chunk, size_t bytes)
 }
 
 /**
- * Skip a leading zero-valued byte
+ * Skip any leading zero-valued bytes
  */
 static inline chunk_t chunk_skip_zero(chunk_t chunk)
 {
-	if (chunk.len > 1 && *chunk.ptr == 0x00)
+	while (chunk.len > 1 && *chunk.ptr == 0x00)
 	{
 		chunk.ptr++;
 		chunk.len--;
@@ -292,6 +292,16 @@ static inline chunk_t chunk_skip_zero(chunk_t chunk)
 	return chunk;
 }
 
+/**
+ * Copy the data from src to dst, left-padded with chr if dst is longer,
+ * otherwise data is copied truncated on the left.
+ *
+ * @param dst			data is copied here
+ * @param src			data is copied from here
+ * @param chr			value to use for padding if necessary
+ * @return				the destination chunk
+ */
+chunk_t chunk_copy_pad(chunk_t dst, chunk_t src, u_char chr);
 
 /**
  *  Compare two chunks, returns zero if a equals b
@@ -332,7 +342,7 @@ static inline bool chunk_equals_ptr(chunk_t *a, chunk_t *b)
 }
 
 /**
- * Increment a chunk, as it would reprensent a network order integer.
+ * Increment a chunk, as it would represent a network order integer.
  *
  * @param chunk			chunk to increment
  * @return				TRUE if an overflow occurred
@@ -375,7 +385,7 @@ void chunk_hash_seed();
  * @param chunk			data to hash
  * @return				hash value
  */
-u_int32_t chunk_hash(chunk_t chunk);
+uint32_t chunk_hash(chunk_t chunk);
 
 /**
  * Incremental version of chunk_hash. Use this to hash two or more chunks.
@@ -384,7 +394,7 @@ u_int32_t chunk_hash(chunk_t chunk);
  * @param hash			previous hash value
  * @return				hash value
  */
-u_int32_t chunk_hash_inc(chunk_t chunk, u_int32_t hash);
+uint32_t chunk_hash_inc(chunk_t chunk, uint32_t hash);
 
 /**
  * Computes a 32 bit hash of the given chunk.
@@ -398,7 +408,7 @@ u_int32_t chunk_hash_inc(chunk_t chunk, u_int32_t hash);
  * @param chunk			data to hash
  * @return				hash value
  */
-u_int32_t chunk_hash_static(chunk_t chunk);
+uint32_t chunk_hash_static(chunk_t chunk);
 
 /**
  * Incremental version of chunk_hash_static(). Use this to hash two or more
@@ -408,7 +418,7 @@ u_int32_t chunk_hash_static(chunk_t chunk);
  * @param hash			previous hash value
  * @return				hash value
  */
-u_int32_t chunk_hash_static_inc(chunk_t chunk, u_int32_t hash);
+uint32_t chunk_hash_static_inc(chunk_t chunk, uint32_t hash);
 
 /**
  * Computes a quick MAC from the given chunk and key using SipHash.
@@ -422,7 +432,7 @@ u_int32_t chunk_hash_static_inc(chunk_t chunk, u_int32_t hash);
  * @param key			key to use
  * @return				MAC for given input and key
  */
-u_int64_t chunk_mac(chunk_t chunk, u_char *key);
+uint64_t chunk_mac(chunk_t chunk, u_char *key);
 
 /**
  * Calculate the Internet Checksum according to RFC 1071 for the given chunk.
@@ -434,7 +444,7 @@ u_int64_t chunk_mac(chunk_t chunk, u_char *key);
  * @param data			data to process
  * @return				checksum (one's complement, network order)
  */
-u_int16_t chunk_internet_checksum(chunk_t data);
+uint16_t chunk_internet_checksum(chunk_t data);
 
 /**
  * Extend the given Internet Checksum (one's complement, in network byte order)
@@ -447,7 +457,7 @@ u_int16_t chunk_internet_checksum(chunk_t data);
  * @param checksum		previous checksum (one's complement, network order)
  * @return				checksum (one's complement, network order)
  */
-u_int16_t chunk_internet_checksum_inc(chunk_t data, u_int16_t checksum);
+uint16_t chunk_internet_checksum_inc(chunk_t data, uint16_t checksum);
 
 /**
  * printf hook function for chunk_t.

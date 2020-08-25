@@ -1,6 +1,6 @@
 /*
  * Copyright (C) 2012 Tobias Brunner
- * Hochschule fuer Technik Rapperswil
+ * HSR Hochschule fuer Technik Rapperswil
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -69,11 +69,20 @@ static bool entry_matches(eap_vendor_type_t *item, eap_vendor_type_t *other)
 	return item->type == other->type && item->vendor == other->vendor;
 }
 
+CALLBACK(entry_matches_cb, bool,
+	eap_vendor_type_t *item, va_list args)
+{
+	eap_vendor_type_t *other;
+
+	VA_ARGS_VGET(args, other);
+	return entry_matches(item, other);
+}
+
 /**
  * Load the given EAP method
  */
 static eap_method_t *load_method(private_eap_dynamic_t *this,
-								 eap_type_t type, u_int32_t vendor)
+								 eap_type_t type, uint32_t vendor)
 {
 	eap_method_t *method;
 
@@ -92,6 +101,13 @@ static eap_method_t *load_method(private_eap_dynamic_t *this,
 		}
 	}
 	return method;
+}
+
+METHOD(eap_method_t, get_auth, auth_cfg_t*,
+	private_eap_dynamic_t *this)
+{
+	/* get_auth() is only registered if the EAP method supports it */
+	return this->method->get_auth(this->method);
 }
 
 /**
@@ -114,8 +130,7 @@ static void select_method(private_eap_dynamic_t *this)
 	{
 		if (inner)
 		{
-			if (inner->find_first(inner, (void*)entry_matches,
-								  NULL, entry) != SUCCESS)
+			if (!inner->find_first(inner, entry_matches_cb, NULL, entry))
 			{
 				if (entry->vendor)
 				{
@@ -135,6 +150,10 @@ static void select_method(private_eap_dynamic_t *this)
 		this->method = load_method(this, entry->type, entry->vendor);
 		if (this->method)
 		{
+			if (this->method->get_auth)
+			{
+				this->public.interface.get_auth = _get_auth;
+			}
 			if (entry->vendor)
 			{
 				DBG1(DBG_IKE, "vendor specific EAP method %d-%d selected",
@@ -171,7 +190,7 @@ METHOD(eap_method_t, process, status_t,
 	private_eap_dynamic_t *this, eap_payload_t *in, eap_payload_t **out)
 {
 	eap_type_t received_type, type;
-	u_int32_t received_vendor, vendor;
+	uint32_t received_vendor, vendor;
 
 	received_type = in->get_type(in, &received_vendor);
 	if (received_vendor == 0 && received_type == EAP_NAK)
@@ -211,6 +230,7 @@ METHOD(eap_method_t, process, status_t,
 		/* restart with a different method */
 		this->method->destroy(this->method);
 		this->method = NULL;
+		this->public.interface.get_auth = NULL;
 		return initiate(this, out);
 	}
 	if (!this->other_types)
@@ -225,7 +245,7 @@ METHOD(eap_method_t, process, status_t,
 }
 
 METHOD(eap_method_t, get_type, eap_type_t,
-	private_eap_dynamic_t *this, u_int32_t *vendor)
+	private_eap_dynamic_t *this, uint32_t *vendor)
 {
 	if (this->method)
 	{
@@ -245,7 +265,7 @@ METHOD(eap_method_t, get_msk, status_t,
 	return FAILED;
 }
 
-METHOD(eap_method_t, get_identifier, u_int8_t,
+METHOD(eap_method_t, get_identifier, uint8_t,
 	private_eap_dynamic_t *this)
 {
 	if (this->method)
@@ -256,7 +276,7 @@ METHOD(eap_method_t, get_identifier, u_int8_t,
 }
 
 METHOD(eap_method_t, set_identifier, void,
-	private_eap_dynamic_t *this, u_int8_t identifier)
+	private_eap_dynamic_t *this, uint8_t identifier)
 {
 	if (this->method)
 	{
@@ -335,7 +355,7 @@ static void get_supported_eap_types(private_eap_dynamic_t *this)
 {
 	enumerator_t *enumerator;
 	eap_type_t type;
-	u_int32_t vendor;
+	uint32_t vendor;
 
 	enumerator = charon->eap->create_enumerator(charon->eap, EAP_SERVER);
 	while (enumerator->enumerate(enumerator, &type, &vendor))

@@ -54,15 +54,15 @@ struct private_farp_spoofer_t {
  * IP over Ethernet ARP message
  */
 typedef struct __attribute__((packed)) {
-	u_int16_t hardware_type;
-	u_int16_t protocol_type;
-	u_int8_t hardware_size;
-	u_int8_t protocol_size;
-	u_int16_t opcode;
-	u_int8_t sender_mac[6];
-	u_int8_t sender_ip[4];
-	u_int8_t target_mac[6];
-	u_int8_t target_ip[4];
+	uint16_t hardware_type;
+	uint16_t protocol_type;
+	uint8_t hardware_size;
+	uint8_t protocol_size;
+	uint16_t opcode;
+	uint8_t sender_mac[6];
+	uint8_t sender_ip[4];
+	uint8_t target_mac[6];
+	uint8_t target_ip[4];
 } arp_t;
 
 /**
@@ -143,7 +143,7 @@ farp_spoofer_t *farp_spoofer_create(farp_listener_t *listener)
 		BPF_STMT(BPF_LD+BPF_B+BPF_ABS, offsetof(arp_t, hardware_size)),
 		BPF_JUMP(BPF_JMP+BPF_JEQ+BPF_K, 6, 0, 7),
 		BPF_STMT(BPF_LD+BPF_B+BPF_ABS, offsetof(arp_t, protocol_size)),
-		BPF_JUMP(BPF_JMP+BPF_JEQ+BPF_K, 4, 0, 4),
+		BPF_JUMP(BPF_JMP+BPF_JEQ+BPF_K, 4, 0, 5),
 		BPF_STMT(BPF_LD+BPF_H+BPF_ABS, offsetof(arp_t, opcode)),
 		BPF_JUMP(BPF_JMP+BPF_JEQ+BPF_K, ARPOP_REQUEST, 0, 3),
 		BPF_STMT(BPF_LD+BPF_W+BPF_LEN, 0),

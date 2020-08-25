@@ -1,7 +1,7 @@
 /*
  * Copyright (C) 2009 Martin Willi
  * Copyright (C) 2002-2009 Andreas Steffen
- * Hochschule fuer Technik Rapperswil
+ * HSR Hochschule fuer Technik Rapperswil
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -26,7 +26,7 @@
  */
 static public_key_t *parse_public_key(chunk_t blob)
 {
-	u_int32_t alg;
+	uint32_t alg;
 	public_key_t *key;
 
 	if (!pgp_read_scalar(&blob, 1, &alg))
@@ -74,7 +74,7 @@ static public_key_t *parse_rsa_public_key(chunk_t blob)
 static private_key_t *parse_rsa_private_key(chunk_t blob)
 {
 	chunk_t mpi[6];
-	u_int32_t s2k;
+	uint32_t s2k;
 	int i;
 
 	for (i = 0; i < 2; i++)
@@ -116,21 +116,17 @@ static private_key_t *parse_rsa_private_key(chunk_t blob)
 						BUILD_END);
 }
 
-/**
- * Implementation of private_key_t.sign for encryption-only keys
- */
-static bool sign_not_allowed(private_key_t *this, signature_scheme_t scheme,
-							 chunk_t data, chunk_t *signature)
+METHOD(private_key_t, sign_not_allowed, bool,
+	private_key_t *this, signature_scheme_t scheme, void *params,
+	chunk_t data, chunk_t *signature)
 {
 	DBG1(DBG_LIB, "signing failed - decryption only key");
 	return FALSE;
 }
 
-/**
- * Implementation of private_key_t.decrypt for signature-only keys
- */
-static bool decrypt_not_allowed(private_key_t *this, encryption_scheme_t scheme,
-								chunk_t crypto, chunk_t *plain)
+METHOD(private_key_t, decrypt_not_allowed, bool,
+	private_key_t *this, encryption_scheme_t scheme,
+	chunk_t crypto, chunk_t *plain)
 {
 	DBG1(DBG_LIB, "decryption failed - signature only key");
 	return FALSE;
@@ -143,7 +139,7 @@ static private_key_t *parse_private_key(chunk_t blob)
 {
 	chunk_t packet;
 	pgp_packet_tag_t tag;
-	u_int32_t version, created, days, alg;
+	uint32_t version, created, days, alg;
 	private_key_t *key;
 
 	if (!pgp_read_packet(&blob, &packet, &tag))
@@ -186,7 +182,7 @@ static private_key_t *parse_private_key(chunk_t blob)
 									  BUILD_BLOB_PGP, packet, BUILD_END);
 			if (key)
 			{
-				key->sign = sign_not_allowed;
+				key->sign = _sign_not_allowed;
 			}
 			return key;
 		case PGP_PUBKEY_ALG_RSA_SIGN_ONLY:
@@ -194,7 +190,7 @@ static private_key_t *parse_private_key(chunk_t blob)
 									  BUILD_BLOB_PGP, packet, BUILD_END);
 			if (key)
 			{
-				key->decrypt = decrypt_not_allowed;
+				key->decrypt = _decrypt_not_allowed;
 			}
 			return key;
 		case PGP_PUBKEY_ALG_ECDSA:

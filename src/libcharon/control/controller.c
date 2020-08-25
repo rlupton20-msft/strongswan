@@ -1,8 +1,8 @@
 /*
- * Copyright (C) 2011-2015 Tobias Brunner
+ * Copyright (C) 2011-2019 Tobias Brunner
  * Copyright (C) 2007-2011 Martin Willi
  * Copyright (C) 2011 revosec AG
- * Hochschule fuer Technik Rapperswil
+ * HSR Hochschule fuer Technik Rapperswil
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -105,7 +105,7 @@ struct interface_listener_t {
 	/**
 	 * unique ID, used for various methods
 	 */
-	u_int32_t id;
+	uint32_t id;
 
 	/**
 	 * semaphore to implement wait_for_listener()
@@ -117,10 +117,17 @@ struct interface_listener_t {
 	 */
 	spinlock_t *lock;
 
-	/**
-	 * whether to check limits
-	 */
-	bool limits;
+	union {
+		/**
+		 * whether to check limits during initiation
+		 */
+		bool limits;
+
+		/**
+		 * whether to force termination
+		 */
+		bool force;
+	} options;
 };
 
 
@@ -258,24 +265,48 @@ METHOD(listener_t, ike_state_change, bool,
 	{
 		switch (state)
 		{
-#ifdef ME
 			case IKE_ESTABLISHED:
-			{	/* mediation connections are complete without CHILD_SA */
+			{
+#ifdef ME
 				peer_cfg_t *peer_cfg = ike_sa->get_peer_cfg(ike_sa);
-
-				if (peer_cfg->is_mediation(peer_cfg))
+#endif /* ME */
+				/* we're done if we didn't initiate a CHILD_SA */
+				if (!this->child_cfg
+#ifdef ME
+					/* the same is always true for mediation connections */
+					|| peer_cfg->is_mediation(peer_cfg)
+#endif /* ME */
+					)
 				{
 					this->status = SUCCESS;
 					return listener_done(this);
 				}
 				break;
 			}
-#endif /* ME */
 			case IKE_DESTROYING:
-				if (ike_sa->get_state(ike_sa) == IKE_DELETING)
-				{	/* proper termination */
-					this->status = SUCCESS;
-				}
+				return listener_done(this);
+			default:
+				break;
+		}
+	}
+	return TRUE;
+}
+
+METHOD(listener_t, ike_state_change_terminate, bool,
+	interface_listener_t *this, ike_sa_t *ike_sa, ike_sa_state_t state)
+{
+	ike_sa_t *target;
+
+	this->lock->lock(this->lock);
+	target = this->ike_sa;
+	this->lock->unlock(this->lock);
+
+	if (target == ike_sa)
+	{
+		switch (state)
+		{
+			case IKE_DESTROYING:
+				this->status = SUCCESS;
 				return listener_done(this);
 			default:
 				break;
@@ -304,10 +335,6 @@ METHOD(listener_t, child_state_change, bool,
 			case CHILD_DESTROYING:
 				switch (child_sa->get_state(child_sa))
 				{
-					case CHILD_DELETING:
-						/* proper delete */
-						this->status = SUCCESS;
-						break;
 					case CHILD_RETRYING:
 						/* retrying with a different DH group; survive another
 						 * initiation round */
@@ -319,6 +346,38 @@ METHOD(listener_t, child_state_change, bool,
 							this->status = FAILED;
 							return TRUE;
 						}
+						break;
+					default:
+						break;
+				}
+				return listener_done(this);
+			default:
+				break;
+		}
+	}
+	return TRUE;
+}
+
+METHOD(listener_t, child_state_change_terminate, bool,
+	interface_listener_t *this, ike_sa_t *ike_sa, child_sa_t *child_sa,
+	child_sa_state_t state)
+{
+	ike_sa_t *target;
+
+	this->lock->lock(this->lock);
+	target = this->ike_sa;
+	this->lock->unlock(this->lock);
+
+	if (target == ike_sa)
+	{
+		switch (state)
+		{
+			case CHILD_DESTROYING:
+				switch (child_sa->get_state(child_sa))
+				{
+					case CHILD_DELETED:
+						/* proper delete */
+						this->status = SUCCESS;
 						break;
 					default:
 						break;
@@ -360,7 +419,7 @@ METHOD(job_t, initiate_execute, job_requeue_t,
 														peer_cfg);
 	if (!ike_sa)
 	{
-		listener->child_cfg->destroy(listener->child_cfg);
+		DESTROY_IF(listener->child_cfg);
 		peer_cfg->destroy(peer_cfg);
 		listener->status = FAILED;
 		listener_done(listener);
@@ -376,7 +435,7 @@ METHOD(job_t, initiate_execute, job_requeue_t,
 	}
 	peer_cfg->destroy(peer_cfg);
 
-	if (listener->limits && ike_sa->get_state(ike_sa) == IKE_CREATED)
+	if (listener->options.limits && ike_sa->get_state(ike_sa) == IKE_CREATED)
 	{	/* only check if we are not reusing an IKE_SA */
 		u_int half_open, limit_half_open, limit_job_load;
 
@@ -392,7 +451,7 @@ METHOD(job_t, initiate_execute, job_requeue_t,
 				 "%d exceeds limit of %d", half_open, limit_half_open);
 			charon->ike_sa_manager->checkin_and_destroy(charon->ike_sa_manager,
 														ike_sa);
-			listener->child_cfg->destroy(listener->child_cfg);
+			DESTROY_IF(listener->child_cfg);
 			listener->status = INVALID_STATE;
 			listener_done(listener);
 			return JOB_REQUEUE_NONE;
@@ -411,7 +470,7 @@ METHOD(job_t, initiate_execute, job_requeue_t,
 					 "limit of %d", jobs, limit_job_load);
 				charon->ike_sa_manager->checkin_and_destroy(
 												charon->ike_sa_manager, ike_sa);
-				listener->child_cfg->destroy(listener->child_cfg);
+				DESTROY_IF(listener->child_cfg);
 				listener->status = INVALID_STATE;
 				listener_done(listener);
 				return JOB_REQUEUE_NONE;
@@ -461,7 +520,7 @@ METHOD(controller_t, initiate, status_t,
 			.child_cfg = child_cfg,
 			.peer_cfg = peer_cfg,
 			.lock = spinlock_create(),
-			.limits = limits,
+			.options.limits = limits,
 		},
 		.public = {
 			.execute = _initiate_execute,
@@ -493,7 +552,7 @@ METHOD(job_t, terminate_ike_execute, job_requeue_t,
 	interface_job_t *job)
 {
 	interface_listener_t *listener = &job->listener;
-	u_int32_t unique_id = listener->id;
+	uint32_t unique_id = listener->id;
 	ike_sa_t *ike_sa;
 
 	ike_sa = charon->ike_sa_manager->checkout_by_id(charon->ike_sa_manager,
@@ -510,8 +569,8 @@ METHOD(job_t, terminate_ike_execute, job_requeue_t,
 	listener->ike_sa = ike_sa;
 	listener->lock->unlock(listener->lock);
 
-	if (ike_sa->delete(ike_sa) != DESTROY_ME)
-	{	/* delete failed */
+	if (ike_sa->delete(ike_sa, listener->options.force) != DESTROY_ME)
+	{	/* delete queued */
 		listener->status = FAILED;
 		charon->ike_sa_manager->checkin(charon->ike_sa_manager, ike_sa);
 	}
@@ -528,7 +587,7 @@ METHOD(job_t, terminate_ike_execute, job_requeue_t,
 }
 
 METHOD(controller_t, terminate_ike, status_t,
-	controller_t *this, u_int32_t unique_id,
+	controller_t *this, uint32_t unique_id, bool force,
 	controller_cb_t callback, void *param, u_int timeout)
 {
 	interface_job_t *job;
@@ -537,8 +596,7 @@ METHOD(controller_t, terminate_ike, status_t,
 	INIT(job,
 		.listener = {
 			.public = {
-				.ike_state_change = _ike_state_change,
-				.child_state_change = _child_state_change,
+				.ike_state_change = _ike_state_change_terminate,
 			},
 			.logger = {
 				.public = {
@@ -564,13 +622,24 @@ METHOD(controller_t, terminate_ike, status_t,
 
 	if (callback == NULL)
 	{
+		job->listener.options.force = force;
 		terminate_ike_execute(job);
 	}
 	else
 	{
+		if (!timeout)
+		{
+			job->listener.options.force = force;
+		}
 		if (wait_for_listener(job, timeout))
 		{
 			job->listener.status = OUT_OF_RES;
+
+			if (force)
+			{	/* force termination once timeout is reached */
+				job->listener.options.force = TRUE;
+				terminate_ike_execute(job);
+			}
 		}
 	}
 	status = job->listener.status;
@@ -582,7 +651,7 @@ METHOD(job_t, terminate_child_execute, job_requeue_t,
 	interface_job_t *job)
 {
 	interface_listener_t *listener = &job->listener;
-	u_int32_t id = listener->id;
+	uint32_t id = listener->id;
 	child_sa_t *child_sa;
 	ike_sa_t *ike_sa;
 
@@ -599,17 +668,6 @@ METHOD(job_t, terminate_child_execute, job_requeue_t,
 	listener->lock->lock(listener->lock);
 	listener->ike_sa = ike_sa;
 	listener->lock->unlock(listener->lock);
-
-	if (child_sa->get_state(child_sa) == CHILD_ROUTED)
-	{
-		DBG1(DBG_IKE, "unable to terminate, established "
-			 "CHILD_SA with ID %d not found", id);
-		charon->ike_sa_manager->checkin(charon->ike_sa_manager, ike_sa);
-		listener->status = NOT_FOUND;
-		/* release listener */
-		listener_done(listener);
-		return JOB_REQUEUE_NONE;
-	}
 
 	if (ike_sa->delete_child_sa(ike_sa, child_sa->get_protocol(child_sa),
 					child_sa->get_spi(child_sa, TRUE), FALSE) != DESTROY_ME)
@@ -630,7 +688,7 @@ METHOD(job_t, terminate_child_execute, job_requeue_t,
 }
 
 METHOD(controller_t, terminate_child, status_t,
-	controller_t *this, u_int32_t unique_id,
+	controller_t *this, uint32_t unique_id,
 	controller_cb_t callback, void *param, u_int timeout)
 {
 	interface_job_t *job;
@@ -639,8 +697,8 @@ METHOD(controller_t, terminate_child, status_t,
 	INIT(job,
 		.listener = {
 			.public = {
-				.ike_state_change = _ike_state_change,
-				.child_state_change = _child_state_change,
+				.ike_state_change = _ike_state_change_terminate,
+				.child_state_change = _child_state_change_terminate,
 			},
 			.logger = {
 				.public = {

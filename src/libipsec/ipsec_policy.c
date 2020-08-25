@@ -2,7 +2,7 @@
  * Copyright (C) 2012 Tobias Brunner
  * Copyright (C) 2012 Giuliano Grassi
  * Copyright (C) 2012 Ralf Sager
- * Hochschule fuer Technik Rapperswil
+ * HSR Hochschule fuer Technik Rapperswil
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -54,7 +54,7 @@ struct private_ipsec_policy_t {
 	/**
 	 * If any of the two TS has a protocol selector we cache it here
 	 */
-	u_int8_t protocol;
+	uint8_t protocol;
 
 	/**
 	 * Traffic direction
@@ -90,7 +90,7 @@ struct private_ipsec_policy_t {
 
 METHOD(ipsec_policy_t, match, bool,
 	private_ipsec_policy_t *this, traffic_selector_t *src_ts,
-	traffic_selector_t *dst_ts, policy_dir_t direction, u_int32_t reqid,
+	traffic_selector_t *dst_ts, policy_dir_t direction, uint32_t reqid,
 	mark_t mark, policy_priority_t priority)
 {
 	return (this->direction == direction &&
@@ -101,16 +101,36 @@ METHOD(ipsec_policy_t, match, bool,
 			this->dst_ts->equals(this->dst_ts, dst_ts));
 }
 
+/**
+ * Match the port of the given host against the given traffic selector.
+ */
+static inline bool match_port(traffic_selector_t *ts, host_t *host)
+{
+	uint16_t from, to, port;
+
+	from = ts->get_from_port(ts);
+	to = ts->get_to_port(ts);
+	if ((from == 0 && to == 0xffff) ||
+		(from == 0xffff && to == 0))
+	{
+		return TRUE;
+	}
+	port = host->get_port(host);
+	return from <= port && port <= to;
+}
+
 METHOD(ipsec_policy_t, match_packet, bool,
 	private_ipsec_policy_t *this, ip_packet_t *packet)
 {
-	u_int8_t proto = packet->get_next_header(packet);
+	uint8_t proto = packet->get_next_header(packet);
 	host_t *src = packet->get_source(packet),
 		   *dst = packet->get_destination(packet);
 
 	return (!this->protocol || this->protocol == proto) &&
 		   this->src_ts->includes(this->src_ts, src) &&
-		   this->dst_ts->includes(this->dst_ts, dst);
+		   match_port(this->src_ts, src) &&
+		   this->dst_ts->includes(this->dst_ts, dst) &&
+		   match_port(this->dst_ts, dst);
 }
 
 METHOD(ipsec_policy_t, get_source_ts, traffic_selector_t*,
@@ -125,7 +145,7 @@ METHOD(ipsec_policy_t, get_destination_ts, traffic_selector_t*,
 	return this->dst_ts;
 }
 
-METHOD(ipsec_policy_t, get_reqid, u_int32_t,
+METHOD(ipsec_policy_t, get_reqid, uint32_t,
 	private_ipsec_policy_t *this)
 {
 	return this->sa.reqid;

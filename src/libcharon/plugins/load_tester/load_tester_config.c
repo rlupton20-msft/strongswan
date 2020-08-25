@@ -1,6 +1,6 @@
 /*
  * Copyright (C) 2008 Martin Willi
- * Hochschule fuer Technik Rapperswil
+ * HSR Hochschule fuer Technik Rapperswil
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -124,7 +124,7 @@ struct private_load_tester_config_t {
 	/**
 	 * Current port for unique initiator ports
 	 */
-	u_int16_t unique_port;
+	uint16_t unique_port;
 
 	/**
 	 * IKE_SA rekeying delay
@@ -154,7 +154,7 @@ struct private_load_tester_config_t {
 	/**
 	 * Dynamic source port, if used
 	 */
-	u_int16_t port;
+	uint16_t port;
 
 	/**
 	 * IKE version to use for load testing
@@ -454,8 +454,8 @@ static void generate_auth_cfg(private_load_tester_config_t *this, char *str,
 /**
  * Parse a protoport specifier
  */
-static bool parse_protoport(char *token, u_int16_t *from_port,
-							u_int16_t *to_port, u_int8_t *protocol)
+static bool parse_protoport(char *token, uint16_t *from_port,
+							uint16_t *to_port, uint8_t *protocol)
 {
 	char *sep, *port = "", *endptr;
 	struct protoent *proto;
@@ -494,7 +494,7 @@ static bool parse_protoport(char *token, u_int16_t *from_port,
 			{
 				return FALSE;
 			}
-			*protocol = (u_int8_t)p;
+			*protocol = (uint8_t)p;
 		}
 	}
 	if (streq(port, "%any"))
@@ -557,8 +557,8 @@ static void add_ts(private_load_tester_config_t *this,
 	{
 		enumerator_t *enumerator;
 		char *subnet, *pos;
-		u_int16_t from_port, to_port;
-		u_int8_t proto;
+		uint16_t from_port, to_port;
+		uint8_t proto;
 
 		enumerator = enumerator_create_token(string, ",", " ");
 		while (enumerator->enumerate(enumerator, &subnet))
@@ -686,15 +686,31 @@ static peer_cfg_t* generate_config(private_load_tester_config_t *this, uint num)
 	ike_cfg_t *ike_cfg;
 	child_cfg_t *child_cfg;
 	peer_cfg_t *peer_cfg;
-	char local[32], *remote;
+	char local[32];
 	host_t *addr;
-	ipsec_mode_t mode = MODE_TUNNEL;
-	lifetime_cfg_t lifetime = {
-		.time = {
-			.life = this->child_rekey * 2,
-			.rekey = this->child_rekey,
-			.jitter = 0
-		}
+	ike_cfg_create_t ike = {
+		.version = this->version,
+		.remote_port = IKEV2_UDP_PORT,
+	};
+	peer_cfg_create_t peer = {
+		.cert_policy = CERT_SEND_IF_ASKED,
+		.unique = UNIQUE_NO,
+		.keyingtries = 1,
+		.rekey_time = this->ike_rekey,
+		.over_time = this->ike_rekey,
+		.no_mobike = TRUE,
+		.dpd = this->dpd_delay,
+		.dpd_timeout = this->dpd_timeout,
+	};
+	child_cfg_create_t child = {
+		.lifetime = {
+			.time = {
+				.life = this->child_rekey * 2,
+				.rekey = this->child_rekey,
+				.jitter = 0
+			},
+		},
+		.mode = MODE_TUNNEL,
 	};
 
 	if (num)
@@ -714,37 +730,28 @@ static peer_cfg_t* generate_config(private_load_tester_config_t *this, uint num)
 		{
 			snprintf(local, sizeof(local), "%s", this->initiator);
 		}
-		remote = this->responder;
+		ike.remote = this->responder;
 	}
 	else
 	{
 		snprintf(local, sizeof(local), "%s", this->responder);
-		remote = this->initiator;
+		ike.remote = this->initiator;
 	}
 
+	ike.local = local;
 	if (this->port && num)
 	{
-		ike_cfg = ike_cfg_create(this->version, TRUE, FALSE,
-								 local, this->port + num - 1,
-								 remote, IKEV2_NATT_PORT,
-								 FRAGMENTATION_NO, 0);
+		ike.local_port = this->port + num - 1;
+		ike.remote_port = IKEV2_NATT_PORT;
 	}
 	else
 	{
-		ike_cfg = ike_cfg_create(this->version, TRUE, FALSE, local,
-								 charon->socket->get_port(charon->socket, FALSE),
-								 remote, IKEV2_UDP_PORT,
-								 FRAGMENTATION_NO, 0);
+		ike.local_port = charon->socket->get_port(charon->socket, FALSE);
 	}
-	ike_cfg->add_proposal(ike_cfg, this->proposal->clone(this->proposal));
-	peer_cfg = peer_cfg_create("load-test", ike_cfg,
-							   CERT_SEND_IF_ASKED, UNIQUE_NO, 1, /* keytries */
-							   this->ike_rekey, 0, /* rekey, reauth */
-							   0, this->ike_rekey, /* jitter, overtime */
-							   FALSE, FALSE, TRUE, /* mobike, aggressive, pull */
-							   this->dpd_delay,   /* dpd_delay */
-							   this->dpd_timeout, /* dpd_timeout */
-							   FALSE, NULL, NULL);
+	ike_cfg = ike_cfg_create(&ike);
+	ike_cfg->add_proposal(ike_cfg, this->proposal->clone(this->proposal, 0));
+	peer_cfg = peer_cfg_create("load-test", ike_cfg, &peer);
+
 	if (this->vip)
 	{
 		peer_cfg->add_virtual_ip(peer_cfg, this->vip->clone(this->vip));
@@ -768,18 +775,16 @@ static peer_cfg_t* generate_config(private_load_tester_config_t *this, uint num)
 	{
 		if (streq(this->mode, "transport"))
 		{
-			mode = MODE_TRANSPORT;
+			child.mode = MODE_TRANSPORT;
 		}
 		else if (streq(this->mode, "beet"))
 		{
-			mode = MODE_BEET;
+			child.mode = MODE_BEET;
 		}
 	}
 
-	child_cfg = child_cfg_create("load-test", &lifetime, NULL, TRUE, mode,
-								 ACTION_NONE, ACTION_NONE, ACTION_NONE, FALSE,
-								 0, 0, NULL, NULL, 0);
-	child_cfg->add_proposal(child_cfg, this->esp->clone(this->esp));
+	child_cfg = child_cfg_create("load-test", &child);
+	child_cfg->add_proposal(child_cfg, this->esp->clone(this->esp, 0));
 
 	if (num)
 	{	/* initiator */
@@ -933,7 +938,6 @@ load_tester_config_t *load_tester_config_create()
 		.leases = hashtable_create((hashtable_hash_t)hash,
 								   (hashtable_equals_t)equals, 256),
 		.mutex = mutex_create(MUTEX_TYPE_DEFAULT),
-		.num = 1,
 		.unique_port = UNIQUE_PORT_START,
 	);
 

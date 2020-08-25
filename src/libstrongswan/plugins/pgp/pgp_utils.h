@@ -1,6 +1,6 @@
 /*
  * Copyright (C) 2009 Martin Willi
- * Hochschule fuer Technik Rapperswil
+ * HSR Hochschule fuer Technik Rapperswil
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -115,7 +115,7 @@ bool pgp_read_mpi(chunk_t *blob, chunk_t *mpi);
  * @param scalar	resultin scalar
  * @return			TRUE if scalar parsed successfully
  */
-bool pgp_read_scalar(chunk_t *blob, size_t bytes, u_int32_t *scalar);
+bool pgp_read_scalar(chunk_t *blob, size_t bytes, uint32_t *scalar);
 
 /**
  * Parse a PGP packet.

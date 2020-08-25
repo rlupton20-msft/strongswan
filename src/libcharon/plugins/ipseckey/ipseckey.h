@@ -1,6 +1,6 @@
 /*
  * Copyright (C) 2012 Reto Guadagnini
- * Hochschule fuer Technik Rapperswil
+ * HSR Hochschule fuer Technik Rapperswil
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -85,7 +85,7 @@ struct ipseckey_t {
 	 *
 	 * @return		precedence
 	 */
-	u_int8_t (*get_precedence)(ipseckey_t *this);
+	uint8_t (*get_precedence)(ipseckey_t *this);
 
 	/**
 	 * Get the type of the gateway.

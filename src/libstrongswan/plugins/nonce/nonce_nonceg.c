@@ -1,6 +1,6 @@
 /*
  * Copyright (C) 2012 Adrian-Ken Rueegsegger
- * Hochschule fuer Technik Rapperswil
+ * HSR Hochschule fuer Technik Rapperswil
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -36,7 +36,7 @@ struct private_nonce_nonceg_t {
 };
 
 METHOD(nonce_gen_t, get_nonce, bool,
-	private_nonce_nonceg_t *this, size_t size, u_int8_t *buffer)
+	private_nonce_nonceg_t *this, size_t size, uint8_t *buffer)
 {
 	return this->rng->get_bytes(this->rng, size, buffer);
 }
@@ -71,7 +71,7 @@ nonce_nonceg_t *nonce_nonceg_create()
 		},
 	);
 
-	this->rng = lib->crypto->create_rng(lib->crypto, RNG_WEAK);
+	this->rng = lib->crypto->create_rng(lib->crypto, NONCE_RNG_QUALITY);
 	if (!this->rng)
 	{
 		DBG1(DBG_LIB, "no RNG found for quality %N", rng_quality_names,

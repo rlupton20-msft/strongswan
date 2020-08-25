@@ -1,6 +1,6 @@
 /*
  * Copyright (C) 2008 Martin Willi
- * Hochschule fuer Technik Rapperswil
+ * HSR Hochschule fuer Technik Rapperswil
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -55,7 +55,7 @@ METHOD(listener_t, child_keys, bool,
 	ha_message_t *m;
 	chunk_t secret;
 	proposal_t *proposal;
-	u_int16_t alg, len;
+	uint16_t alg, len;
 	linked_list_t *local_ts, *remote_ts;
 	enumerator_t *enumerator;
 	traffic_selector_t *ts;
@@ -69,7 +69,7 @@ METHOD(listener_t, child_keys, bool,
 	m = ha_message_create(HA_CHILD_ADD);
 
 	m->add_attribute(m, HA_IKE_ID, ike_sa->get_id(ike_sa));
-	m->add_attribute(m, HA_INITIATOR, (u_int8_t)initiator);
+	m->add_attribute(m, HA_INITIATOR, (uint8_t)initiator);
 	m->add_attribute(m, HA_INBOUND_SPI, child_sa->get_spi(child_sa, TRUE));
 	m->add_attribute(m, HA_OUTBOUND_SPI, child_sa->get_spi(child_sa, FALSE));
 	m->add_attribute(m, HA_INBOUND_CPI, child_sa->get_cpi(child_sa, TRUE));

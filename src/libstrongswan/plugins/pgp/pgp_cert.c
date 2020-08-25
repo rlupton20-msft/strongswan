@@ -1,6 +1,6 @@
 /*
  * Copyright (C) 2009 Martin Willi
- * Hochschule fuer Technik Rapperswil
+ * HSR Hochschule fuer Technik Rapperswil
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -40,17 +40,17 @@ struct private_pgp_cert_t {
 	/**
 	 * version of the public key
 	 */
-	u_int32_t version;
+	uint32_t version;
 
 	/**
 	 * creation time
 	 */
-	u_int32_t created;
+	uint32_t created;
 
 	/**
 	 * days the certificate is valid
 	 */
-	u_int32_t valid;
+	uint32_t valid;
 
 	/**
 	 * userid of the certificate
@@ -114,7 +114,7 @@ METHOD(certificate_t, has_issuer, id_match_t,
 }
 
 METHOD(certificate_t, issued_by,bool,
-	private_pgp_cert_t *this, certificate_t *issuer, signature_scheme_t *scheme)
+	private_pgp_cert_t *this, certificate_t *issuer, signature_params_t **scheme)
 {
 	/* TODO: check signature blobs for a valid signature */
 	return FALSE;
@@ -349,7 +349,7 @@ static bool parse_public_key(private_pgp_cert_t *this, chunk_t packet)
  */
 static bool parse_signature(private_pgp_cert_t *this, chunk_t packet)
 {
-	u_int32_t version, len, type, created;
+	uint32_t version, len, type, created;
 
 	if (!pgp_read_scalar(&packet, 1, &version))
 	{

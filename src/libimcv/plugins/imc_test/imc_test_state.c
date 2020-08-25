@@ -61,7 +61,7 @@ struct private_imc_test_state_t {
 	/**
 	 * Maximum PA-TNC message size for this TNCCS connection
 	 */
-	u_int32_t max_msg_len;
+	uint32_t max_msg_len;
 
 	/**
 	 * PA-TNC attribute segmentation contracts associated with TNCCS connection
@@ -124,12 +124,12 @@ METHOD(imc_state_t, set_flags, void,
 }
 
 METHOD(imc_state_t, set_max_msg_len, void,
-	private_imc_test_state_t *this, u_int32_t max_msg_len)
+	private_imc_test_state_t *this, uint32_t max_msg_len)
 {
 	this->max_msg_len = max_msg_len;
 }
 
-METHOD(imc_state_t, get_max_msg_len, u_int32_t,
+METHOD(imc_state_t, get_max_msg_len, uint32_t,
 	private_imc_test_state_t *this)
 {
 	return this->max_msg_len;
@@ -141,10 +141,14 @@ METHOD(imc_state_t, get_contracts, seg_contract_manager_t*,
 	return this->contracts;
 }
 
-METHOD(imc_state_t, change_state, void,
+METHOD(imc_state_t, change_state, TNC_ConnectionState,
 	private_imc_test_state_t *this, TNC_ConnectionState new_state)
 {
+	TNC_ConnectionState old_state;
+
+	old_state = this->state;
 	this->state = new_state;
+	return old_state;
 }
 
 METHOD(imc_state_t, set_result, void,
@@ -200,6 +204,12 @@ METHOD(imc_state_t, get_result, bool,
 		*result = eval;
 	}
 	return eval != TNC_IMV_EVALUATION_RESULT_DONT_KNOW;
+}
+
+METHOD(imc_state_t, reset, void,
+	private_imc_test_state_t *this)
+{
+	/* nothing to reset */
 }
 
 METHOD(imc_state_t, destroy, void,
@@ -277,6 +287,7 @@ imc_state_t *imc_test_state_create(TNC_ConnectionID connection_id,
 				.change_state = _change_state,
 				.set_result = _set_result,
 				.get_result = _get_result,
+				.reset = _reset,
 				.destroy = _destroy,
 			},
 			.get_command = _get_command,

@@ -1,6 +1,6 @@
 /*
  * Copyright (C) 2009 Martin Willi
- * Hochschule fuer Technik Rapperswil
+ * HSR Hochschule fuer Technik Rapperswil
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -26,10 +26,10 @@ typedef enum dnskey_algorithm_t dnskey_algorithm_t;
  * Header of a DNSKEY resource record
  */
 struct dnskey_rr_t {
-	u_int16_t flags;
-	u_int8_t protocol;
-	u_int8_t algorithm;
-	u_int8_t data[];
+	uint16_t flags;
+	uint8_t protocol;
+	uint8_t algorithm;
+	uint8_t data[];
 } __attribute__((__packed__));
 
 /**

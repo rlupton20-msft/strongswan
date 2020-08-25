@@ -1,8 +1,8 @@
 /*
- * Copyright (C) 2008-2015 Tobias Brunner
+ * Copyright (C) 2008-2017 Tobias Brunner
  * Copyright (C) 2005-2008 Martin Willi
  * Copyright (C) 2005 Jan Hutter
- * Hochschule fuer Technik Rapperswil
+ * HSR Hochschule fuer Technik Rapperswil
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -38,7 +38,7 @@ typedef struct ike_sa_manager_t ike_sa_manager_t;
  * @param data		data supplied during registration of the callback
  * @return			allocated SPI, 0 on failure
  */
-typedef u_int64_t (*spi_cb_t)(void *data);
+typedef uint64_t (*spi_cb_t)(void *data);
 
 /**
  * Manages and synchronizes access to all IKE_SAs.
@@ -109,6 +109,17 @@ struct ike_sa_manager_t {
 									 peer_cfg_t *peer_cfg);
 
 	/**
+	 * Reset initiator SPI.
+	 *
+	 * Allocate a new initiator SPI for the given IKE_SA in state IKE_CONNECTING
+	 * and update internal data.
+	 *
+	 * @param ike_sa			IKE_SA to update
+	 * @return					TRUE if SPI successfully changed
+	 */
+	bool (*new_initiator_spi)(ike_sa_manager_t* this, ike_sa_t *ike_sa);
+
+	/**
 	 * Check for duplicates of the given IKE_SA.
 	 *
 	 * Measures are taken according to the uniqueness policy of the IKE_SA.
@@ -147,7 +158,7 @@ struct ike_sa_manager_t {
 	 * 							- checked out IKE_SA, if found
 	 * 							- NULL, if not found
 	 */
-	ike_sa_t* (*checkout_by_id) (ike_sa_manager_t* this, u_int32_t id);
+	ike_sa_t* (*checkout_by_id) (ike_sa_manager_t* this, uint32_t id);
 
 	/**
 	 * Check out an IKE_SA by the policy/connection name.

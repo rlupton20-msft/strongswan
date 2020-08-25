@@ -30,8 +30,8 @@ typedef struct port_entry_t port_entry_t;
  */
 struct port_entry_t {
 	bool      blocked;
-	u_int8_t  protocol;
-	u_int16_t port;
+	uint8_t  protocol;
+	uint16_t port;
 };
 
 /**
@@ -142,11 +142,11 @@ METHOD(pa_tnc_attr_t, build, void,
 }
 
 METHOD(pa_tnc_attr_t, process, status_t,
-	private_ietf_attr_port_filter_t *this, u_int32_t *offset)
+	private_ietf_attr_port_filter_t *this, uint32_t *offset)
 {
 	bio_reader_t *reader;
 	port_entry_t *entry;
-	u_int8_t blocked;
+	uint8_t blocked;
 
 	*offset = 0;
 
@@ -201,8 +201,8 @@ METHOD(pa_tnc_attr_t, destroy, void,
 }
 
 METHOD(ietf_attr_port_filter_t, add_port, void,
-	private_ietf_attr_port_filter_t *this, bool blocked, u_int8_t protocol,
-	u_int16_t port)
+	private_ietf_attr_port_filter_t *this, bool blocked, uint8_t protocol,
+	uint16_t port)
 {
 	port_entry_t *entry;
 
@@ -213,24 +213,31 @@ METHOD(ietf_attr_port_filter_t, add_port, void,
 	this->ports->insert_last(this->ports, entry);
 }
 
-/**
- * Enumerate port filter entries
- */
-static bool port_filter(void *null, port_entry_t **entry,
-						bool *blocked, void *i2, u_int8_t *protocol, void *i3,
-						u_int16_t *port)
+CALLBACK(port_filter, bool,
+	void *null, enumerator_t *orig, va_list args)
 {
-	*blocked = (*entry)->blocked;
-	*protocol = (*entry)->protocol;
-	*port = (*entry)->port;
-	return TRUE;
+	port_entry_t *entry;
+	uint16_t *port;
+	uint8_t *protocol;
+	bool *blocked;
+
+	VA_ARGS_VGET(args, blocked, protocol, port);
+
+	if (orig->enumerate(orig, &entry))
+	{
+		*blocked = entry->blocked;
+		*protocol = entry->protocol;
+		*port = entry->port;
+		return TRUE;
+	}
+	return FALSE;
 }
 
 METHOD(ietf_attr_port_filter_t, create_port_enumerator, enumerator_t*,
 	private_ietf_attr_port_filter_t *this)
 {
 	return enumerator_create_filter(this->ports->create_enumerator(this->ports),
-					(void*)port_filter, NULL, NULL);
+									port_filter, NULL, NULL);
 }
 
 /**

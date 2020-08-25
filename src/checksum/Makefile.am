@@ -48,9 +48,23 @@ if USE_RADIUS
   libs += $(DESTDIR)$(ipseclibdir)/libradius.so
 endif
 
+if USE_LIBNTTFFT
+  deps += $(top_builddir)/src/libstrongswan/math/libnttfft/libnttfft.la
+  libs += $(DESTDIR)$(ipseclibdir)/libnttfft.so
+endif
+
 if USE_LIBPTTLS
   deps += $(top_builddir)/src/libpttls/libpttls.la
   libs += $(DESTDIR)$(ipseclibdir)/libpttls.so
+endif
+
+if USE_LIBTPMTSS
+  deps += $(top_builddir)/src/libtpmtss/libtpmtss.la
+  libs += $(DESTDIR)$(ipseclibdir)/libtpmtss.so
+if !MONOLITHIC
+  AM_CPPFLAGS += -DP_PLUGINS=\""${p_plugins}\""
+endif
+
 endif
 
 if USE_LIBTNCCS
@@ -84,6 +98,10 @@ if USE_CMD
   exes += $(DESTDIR)$(sbindir)/charon-cmd
 endif
 
+if USE_SYSTEMD
+  exes += $(DESTDIR)$(sbindir)/charon-systemd
+endif
+
 if USE_SCEPCLIENT
   exes += $(DESTDIR)$(ipsecdir)/scepclient
 endif
@@ -102,6 +120,18 @@ endif
 
 if USE_IMV_ATTESTATION
   exes += $(DESTDIR)$(ipsecdir)/attest
+endif
+
+if USE_LIBPTTLS
+  exes += $(DESTDIR)$(bindir)/pt-tls-client
+endif
+
+if USE_IMC_SWIMA
+  exes += $(DESTDIR)$(sbindir)/sw-collector
+endif
+
+if USE_IMV_SWIMA
+  exes += $(DESTDIR)$(sbindir)/sec-updater
 endif
 
 checksum.c : checksum_builder $(deps) $(exes)

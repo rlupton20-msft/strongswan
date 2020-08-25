@@ -69,7 +69,7 @@ enum pt_tls_message_type_t {
 extern enum_name_t *pt_tls_message_type_names;
 
 /**
- * Result code for a single SASL mechansim, as sent in PT_TLS_SASL_RESULT
+ * Result code for a single SASL mechanism, as sent in PT_TLS_SASL_RESULT
  */
 enum pt_tls_sasl_result_t {
 	PT_TLS_SASL_RESULT_SUCCESS = 0,
@@ -102,11 +102,11 @@ enum pt_tls_auth_t {
  * @param tls			TLS socket to read from
  * @param vendor		receives Message Type Vendor ID from header
  * @param type			receives Message Type from header
- * @param identifier	receives Message Identifer
+ * @param identifier	receives Message Identifier
  * @return				reader over message value, NULL on error
  */
-bio_reader_t* pt_tls_read(tls_socket_t *tls, u_int32_t *vendor,
-						  u_int32_t *type, u_int32_t *identifier);
+bio_reader_t* pt_tls_read(tls_socket_t *tls, uint32_t *vendor,
+						  uint32_t *type, uint32_t *identifier);
 
 /**
  * Prepend a PT-TLS header to a writer, send data, destroy writer.
@@ -118,7 +118,7 @@ bio_reader_t* pt_tls_read(tls_socket_t *tls, u_int32_t *vendor,
  * @return				TRUE if data written successfully
  */
 bool pt_tls_write(tls_socket_t *tls, pt_tls_message_type_t type,
-				  u_int32_t identifier, chunk_t data);
+				  uint32_t identifier, chunk_t data);
 
 /**
  * Dummy libpttls initialization function needed for integrity test

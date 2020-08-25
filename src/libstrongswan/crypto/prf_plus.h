@@ -1,7 +1,7 @@
 /*
  * Copyright (C) 2005-2006 Martin Willi
  * Copyright (C) 2005 Jan Hutter
- * Hochschule fuer Technik Rapperswil
+ * HSR Hochschule fuer Technik Rapperswil
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -39,7 +39,7 @@ struct prf_plus_t {
 	 * @return			TRUE if bytes generated successfully
 	 */
 	bool (*get_bytes)(prf_plus_t *this, size_t length,
-					  u_int8_t *buffer) __attribute__((warn_unused_result));
+					  uint8_t *buffer) __attribute__((warn_unused_result));
 
 	/**
 	 * Allocate pseudo random bytes.

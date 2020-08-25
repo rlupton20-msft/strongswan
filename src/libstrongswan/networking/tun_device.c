@@ -2,7 +2,7 @@
  * Copyright (C) 2012 Tobias Brunner
  * Copyright (C) 2012 Giuliano Grassi
  * Copyright (C) 2012 Ralf Sager
- * Hochschule fuer Technik Rapperswil
+ * HSR Hochschule fuer Technik Rapperswil
  * Copyright (C) 2012 Martin Willi
  *
  * This program is free software; you can redistribute it and/or modify it
@@ -21,7 +21,16 @@
 #include <utils/debug.h>
 #include <threading/thread.h>
 
-#if !defined(__APPLE__) && !defined(__linux__) && !defined(HAVE_NET_IF_TUN_H)
+#if defined(__APPLE__)
+#include "TargetConditionals.h"
+#if !TARGET_OS_OSX
+#define TUN_DEVICE_NOT_SUPPORTED
+#endif
+#elif !defined(__linux__) && !defined(HAVE_NET_IF_TUN_H)
+#define TUN_DEVICE_NOT_SUPPORTED
+#endif
+
+#ifdef TUN_DEVICE_NOT_SUPPORTED
 
 tun_device_t *tun_device_create(const char *name_tmpl)
 {
@@ -96,7 +105,7 @@ struct private_tun_device_t {
 	/**
 	 * Netmask for address
 	 */
-	u_int8_t netmask;
+	uint8_t netmask;
 };
 
 /**
@@ -105,7 +114,7 @@ struct private_tun_device_t {
 #if __FreeBSD__ >= 10
 
 static bool set_address_and_mask(struct in_aliasreq *ifra, host_t *addr,
-								 u_int8_t netmask)
+								 uint8_t netmask)
 {
 	host_t *mask;
 
@@ -132,7 +141,7 @@ static bool set_address_and_mask(struct in_aliasreq *ifra, host_t *addr,
  * on FreeBSD 10 an newer.
  */
 static bool set_address_impl(private_tun_device_t *this, host_t *addr,
-							 u_int8_t netmask)
+							 uint8_t netmask)
 {
 	struct in_aliasreq ifra;
 
@@ -171,7 +180,7 @@ static bool set_address_impl(private_tun_device_t *this, host_t *addr,
  * Set the address using the classic SIOCSIFADDR etc. commands on other systems.
  */
 static bool set_address_impl(private_tun_device_t *this, host_t *addr,
-							 u_int8_t netmask)
+							 uint8_t netmask)
 {
 	struct ifreq ifr;
 	host_t *mask;
@@ -218,7 +227,7 @@ static bool set_address_impl(private_tun_device_t *this, host_t *addr,
 #endif /* __FreeBSD__ */
 
 METHOD(tun_device_t, set_address, bool,
-	private_tun_device_t *this, host_t *addr, u_int8_t netmask)
+	private_tun_device_t *this, host_t *addr, uint8_t netmask)
 {
 	if (!set_address_impl(this, addr, netmask))
 	{
@@ -231,7 +240,7 @@ METHOD(tun_device_t, set_address, bool,
 }
 
 METHOD(tun_device_t, get_address, host_t*,
-	private_tun_device_t *this, u_int8_t *netmask)
+	private_tun_device_t *this, uint8_t *netmask)
 {
 	if (netmask && this->address)
 	{
@@ -326,7 +335,7 @@ METHOD(tun_device_t, write_packet, bool,
 #ifdef __APPLE__
 	/* UTUN's expect the packets to be prepended by a 32-bit protocol number
 	 * instead of parsing the packet again, we assume IPv4 for now */
-	u_int32_t proto = htonl(AF_INET);
+	uint32_t proto = htonl(AF_INET);
 	packet = chunk_cata("cc", chunk_from_thing(proto), packet);
 #endif
 	s = write(this->tunfd, packet.ptr, packet.len);
@@ -364,7 +373,7 @@ METHOD(tun_device_t, read_packet, bool,
 	data.len = len;
 #ifdef __APPLE__
 	/* UTUN's prepend packets with a 32-bit protocol number */
-	data = chunk_skip(data, sizeof(u_int32_t));
+	data = chunk_skip(data, sizeof(uint32_t));
 #endif
 	*packet = chunk_clone(data);
 	return TRUE;
@@ -481,10 +490,25 @@ static bool init_tun(private_tun_device_t *this, const char *name_tmpl)
 	strncpy(this->if_name, ifr.ifr_name, IFNAMSIZ);
 	return TRUE;
 
-#else /* !IFF_TUN */
+#elif defined(__FreeBSD__)
 
-	/* this works on FreeBSD and might also work on Linux with older TUN
-	 * driver versions (no IFF_TUN) */
+	if (name_tmpl)
+	{
+		DBG1(DBG_LIB, "arbitrary naming of TUN devices is not supported");
+	}
+
+	this->tunfd = open("/dev/tun", O_RDWR);
+	if (this->tunfd < 0)
+	{
+		DBG1(DBG_LIB, "failed to open /dev/tun: %s", strerror(errno));
+		return FALSE;
+	}
+	fdevname_r(this->tunfd, this->if_name, IFNAMSIZ);
+	return TRUE;
+
+#else /* !__FreeBSD__ */
+
+	/* this might work on Linux with older TUN driver versions (no IFF_TUN) */
 	char devname[IFNAMSIZ];
 	/* the same process is allowed to open a device again, but that's not what
 	 * we want (unless we previously closed a device, which we don't know at

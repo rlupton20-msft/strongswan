@@ -1,7 +1,7 @@
 /*
  * Copyright (C) 2005-2006 Martin Willi
  * Copyright (C) 2005 Jan Hutter
- * Hochschule fuer Technik Rapperswil
+ * HSR Hochschule fuer Technik Rapperswil
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -68,7 +68,7 @@ struct parser_t {
 	 *
 	 * @param major_version	the major IKE version
 	 */
-	void (*set_major_version) (parser_t *this, u_int8_t major_version);
+	void (*set_major_version) (parser_t *this, uint8_t major_version);
 
 	/**
 	 * Destroys a parser_t object.

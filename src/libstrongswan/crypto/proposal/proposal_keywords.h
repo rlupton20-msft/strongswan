@@ -1,6 +1,6 @@
 /*
  * Copyright (C) 2012 Tobias Brunner
- * Hochschule fuer Technik Rapperswil
+ * HSR Hochschule fuer Technik Rapperswil
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -37,7 +37,7 @@
 
 /**
  * @defgroup proposal_keywords proposal_keywords
- * @{ @ingroup crypto
+ * @{ @ingroup proposal
  */
 
 #ifndef PROPOSAL_KEYWORDS_H_
@@ -69,12 +69,12 @@ struct proposal_token_t {
 	/**
 	 * The IKE id of the algorithm.
 	 */
-	u_int16_t algorithm;
+	uint16_t algorithm;
 
 	/**
 	 * The key size associated with the specific algorithm.
 	 */
-	u_int16_t keysize;
+	uint16_t keysize;
 };
 
 /**
@@ -100,8 +100,8 @@ struct proposal_keywords_t {
 	 * @param keysize	the key size associated with the specific algorithm
 	 */
 	void (*register_token)(proposal_keywords_t *this, const char *name,
-						   transform_type_t type, u_int16_t algorithm,
-						   u_int16_t keysize);
+						   transform_type_t type, uint16_t algorithm,
+						   uint16_t keysize);
 
 	/**
 	 * Register an algorithm name parser.

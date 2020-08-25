@@ -1,5 +1,6 @@
 /*
- * Copyright (C) 2015 Tobias Brunner, Andreas Steffen
+ * Copyright (C) 2015-2017 Tobias Brunner
+ * Copyright (C) 2015-2018 Andreas Steffen
  * HSR Hochschule fuer Technik Rapperswil
  *
  * Copyright (C) 2014 Martin Willi
@@ -55,6 +56,32 @@
 #include <asn1/asn1.h>
 #include <credentials/certificates/certificate.h>
 #include <credentials/certificates/x509.h>
+#include <counters_query.h>
+
+ENUM(vici_counter_type_names,
+	COUNTER_INIT_IKE_SA_REKEY, COUNTER_OUT_INFORMATIONAL_RSP,
+	"ike-rekey-init",
+	"ike-rekey-resp",
+	"child-rekey",
+	"invalid",
+	"invalid-spi",
+	"ike-init-in-req",
+	"ike-init-in-resp",
+	"ike-init-out-req",
+	"ike-init-out-resp",
+	"ike-auth-in-req",
+	"ike-auth-in-resp",
+	"ike-auth-out-req",
+	"ike-auth-out-resp",
+	"create-child-in-req",
+	"create-child-in-resp",
+	"create-child-out-req",
+	"create-child-out-resp",
+	"info-in-req",
+	"info-in-resp",
+	"info-out-req",
+	"info-out-resp",
+);
 
 typedef struct private_vici_query_t private_vici_query_t;
 
@@ -74,10 +101,163 @@ struct private_vici_query_t {
 	vici_dispatcher_t *dispatcher;
 
 	/**
+	 * Query interface for counters
+	 */
+	counters_query_t *counters;
+
+	/**
 	 * Daemon startup timestamp
 	 */
 	time_t uptime;
 };
+
+/**
+ * Add the given mark/mask to the message using the provided labels
+ */
+static void add_mark(vici_builder_t *b, mark_t mark,
+					 char *label, char *mask_label)
+{
+	if (mark.value | mark.mask)
+	{
+		b->add_kv(b, label, "%.8x", mark.value);
+		if (~mark.mask)
+		{
+			b->add_kv(b, mask_label, "%.8x", mark.mask);
+		}
+	}
+}
+
+/**
+ * List the mode of a CHILD_SA or config
+ */
+static void list_mode(vici_builder_t *b, child_sa_t *child, child_cfg_t *cfg)
+{
+	ipsec_mode_t mode;
+	char *sub_mode = "";
+
+	if (child || cfg)
+	{
+		if (!cfg)
+		{
+			cfg = child->get_config(child);
+		}
+		mode = child ? child->get_mode(child) : cfg->get_mode(cfg);
+		if (mode == MODE_TRANSPORT && cfg->has_option(cfg, OPT_PROXY_MODE))
+		{	/* only report this if the negotiated mode is actually TRANSPORT */
+			sub_mode = "_PROXY";
+		}
+		b->add_kv(b, "mode", "%N%s", ipsec_mode_names, mode, sub_mode);
+	}
+}
+
+/**
+ * List IPsec-related details about a CHILD_SA
+ */
+static void list_child_ipsec(vici_builder_t *b, child_sa_t *child)
+{
+	proposal_t *proposal;
+	uint16_t alg, ks;
+	uint32_t if_id;
+
+	b->add_kv(b, "protocol", "%N", protocol_id_names,
+			  child->get_protocol(child));
+	if (child->has_encap(child))
+	{
+		b->add_kv(b, "encap", "yes");
+	}
+	b->add_kv(b, "spi-in", "%.8x", ntohl(child->get_spi(child, TRUE)));
+	b->add_kv(b, "spi-out", "%.8x", ntohl(child->get_spi(child, FALSE)));
+
+	if (child->get_ipcomp(child) != IPCOMP_NONE)
+	{
+		b->add_kv(b, "cpi-in", "%.4x", ntohs(child->get_cpi(child, TRUE)));
+		b->add_kv(b, "cpi-out", "%.4x", ntohs(child->get_cpi(child, FALSE)));
+	}
+	add_mark(b, child->get_mark(child, TRUE), "mark-in", "mark-mask-in");
+	add_mark(b, child->get_mark(child, FALSE), "mark-out", "mark-mask-out");
+
+	if_id = child->get_if_id(child, TRUE);
+	if (if_id)
+	{
+		b->add_kv(b, "if-id-in", "%.8x", if_id);
+	}
+	if_id = child->get_if_id(child, FALSE);
+	if (if_id)
+	{
+		b->add_kv(b, "if-id-out", "%.8x", if_id);
+	}
+
+	proposal = child->get_proposal(child);
+	if (proposal)
+	{
+		if (proposal->get_algorithm(proposal, ENCRYPTION_ALGORITHM,
+									&alg, &ks) && alg != ENCR_UNDEFINED)
+		{
+			b->add_kv(b, "encr-alg", "%N", encryption_algorithm_names, alg);
+			if (ks)
+			{
+				b->add_kv(b, "encr-keysize", "%u", ks);
+			}
+		}
+		if (proposal->get_algorithm(proposal, INTEGRITY_ALGORITHM,
+									&alg, &ks) && alg != AUTH_UNDEFINED)
+		{
+			b->add_kv(b, "integ-alg", "%N", integrity_algorithm_names, alg);
+			if (ks)
+			{
+				b->add_kv(b, "integ-keysize", "%u", ks);
+			}
+		}
+		if (proposal->get_algorithm(proposal, DIFFIE_HELLMAN_GROUP,
+									&alg, NULL))
+		{
+			b->add_kv(b, "dh-group", "%N", diffie_hellman_group_names, alg);
+		}
+		if (proposal->get_algorithm(proposal, EXTENDED_SEQUENCE_NUMBERS,
+									&alg, NULL) && alg == EXT_SEQ_NUMBERS)
+		{
+			b->add_kv(b, "esn", "1");
+		}
+	}
+}
+
+/**
+ * List usage and lifetime stats of a CHILD_SA
+ */
+static void list_child_stats(vici_builder_t *b, child_sa_t *child, time_t now)
+{
+	uint64_t bytes, packets;
+	time_t t;
+
+	child->get_usestats(child, TRUE,  &t, &bytes, &packets);
+	b->add_kv(b, "bytes-in", "%" PRIu64, bytes);
+	b->add_kv(b, "packets-in", "%" PRIu64, packets);
+	if (t)
+	{
+		b->add_kv(b, "use-in", "%"PRIu64, (uint64_t)(now - t));
+	}
+
+	child->get_usestats(child, FALSE, &t, &bytes, &packets);
+	b->add_kv(b, "bytes-out", "%"PRIu64, bytes);
+	b->add_kv(b, "packets-out", "%"PRIu64, packets);
+	if (t)
+	{
+		b->add_kv(b, "use-out", "%"PRIu64, (uint64_t)(now - t));
+	}
+
+	t = child->get_lifetime(child, FALSE);
+	if (t)
+	{
+		b->add_kv(b, "rekey-time", "%"PRId64, (int64_t)(t - now));
+	}
+	t = child->get_lifetime(child, TRUE);
+	if (t)
+	{
+		b->add_kv(b, "life-time", "%"PRId64, (int64_t)(t - now));
+	}
+	t = child->get_installtime(child);
+	b->add_kv(b, "install-time", "%"PRId64, (int64_t)(now - t));
+}
 
 /**
  * List details of a CHILD_SA
@@ -85,96 +265,29 @@ struct private_vici_query_t {
 static void list_child(private_vici_query_t *this, vici_builder_t *b,
 					   child_sa_t *child, time_t now)
 {
-	time_t t;
-	u_int64_t bytes, packets;
-	u_int16_t alg, ks;
-	proposal_t *proposal;
 	enumerator_t *enumerator;
 	traffic_selector_t *ts;
+	child_sa_state_t state;
 
+	b->add_kv(b, "name", "%s", child->get_name(child));
 	b->add_kv(b, "uniqueid", "%u", child->get_unique_id(child));
 	b->add_kv(b, "reqid", "%u", child->get_reqid(child));
-	b->add_kv(b, "state", "%N", child_sa_state_names, child->get_state(child));
-	b->add_kv(b, "mode", "%N", ipsec_mode_names, child->get_mode(child));
-	if (child->get_state(child) == CHILD_INSTALLED ||
-		child->get_state(child) == CHILD_REKEYING ||
-		child->get_state(child) == CHILD_REKEYED)
+	state = child->get_state(child);
+	b->add_kv(b, "state", "%N", child_sa_state_names, state);
+	list_mode(b, child, NULL);
+
+	switch (state)
 	{
-		b->add_kv(b, "protocol", "%N", protocol_id_names,
-				  child->get_protocol(child));
-		if (child->has_encap(child))
-		{
-			b->add_kv(b, "encap", "yes");
-		}
-		b->add_kv(b, "spi-in", "%.8x", ntohl(child->get_spi(child, TRUE)));
-		b->add_kv(b, "spi-out", "%.8x", ntohl(child->get_spi(child, FALSE)));
-
-		if (child->get_ipcomp(child) != IPCOMP_NONE)
-		{
-			b->add_kv(b, "cpi-in", "%.4x", ntohs(child->get_cpi(child, TRUE)));
-			b->add_kv(b, "cpi-out", "%.4x", ntohs(child->get_cpi(child, FALSE)));
-		}
-		proposal = child->get_proposal(child);
-		if (proposal)
-		{
-			if (proposal->get_algorithm(proposal, ENCRYPTION_ALGORITHM,
-										&alg, &ks) && alg != ENCR_UNDEFINED)
-			{
-				b->add_kv(b, "encr-alg", "%N", encryption_algorithm_names, alg);
-				if (ks)
-				{
-					b->add_kv(b, "encr-keysize", "%u", ks);
-				}
-			}
-			if (proposal->get_algorithm(proposal, INTEGRITY_ALGORITHM,
-										&alg, &ks) && alg != AUTH_UNDEFINED)
-			{
-				b->add_kv(b, "integ-alg", "%N", integrity_algorithm_names, alg);
-				if (ks)
-				{
-					b->add_kv(b, "integ-keysize", "%u", ks);
-				}
-			}
-			if (proposal->get_algorithm(proposal, DIFFIE_HELLMAN_GROUP,
-										&alg, NULL))
-			{
-				b->add_kv(b, "dh-group", "%N", diffie_hellman_group_names, alg);
-			}
-			if (proposal->get_algorithm(proposal, EXTENDED_SEQUENCE_NUMBERS,
-										&alg, NULL) && alg == EXT_SEQ_NUMBERS)
-			{
-				b->add_kv(b, "esn", "1");
-			}
-		}
-
-		child->get_usestats(child, TRUE,  &t, &bytes, &packets);
-		b->add_kv(b, "bytes-in", "%" PRIu64, bytes);
-		b->add_kv(b, "packets-in", "%" PRIu64, packets);
-		if (t)
-		{
-			b->add_kv(b, "use-in", "%"PRIu64, (u_int64_t)(now - t));
-		}
-
-		child->get_usestats(child, FALSE, &t, &bytes, &packets);
-		b->add_kv(b, "bytes-out", "%"PRIu64, bytes);
-		b->add_kv(b, "packets-out", "%"PRIu64, packets);
-		if (t)
-		{
-			b->add_kv(b, "use-out", "%"PRIu64, (u_int64_t)(now - t));
-		}
-
-		t = child->get_lifetime(child, FALSE);
-		if (t)
-		{
-			b->add_kv(b, "rekey-time", "%"PRId64, (int64_t)(t - now));
-		}
-		t = child->get_lifetime(child, TRUE);
-		if (t)
-		{
-			b->add_kv(b, "life-time", "%"PRId64, (int64_t)(t - now));
-		}
-		t = child->get_installtime(child);
-		b->add_kv(b, "install-time", "%"PRId64, (int64_t)(now - t));
+		case CHILD_INSTALLED:
+		case CHILD_REKEYING:
+		case CHILD_REKEYED:
+		case CHILD_DELETING:
+		case CHILD_DELETED:
+			list_child_ipsec(b, child);
+			list_child_stats(b, child, now);
+			break;
+		default:
+			break;
 	}
 
 	b->begin_list(b, "local-ts");
@@ -272,7 +385,8 @@ static void list_ike(private_vici_query_t *this, vici_builder_t *b,
 	ike_sa_id_t *id;
 	identification_t *eap;
 	proposal_t *proposal;
-	u_int16_t alg, ks;
+	uint32_t if_id;
+	uint16_t alg, ks;
 	host_t *host;
 
 	b->add_kv(b, "uniqueid", "%u", ike_sa->get_unique_id(ike_sa));
@@ -318,6 +432,17 @@ static void list_ike(private_vici_query_t *this, vici_builder_t *b,
 	add_condition(b, ike_sa, "nat-fake", COND_NAT_FAKE);
 	add_condition(b, ike_sa, "nat-any", COND_NAT_ANY);
 
+	if_id = ike_sa->get_if_id(ike_sa, TRUE);
+	if (if_id)
+	{
+		b->add_kv(b, "if-id-in", "%.8x", if_id);
+	}
+	if_id = ike_sa->get_if_id(ike_sa, FALSE);
+	if (if_id)
+	{
+		b->add_kv(b, "if-id-out", "%.8x", if_id);
+	}
+
 	proposal = ike_sa->get_proposal(ike_sa);
 	if (proposal)
 	{
@@ -346,6 +471,7 @@ static void list_ike(private_vici_query_t *this, vici_builder_t *b,
 			b->add_kv(b, "dh-group", "%N", diffie_hellman_group_names, alg);
 		}
 	}
+	add_condition(b, ike_sa, "ppk", COND_PPK);
 
 	if (ike_sa->get_state(ike_sa) == IKE_ESTABLISHED)
 	{
@@ -382,6 +508,7 @@ CALLBACK(list_sas, vici_message_t*,
 	char *ike;
 	u_int ike_id;
 	bool bl;
+	char buf[BUF_LEN];
 
 	bl = request->get_str(request, NULL, "noblock") == NULL;
 	ike = request->get_str(request, NULL, "ike");
@@ -410,7 +537,9 @@ CALLBACK(list_sas, vici_message_t*,
 		csas = ike_sa->create_child_sa_enumerator(ike_sa);
 		while (csas->enumerate(csas, &child_sa))
 		{
-			b->begin_section(b, child_sa->get_name(child_sa));
+			snprintf(buf, sizeof(buf), "%s-%u", child_sa->get_name(child_sa),
+					 child_sa->get_unique_id(child_sa));
+			b->begin_section(b, buf);
 			list_child(this, b, child_sa, now);
 			b->end_section(b);
 		}
@@ -431,16 +560,21 @@ CALLBACK(list_sas, vici_message_t*,
 /**
  * Raise a list-policy event for given CHILD_SA
  */
-static void raise_policy(private_vici_query_t *this, u_int id, child_sa_t *child)
+static void raise_policy(private_vici_query_t *this, u_int id, char *ike,
+						 child_sa_t *child)
 {
 	enumerator_t *enumerator;
 	traffic_selector_t *ts;
 	vici_builder_t *b;
+	char buf[BUF_LEN];
 
 	b = vici_builder_create();
-	b->begin_section(b, child->get_name(child));
+	snprintf(buf, sizeof(buf), "%s/%s", ike, child->get_name(child));
+	b->begin_section(b, buf);
+	b->add_kv(b, "child", "%s", child->get_name(child));
+	b->add_kv(b, "ike", "%s", ike);
 
-	b->add_kv(b, "mode", "%N", ipsec_mode_names, child->get_mode(child));
+	list_mode(b, child, NULL);
 
 	b->begin_list(b, "local-ts");
 	enumerator = child->create_ts_enumerator(child, TRUE);
@@ -469,21 +603,29 @@ static void raise_policy(private_vici_query_t *this, u_int id, child_sa_t *child
 /**
  * Raise a list-policy event for given CHILD_SA config
  */
-static void raise_policy_cfg(private_vici_query_t *this, u_int id,
+static void raise_policy_cfg(private_vici_query_t *this, u_int id, char *ike,
 							 child_cfg_t *cfg)
 {
 	enumerator_t *enumerator;
 	linked_list_t *list;
 	traffic_selector_t *ts;
 	vici_builder_t *b;
+	char buf[BUF_LEN];
 
 	b = vici_builder_create();
-	b->begin_section(b, cfg->get_name(cfg));
+	snprintf(buf, sizeof(buf), "%s%s%s", ike ? ike : "", ike ? "/" : "",
+			 cfg->get_name(cfg));
+	b->begin_section(b, buf);
+	b->add_kv(b, "child", "%s", cfg->get_name(cfg));
+	if (ike)
+	{
+		b->add_kv(b, "ike", "%s", ike);
+	}
 
-	b->add_kv(b, "mode", "%N", ipsec_mode_names, cfg->get_mode(cfg));
+	list_mode(b, NULL, cfg);
 
 	b->begin_list(b, "local-ts");
-	list = cfg->get_traffic_selectors(cfg, TRUE, NULL, NULL);
+	list = cfg->get_traffic_selectors(cfg, TRUE, NULL, NULL, FALSE);
 	enumerator = list->create_enumerator(list);
 	while (enumerator->enumerate(enumerator, &ts))
 	{
@@ -494,7 +636,7 @@ static void raise_policy_cfg(private_vici_query_t *this, u_int id,
 	b->end_list(b /* local-ts */);
 
 	b->begin_list(b, "remote-ts");
-	list = cfg->get_traffic_selectors(cfg, FALSE, NULL, NULL);
+	list = cfg->get_traffic_selectors(cfg, FALSE, NULL, NULL, FALSE);
 	enumerator = list->create_enumerator(list);
 	while (enumerator->enumerate(enumerator, &ts))
 	{
@@ -516,25 +658,28 @@ CALLBACK(list_policies, vici_message_t*,
 	enumerator_t *enumerator;
 	vici_builder_t *b;
 	child_sa_t *child_sa;
+	peer_cfg_t *peer_cfg;
 	child_cfg_t *child_cfg;
 	bool drop, pass, trap;
-	char *child;
+	char *child, *ike, *ns;
 
 	drop = request->get_str(request, NULL, "drop") != NULL;
 	pass = request->get_str(request, NULL, "pass") != NULL;
 	trap = request->get_str(request, NULL, "trap") != NULL;
 	child = request->get_str(request, NULL, "child");
+	ike = request->get_str(request, NULL, "ike");
 
 	if (trap)
 	{
 		enumerator = charon->traps->create_enumerator(charon->traps);
-		while (enumerator->enumerate(enumerator, NULL, &child_sa))
+		while (enumerator->enumerate(enumerator, &peer_cfg, &child_sa))
 		{
-			if (child && !streq(child, child_sa->get_name(child_sa)))
+			if ((ike && !streq(ike, peer_cfg->get_name(peer_cfg))) ||
+				(child && !streq(child, child_sa->get_name(child_sa))))
 			{
 				continue;
 			}
-			raise_policy(this, id, child_sa);
+			raise_policy(this, id, peer_cfg->get_name(peer_cfg), child_sa);
 		}
 		enumerator->destroy(enumerator);
 	}
@@ -542,9 +687,10 @@ CALLBACK(list_policies, vici_message_t*,
 	if (drop || pass)
 	{
 		enumerator = charon->shunts->create_enumerator(charon->shunts);
-		while (enumerator->enumerate(enumerator, &child_cfg))
+		while (enumerator->enumerate(enumerator, &ns, &child_cfg))
 		{
-			if (child && !streq(child, child_cfg->get_name(child_cfg)))
+			if ((ike && !streq(ike, ns)) ||
+				(child && !streq(child, child_cfg->get_name(child_cfg))))
 			{
 				continue;
 			}
@@ -553,13 +699,13 @@ CALLBACK(list_policies, vici_message_t*,
 				case MODE_DROP:
 					if (drop)
 					{
-						raise_policy_cfg(this, id, child_cfg);
+						raise_policy_cfg(this, id, ns, child_cfg);
 					}
 					break;
 				case MODE_PASS:
 					if (pass)
 					{
-						raise_policy_cfg(this, id, child_cfg);
+						raise_policy_cfg(this, id, ns, child_cfg);
 					}
 					break;
 				default:
@@ -619,6 +765,9 @@ static void build_auth_cfgs(peer_cfg_t *peer_cfg, bool local, vici_builder_t *b)
 				case AUTH_RULE_IDENTITY:
 					b->add_kv(b, "id", "%Y", v.id);
 					break;
+				case AUTH_RULE_CA_IDENTITY:
+					b->add_kv(b, "ca_id", "%Y", v.id);
+					break;
 				case AUTH_RULE_AAA_IDENTITY:
 					b->add_kv(b, "aaa_id", "%Y", v.id);
 					break;
@@ -641,6 +790,18 @@ static void build_auth_cfgs(peer_cfg_t *peer_cfg, bool local, vici_builder_t *b)
 			if (rule == AUTH_RULE_GROUP)
 			{
 				b->add_li(b, "%Y", v.id);
+			}
+		}
+		rules->destroy(rules);
+		b->end_list(b);
+
+		b->begin_list(b, "cert_policy");
+		rules = auth->create_enumerator(auth);
+		while (rules->enumerate(rules, &rule, &v))
+		{
+			if (rule == AUTH_RULE_CERT_POLICY)
+			{
+				b->add_li(b, "%s", v.str);
 			}
 		}
 		rules->destroy(rules);
@@ -682,9 +843,12 @@ CALLBACK(list_conns, vici_message_t*,
 	peer_cfg_t *peer_cfg;
 	ike_cfg_t *ike_cfg;
 	child_cfg_t *child_cfg;
-	char *ike, *str;
+	char *ike, *str, *interface;
+	uint32_t manual_prio, dpd_delay, dpd_timeout;
+	identification_t *ppk_id;
 	linked_list_t *list;
 	traffic_selector_t *ts;
+	lifetime_cfg_t *lft;
 	vici_builder_t *b;
 
 	ike = request->get_str(request, NULL, "ike");
@@ -725,6 +889,34 @@ CALLBACK(list_conns, vici_message_t*,
 
 		b->add_kv(b, "version", "%N", ike_version_names,
 			peer_cfg->get_ike_version(peer_cfg));
+		b->add_kv(b, "reauth_time", "%u",
+			peer_cfg->get_reauth_time(peer_cfg, FALSE));
+		b->add_kv(b, "rekey_time", "%u",
+			peer_cfg->get_rekey_time(peer_cfg, FALSE));
+		b->add_kv(b, "unique", "%N", unique_policy_names,
+			peer_cfg->get_unique_policy(peer_cfg));
+
+		dpd_delay = peer_cfg->get_dpd(peer_cfg);
+		if (dpd_delay)
+		{
+			b->add_kv(b, "dpd_delay", "%u", dpd_delay);
+		}
+
+		dpd_timeout = peer_cfg->get_dpd_timeout(peer_cfg);
+		if (dpd_timeout)
+		{
+			b->add_kv(b, "dpd_timeout", "%u", dpd_timeout);
+		}
+
+		ppk_id = peer_cfg->get_ppk_id(peer_cfg);
+		if (ppk_id)
+		{
+			b->add_kv(b, "ppk_id", "%Y", ppk_id);
+		}
+		if (peer_cfg->ppk_required(peer_cfg))
+		{
+			b->add_kv(b, "ppk_required", "yes");
+		}
 
 		build_auth_cfgs(peer_cfg, TRUE, b);
 		build_auth_cfgs(peer_cfg, FALSE, b);
@@ -736,11 +928,22 @@ CALLBACK(list_conns, vici_message_t*,
 		{
 			b->begin_section(b, child_cfg->get_name(child_cfg));
 
-			b->add_kv(b, "mode", "%N", ipsec_mode_names,
-				child_cfg->get_mode(child_cfg));
+			list_mode(b, NULL, child_cfg);
+
+			lft = child_cfg->get_lifetime(child_cfg, FALSE);
+			b->add_kv(b, "rekey_time",    "%"PRIu64, lft->time.rekey);
+			b->add_kv(b, "rekey_bytes",   "%"PRIu64, lft->bytes.rekey);
+			b->add_kv(b, "rekey_packets", "%"PRIu64, lft->packets.rekey);
+			free(lft);
+
+			b->add_kv(b, "dpd_action", "%N", action_names,
+					  child_cfg->get_dpd_action(child_cfg));
+			b->add_kv(b, "close_action", "%N", action_names,
+					  child_cfg->get_close_action(child_cfg));
 
 			b->begin_list(b, "local-ts");
-			list = child_cfg->get_traffic_selectors(child_cfg, TRUE, NULL, NULL);
+			list = child_cfg->get_traffic_selectors(child_cfg, TRUE, NULL,
+													NULL, FALSE);
 			selectors = list->create_enumerator(list);
 			while (selectors->enumerate(selectors, &ts))
 			{
@@ -751,7 +954,8 @@ CALLBACK(list_conns, vici_message_t*,
 			b->end_list(b /* local-ts */);
 
 			b->begin_list(b, "remote-ts");
-			list = child_cfg->get_traffic_selectors(child_cfg, FALSE, NULL, NULL);
+			list = child_cfg->get_traffic_selectors(child_cfg, FALSE, NULL,
+													NULL, FALSE);
 			selectors = list->create_enumerator(list);
 			while (selectors->enumerate(selectors, &ts))
 			{
@@ -760,6 +964,18 @@ CALLBACK(list_conns, vici_message_t*,
 			selectors->destroy(selectors);
 			list->destroy_offset(list, offsetof(traffic_selector_t, destroy));
 			b->end_list(b /* remote-ts */);
+
+			interface = child_cfg->get_interface(child_cfg);
+			if (interface)
+			{
+				b->add_kv(b, "interface", "%s", interface);
+			}
+
+			manual_prio = child_cfg->get_manual_prio(child_cfg);
+			if (manual_prio)
+			{
+				b->add_kv(b, "priority", "%u", manual_prio);
+			}
 
 			b->end_section(b);
 		}
@@ -1048,6 +1264,8 @@ CALLBACK(get_algorithms, vici_message_t*,
 	integrity_algorithm_t integrity;
 	hash_algorithm_t hash;
 	pseudo_random_function_t prf;
+	ext_out_function_t xof;
+	drbg_type_t drbg;
 	diffie_hellman_group_t group;
 	rng_quality_t quality;
 	const char *plugin_name;
@@ -1099,6 +1317,24 @@ CALLBACK(get_algorithms, vici_message_t*,
 	enumerator->destroy(enumerator);
 	b->end_section(b);
 
+	b->begin_section(b, "xof");
+	enumerator = lib->crypto->create_xof_enumerator(lib->crypto);
+	while (enumerator->enumerate(enumerator, &xof, &plugin_name))
+	{
+		add_algorithm(b, ext_out_function_names, xof, plugin_name);
+	}
+	enumerator->destroy(enumerator);
+	b->end_section(b);
+
+	b->begin_section(b, "drbg");
+	enumerator = lib->crypto->create_drbg_enumerator(lib->crypto);
+	while (enumerator->enumerate(enumerator, &drbg, &plugin_name))
+	{
+		add_algorithm(b, drbg_type_names, drbg, plugin_name);
+	}
+	enumerator->destroy(enumerator);
+	b->end_section(b);
+
 	b->begin_section(b, "dh");
 	enumerator = lib->crypto->create_dh_enumerator(lib->crypto);
 	while (enumerator->enumerate(enumerator, &group, &plugin_name))
@@ -1126,6 +1362,131 @@ CALLBACK(get_algorithms, vici_message_t*,
 	enumerator->destroy(enumerator);
 	b->end_section(b);
 
+	return b->finalize(b);
+}
+
+/**
+ * Make sure we have the counters query interface
+ */
+static inline bool ensure_counters(private_vici_query_t *this)
+{
+	if (this->counters)
+	{
+		return TRUE;
+	}
+	return (this->counters = lib->get(lib, "counters")) != NULL;
+}
+
+/**
+ * Add a single set of counters to the message
+ *
+ * Frees the array of counter values
+ */
+static void add_counters(vici_builder_t *b, char *name, uint64_t *counters)
+{
+	char buf[BUF_LEN];
+	counter_type_t i;
+
+	b->begin_section(b, name ?: "");
+	for (i = 0; i < COUNTER_MAX; i++)
+	{
+		snprintf(buf, sizeof(buf), "%N", vici_counter_type_names, i);
+		b->add_kv(b, buf, "%"PRIu64, counters[i]);
+	}
+	b->end_section(b);
+	free(counters);
+}
+
+CALLBACK(get_counters, vici_message_t*,
+	private_vici_query_t *this, char *name, u_int id, vici_message_t *request)
+{
+	vici_builder_t *b;
+	enumerator_t *enumerator;
+	uint64_t *counters;
+	char *conn, *errmsg = NULL;
+	bool all;
+
+	b = vici_builder_create();
+
+	if (ensure_counters(this))
+	{
+		conn = request->get_str(request, NULL, "name");
+		all = request->get_bool(request, FALSE, "all");
+
+		b->begin_section(b, "counters");
+		if (all)
+		{
+			enumerator = this->counters->get_names(this->counters);
+			while (enumerator->enumerate(enumerator, &conn))
+			{
+				counters = this->counters->get_all(this->counters, conn);
+				if (counters)
+				{
+					add_counters(b, conn, counters);
+				}
+			}
+			enumerator->destroy(enumerator);
+		}
+		else
+		{
+			counters = this->counters->get_all(this->counters, conn);
+			if (counters)
+			{
+				add_counters(b, conn, counters);
+			}
+			else
+			{
+				errmsg = "no counters found for this connection";
+			}
+		}
+		b->end_section(b);
+	}
+	else
+	{
+		errmsg = "no counters available (plugin missing?)";
+	}
+
+	b->add_kv(b, "success", errmsg ? "no" : "yes");
+	if (errmsg)
+	{
+		b->add_kv(b, "errmsg", "%s", errmsg);
+	}
+	return b->finalize(b);
+}
+
+CALLBACK(reset_counters, vici_message_t*,
+	private_vici_query_t *this, char *name, u_int id, vici_message_t *request)
+{
+	vici_builder_t *b;
+	char *conn, *errmsg = NULL;
+	bool all;
+
+	b = vici_builder_create();
+
+	if (ensure_counters(this))
+	{
+		conn = request->get_str(request, NULL, "name");
+		all = request->get_bool(request, FALSE, "all");
+
+		if (all)
+		{
+			this->counters->reset_all(this->counters);
+		}
+		else
+		{
+			this->counters->reset(this->counters, conn);
+		}
+	}
+	else
+	{
+		errmsg = "no counters available (plugin missing?)";
+	}
+
+	b->add_kv(b, "success", errmsg ? "no" : "yes");
+	if (errmsg)
+	{
+		b->add_kv(b, "errmsg", "%s", errmsg);
+	}
 	return b->finalize(b);
 }
 
@@ -1329,6 +1690,8 @@ static void manage_commands(private_vici_query_t *this, bool reg)
 	manage_command(this, "list-conns", list_conns, reg);
 	manage_command(this, "list-certs", list_certs, reg);
 	manage_command(this, "get-algorithms", get_algorithms, reg);
+	manage_command(this, "get-counters", get_counters, reg);
+	manage_command(this, "reset-counters", reset_counters, reg);
 	manage_command(this, "version", version, reg);
 	manage_command(this, "stats", stats, reg);
 }
@@ -1397,6 +1760,7 @@ METHOD(listener_t, child_updown, bool,
 {
 	vici_builder_t *b;
 	time_t now;
+	char buf[BUF_LEN];
 
 	if (!this->dispatcher->has_event_listeners(this->dispatcher, "child-updown"))
 	{
@@ -1415,7 +1779,10 @@ METHOD(listener_t, child_updown, bool,
 	list_ike(this, b, ike_sa, now);
 	b->begin_section(b, "child-sas");
 
-	b->begin_section(b, child_sa->get_name(child_sa));
+	snprintf(buf, sizeof(buf), "%s-%u", child_sa->get_name(child_sa),
+			 child_sa->get_unique_id(child_sa));
+
+	b->begin_section(b, buf);
 	list_child(this, b, child_sa, now);
 	b->end_section(b);
 

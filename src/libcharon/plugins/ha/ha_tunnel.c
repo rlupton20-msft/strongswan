@@ -1,6 +1,6 @@
 /*
  * Copyright (C) 2009 Martin Willi
- * Hochschule fuer Technik Rapperswil
+ * HSR Hochschule fuer Technik Rapperswil
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -19,6 +19,8 @@
 #include <daemon.h>
 #include <utils/identification.h>
 #include <processing/jobs/callback_job.h>
+
+#define HA_CFG_NAME "ha"
 
 typedef struct private_ha_tunnel_t private_ha_tunnel_t;
 typedef struct ha_backend_t ha_backend_t;
@@ -79,7 +81,7 @@ struct private_ha_tunnel_t {
 	/**
 	 * Reqid of installed trap
 	 */
-	u_int32_t trap;
+	uint32_t trap;
 
 	/**
 	 * backend for HA SA
@@ -111,8 +113,12 @@ typedef struct {
 } shared_enum_t;
 
 METHOD(enumerator_t, shared_enumerate, bool,
-	shared_enum_t *this, shared_key_t **key, id_match_t *me, id_match_t *other)
+	shared_enum_t *this, va_list args)
 {
+	shared_key_t **key;
+	id_match_t *me, *other;
+
+	VA_ARGS_VGET(args, key, me, other);
 	if (this->key)
 	{
 		if (me)
@@ -151,7 +157,8 @@ METHOD(ha_creds_t, create_shared_enumerator, enumerator_t*,
 
 	INIT(enumerator,
 		.public = {
-			.enumerate = (void*)_shared_enumerate,
+			.enumerate = enumerator_enumerate_default,
+			.venumerate = _shared_enumerate,
 			.destroy = (void*)free,
 		},
 		.key = this->key,
@@ -183,10 +190,30 @@ static void setup_tunnel(private_ha_tunnel_t *this,
 	auth_cfg_t *auth_cfg;
 	child_cfg_t *child_cfg;
 	traffic_selector_t *ts;
-	lifetime_cfg_t lifetime = {
-		.time = {
-			.life = 21600, .rekey = 20400, .jitter = 400,
+	ike_cfg_create_t ike = {
+		.version = IKEV2,
+		.local = local,
+		.local_port = charon->socket->get_port(charon->socket, FALSE),
+		.remote = remote,
+		.remote_port = IKEV2_UDP_PORT,
+		.no_certreq = TRUE,
+	};
+	peer_cfg_create_t peer = {
+		.cert_policy = CERT_NEVER_SEND,
+		.unique = UNIQUE_KEEP,
+		.rekey_time = 86400, /* 24h */
+		.jitter_time = 7200, /* 2h */
+		.over_time = 3600, /* 1h */
+		.no_mobike = TRUE,
+		.dpd = 30,
+	};
+	child_cfg_create_t child = {
+		.lifetime = {
+			.time = {
+				.life = 21600, .rekey = 20400, .jitter = 400,
+			},
 		},
+		.mode = MODE_TRANSPORT,
 	};
 
 	/* setup credentials */
@@ -203,14 +230,10 @@ static void setup_tunnel(private_ha_tunnel_t *this,
 	lib->credmgr->add_set(lib->credmgr, &this->creds.public);
 
 	/* create config and backend */
-	ike_cfg = ike_cfg_create(IKEV2, FALSE, FALSE, local,
-							 charon->socket->get_port(charon->socket, FALSE),
-							 remote, IKEV2_UDP_PORT, FRAGMENTATION_NO, 0);
+	ike_cfg = ike_cfg_create(&ike);
 	ike_cfg->add_proposal(ike_cfg, proposal_create_default(PROTO_IKE));
 	ike_cfg->add_proposal(ike_cfg, proposal_create_default_aead(PROTO_IKE));
-	peer_cfg = peer_cfg_create("ha", ike_cfg, CERT_NEVER_SEND,
-						UNIQUE_KEEP, 0, 86400, 0, 7200, 3600, FALSE, FALSE,
-						TRUE, 30, 0, FALSE, NULL, NULL);
+	peer_cfg = peer_cfg_create(HA_CFG_NAME, ike_cfg, &peer);
 
 	auth_cfg = auth_cfg_create();
 	auth_cfg->add(auth_cfg, AUTH_RULE_AUTH_CLASS, AUTH_CLASS_PSK);
@@ -224,9 +247,7 @@ static void setup_tunnel(private_ha_tunnel_t *this,
 				  identification_create_from_string(remote));
 	peer_cfg->add_auth_cfg(peer_cfg, auth_cfg, FALSE);
 
-	child_cfg = child_cfg_create("ha", &lifetime, NULL, TRUE, MODE_TRANSPORT,
-								 ACTION_NONE, ACTION_NONE, ACTION_NONE, FALSE,
-								 0, 0, NULL, NULL, 0);
+	child_cfg = child_cfg_create(HA_CFG_NAME, &child);
 	ts = traffic_selector_create_dynamic(IPPROTO_UDP, HA_PORT, HA_PORT);
 	child_cfg->add_traffic_selector(child_cfg, TRUE, ts);
 	ts = traffic_selector_create_dynamic(IPPROTO_ICMP, 0, 65535);
@@ -247,7 +268,7 @@ static void setup_tunnel(private_ha_tunnel_t *this,
 	charon->backends->add_backend(charon->backends, &this->backend.public);
 
 	/* install an acquiring trap */
-	this->trap = charon->traps->install(charon->traps, peer_cfg, child_cfg, 0);
+	charon->traps->install(charon->traps, peer_cfg, child_cfg);
 }
 
 METHOD(ha_tunnel_t, destroy, void,
@@ -265,10 +286,7 @@ METHOD(ha_tunnel_t, destroy, void,
 	}
 	this->creds.local->destroy(this->creds.local);
 	this->creds.remote->destroy(this->creds.remote);
-	if (this->trap)
-	{
-		charon->traps->uninstall(charon->traps, this->trap);
-	}
+	charon->traps->uninstall(charon->traps, HA_CFG_NAME, HA_CFG_NAME);
 	free(this);
 }
 

@@ -29,6 +29,10 @@
 
 #include <openssl/cms.h>
 
+#if OPENSSL_VERSION_NUMBER < 0x10100000L
+#define X509_ATTRIBUTE_get0_object(attr) ({ (attr)->object; })
+#endif
+
 typedef struct private_openssl_pkcs7_t private_openssl_pkcs7_t;
 
 /**
@@ -132,8 +136,12 @@ METHOD(enumerator_t, cert_destroy, void,
 }
 
 METHOD(enumerator_t, cert_enumerate, bool,
-	cert_enumerator_t *this, certificate_t **out)
+	cert_enumerator_t *this, va_list args)
 {
+	certificate_t **out;
+
+	VA_ARGS_VGET(args, out);
+
 	if (!this->certs)
 	{
 		return FALSE;
@@ -172,7 +180,8 @@ METHOD(pkcs7_t, create_cert_enumerator, enumerator_t*,
 	{
 		INIT(enumerator,
 			.public = {
-				.enumerate = (void*)_cert_enumerate,
+				.enumerate = enumerator_enumerate_default,
+				.venumerate = _cert_enumerate,
 				.destroy = _cert_destroy,
 			},
 			.certs = CMS_get1_certs(this->cms),
@@ -247,7 +256,7 @@ static auth_cfg_t *verify_signature(CMS_SignerInfo *si, int hash_oid)
 			key = cert->get_public_key(cert);
 			if (key)
 			{
-				if (key->verify(key, signature_scheme_from_oid(hash_oid),
+				if (key->verify(key, signature_scheme_from_oid(hash_oid), NULL,
 								attrs, sig))
 				{
 					found = auth->clone(auth);
@@ -316,8 +325,12 @@ static bool verify_digest(CMS_ContentInfo *cms, CMS_SignerInfo *si, int hash_oid
 }
 
 METHOD(enumerator_t, signature_enumerate, bool,
-	signature_enumerator_t *this, auth_cfg_t **out)
+	signature_enumerator_t *this, va_list args)
 {
+	auth_cfg_t **out;
+
+	VA_ARGS_VGET(args, out);
+
 	if (!this->signers)
 	{
 		return FALSE;
@@ -378,7 +391,8 @@ METHOD(container_t, create_signature_enumerator, enumerator_t*,
 
 		INIT(enumerator,
 			.public = {
-				.enumerate = (void*)_signature_enumerate,
+				.enumerate = enumerator_enumerate_default,
+				.venumerate = _signature_enumerate,
 				.destroy = _signature_destroy,
 			},
 			.cms = this->cms,
@@ -427,16 +441,16 @@ METHOD(pkcs7_t, get_attribute, bool,
 		return FALSE;
 	}
 
-	/* "i" gets incremeneted after enumerate(), hence read from previous */
+	/* "i" gets incremented after enumerate(), hence read from previous */
 	si = sk_CMS_SignerInfo_value(e->signers, e->i - 1);
 	for (i = 0; i < CMS_signed_get_attr_count(si); i++)
 	{
 		attr = CMS_signed_get_attr(si, i);
-		if (!attr->single && sk_ASN1_TYPE_num(attr->value.set) == 1 &&
-			openssl_asn1_known_oid(attr->object) == oid)
+		if (X509_ATTRIBUTE_count(attr) == 1 &&
+			openssl_asn1_known_oid(X509_ATTRIBUTE_get0_object(attr)) == oid)
 		{
 			/* get first value in SET */
-			type = sk_ASN1_TYPE_value(attr->value.set, 0);
+			type = X509_ATTRIBUTE_get0_type(attr, 0);
 			chunk = wrapped = openssl_i2chunk(ASN1_TYPE, type);
 			if (asn1_unwrap(&chunk, &chunk) != 0x100 /* ASN1_INVALID */)
 			{
@@ -503,7 +517,7 @@ static bool decrypt_symmetric(private_openssl_pkcs7_t *this, chunk_t key,
 	chunk_t iv;
 	size_t key_size;
 
-	/* read encryption algorithm from interal structures; TODO fixup */
+	/* read encryption algorithm from internal structures; TODO fixup */
 	alg = this->cms->envelopedData->encryptedContentInfo->
 												contentEncryptionAlgorithm;
 	encr = encryption_algorithm_from_oid(openssl_asn1_known_oid(alg->algorithm),

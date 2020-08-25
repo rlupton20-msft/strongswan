@@ -1,7 +1,7 @@
 /*
  * Copyright (C) 2015 Tobias Brunner
  * Copyright (C) 2008 Martin Willi
- * Hochschule fuer Technik Rapperswil
+ * HSR Hochschule fuer Technik Rapperswil
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -99,11 +99,11 @@ METHOD(keymat_t, create_nonce_gen, nonce_gen_t*,
 /**
  * Derive IKE keys for a combined AEAD algorithm
  */
-static bool derive_ike_aead(private_keymat_v2_t *this, u_int16_t alg,
-							u_int16_t key_size, prf_plus_t *prf_plus)
+static bool derive_ike_aead(private_keymat_v2_t *this, uint16_t alg,
+							uint16_t key_size, prf_plus_t *prf_plus)
 {
 	aead_t *aead_i, *aead_r;
-	chunk_t key = chunk_empty;
+	chunk_t sk_ei = chunk_empty, sk_er = chunk_empty;
 	u_int salt_size;
 
 	switch (alg)
@@ -146,23 +146,22 @@ static bool derive_ike_aead(private_keymat_v2_t *this, u_int16_t alg,
 	{
 		goto failure;
 	}
-	if (!prf_plus->allocate_bytes(prf_plus, key_size, &key))
+	if (!prf_plus->allocate_bytes(prf_plus, key_size, &sk_ei))
 	{
 		goto failure;
 	}
-	DBG4(DBG_IKE, "Sk_ei secret %B", &key);
-	if (!aead_i->set_key(aead_i, key))
+	DBG4(DBG_IKE, "Sk_ei secret %B", &sk_ei);
+	if (!aead_i->set_key(aead_i, sk_ei))
 	{
 		goto failure;
 	}
-	chunk_clear(&key);
 
-	if (!prf_plus->allocate_bytes(prf_plus, key_size, &key))
+	if (!prf_plus->allocate_bytes(prf_plus, key_size, &sk_er))
 	{
 		goto failure;
 	}
-	DBG4(DBG_IKE, "Sk_er secret %B", &key);
-	if (!aead_r->set_key(aead_r, key))
+	DBG4(DBG_IKE, "Sk_er secret %B", &sk_er);
+	if (!aead_r->set_key(aead_r, sk_er))
 	{
 		goto failure;
 	}
@@ -178,25 +177,29 @@ static bool derive_ike_aead(private_keymat_v2_t *this, u_int16_t alg,
 		this->aead_out = aead_r;
 	}
 	aead_i = aead_r = NULL;
+	charon->bus->ike_derived_keys(charon->bus, sk_ei, sk_er, chunk_empty,
+								  chunk_empty);
 
 failure:
 	DESTROY_IF(aead_i);
 	DESTROY_IF(aead_r);
-	chunk_clear(&key);
+	chunk_clear(&sk_ei);
+	chunk_clear(&sk_er);
 	return this->aead_in && this->aead_out;
 }
 
 /**
  * Derive IKE keys for traditional encryption and MAC algorithms
  */
-static bool derive_ike_traditional(private_keymat_v2_t *this, u_int16_t enc_alg,
-					u_int16_t enc_size, u_int16_t int_alg, prf_plus_t *prf_plus)
+static bool derive_ike_traditional(private_keymat_v2_t *this, uint16_t enc_alg,
+					uint16_t enc_size, uint16_t int_alg, prf_plus_t *prf_plus)
 {
 	crypter_t *crypter_i = NULL, *crypter_r = NULL;
 	signer_t *signer_i, *signer_r;
 	iv_gen_t *ivg_i, *ivg_r;
 	size_t key_size;
-	chunk_t key = chunk_empty;
+	chunk_t sk_ei = chunk_empty, sk_er = chunk_empty,
+			sk_ai = chunk_empty, sk_ar = chunk_empty;
 
 	signer_i = lib->crypto->create_signer(lib->crypto, int_alg);
 	signer_r = lib->crypto->create_signer(lib->crypto, int_alg);
@@ -220,48 +223,45 @@ static bool derive_ike_traditional(private_keymat_v2_t *this, u_int16_t enc_alg,
 	/* SK_ai/SK_ar used for integrity protection */
 	key_size = signer_i->get_key_size(signer_i);
 
-	if (!prf_plus->allocate_bytes(prf_plus, key_size, &key))
+	if (!prf_plus->allocate_bytes(prf_plus, key_size, &sk_ai))
 	{
 		goto failure;
 	}
-	DBG4(DBG_IKE, "Sk_ai secret %B", &key);
-	if (!signer_i->set_key(signer_i, key))
+	DBG4(DBG_IKE, "Sk_ai secret %B", &sk_ai);
+	if (!signer_i->set_key(signer_i, sk_ai))
 	{
 		goto failure;
 	}
-	chunk_clear(&key);
 
-	if (!prf_plus->allocate_bytes(prf_plus, key_size, &key))
+	if (!prf_plus->allocate_bytes(prf_plus, key_size, &sk_ar))
 	{
 		goto failure;
 	}
-	DBG4(DBG_IKE, "Sk_ar secret %B", &key);
-	if (!signer_r->set_key(signer_r, key))
+	DBG4(DBG_IKE, "Sk_ar secret %B", &sk_ar);
+	if (!signer_r->set_key(signer_r, sk_ar))
 	{
 		goto failure;
 	}
-	chunk_clear(&key);
 
 	/* SK_ei/SK_er used for encryption */
 	key_size = crypter_i->get_key_size(crypter_i);
 
-	if (!prf_plus->allocate_bytes(prf_plus, key_size, &key))
+	if (!prf_plus->allocate_bytes(prf_plus, key_size, &sk_ei))
 	{
 		goto failure;
 	}
-	DBG4(DBG_IKE, "Sk_ei secret %B", &key);
-	if (!crypter_i->set_key(crypter_i, key))
+	DBG4(DBG_IKE, "Sk_ei secret %B", &sk_ei);
+	if (!crypter_i->set_key(crypter_i, sk_ei))
 	{
 		goto failure;
 	}
-	chunk_clear(&key);
 
-	if (!prf_plus->allocate_bytes(prf_plus, key_size, &key))
+	if (!prf_plus->allocate_bytes(prf_plus, key_size, &sk_er))
 	{
 		goto failure;
 	}
-	DBG4(DBG_IKE, "Sk_er secret %B", &key);
-	if (!crypter_r->set_key(crypter_r, key))
+	DBG4(DBG_IKE, "Sk_er secret %B", &sk_er);
+	if (!crypter_r->set_key(crypter_r, sk_er))
 	{
 		goto failure;
 	}
@@ -284,9 +284,13 @@ static bool derive_ike_traditional(private_keymat_v2_t *this, u_int16_t enc_alg,
 	}
 	signer_i = signer_r = NULL;
 	crypter_i = crypter_r = NULL;
+	charon->bus->ike_derived_keys(charon->bus, sk_ei, sk_er, sk_ai, sk_ar);
 
 failure:
-	chunk_clear(&key);
+	chunk_clear(&sk_ai);
+	chunk_clear(&sk_ar);
+	chunk_clear(&sk_ei);
+	chunk_clear(&sk_er);
 	DESTROY_IF(signer_i);
 	DESTROY_IF(signer_r);
 	DESTROY_IF(crypter_i);
@@ -302,11 +306,11 @@ METHOD(keymat_v2_t, derive_ike_keys, bool,
 	chunk_t skeyseed = chunk_empty, key, secret, full_nonce, fixed_nonce;
 	chunk_t prf_plus_seed, spi_i, spi_r;
 	prf_plus_t *prf_plus = NULL;
-	u_int16_t alg, key_size, int_alg;
+	uint16_t alg, key_size, int_alg;
 	prf_t *rekey_prf = NULL;
 
-	spi_i = chunk_alloca(sizeof(u_int64_t));
-	spi_r = chunk_alloca(sizeof(u_int64_t));
+	spi_i = chunk_alloca(sizeof(uint64_t));
+	spi_r = chunk_alloca(sizeof(uint64_t));
 
 	if (!dh->get_shared_secret(dh, &secret))
 	{
@@ -338,10 +342,13 @@ METHOD(keymat_v2_t, derive_ike_keys, bool,
 	 * the nonces. */
 	switch (alg)
 	{
+		case PRF_AES128_CMAC:
+			/* while variable keys may be used according to RFC 4615, RFC 7296
+			 * explicitly limits the key size to 128 bit for this application */
 		case PRF_AES128_XCBC:
-			/* while rfc4434 defines variable keys for AES-XCBC, rfc3664 does
+			/* while RFC 4434 defines variable keys for AES-XCBC, RFC 3664 does
 			 * not and therefore fixed key semantics apply to XCBC for key
-			 * derivation. */
+			 * derivation, which is also reinforced by RFC 7296 */
 		case PRF_CAMELLIA128_XCBC:
 			/* draft-kanno-ipsecme-camellia-xcbc refers to rfc 4434, we
 			 * assume fixed key length. */
@@ -354,8 +361,8 @@ METHOD(keymat_v2_t, derive_ike_keys, bool,
 			break;
 	}
 	fixed_nonce = chunk_cat("cc", nonce_i, nonce_r);
-	*((u_int64_t*)spi_i.ptr) = id->get_initiator_spi(id);
-	*((u_int64_t*)spi_r.ptr) = id->get_responder_spi(id);
+	*((uint64_t*)spi_i.ptr) = id->get_initiator_spi(id);
+	*((uint64_t*)spi_r.ptr) = id->get_responder_spi(id);
 	prf_plus_seed = chunk_cat("ccc", full_nonce, spi_i, spi_r);
 
 	/* KEYMAT = prf+ (SKEYSEED, Ni | Nr | SPIi | SPIr)
@@ -484,12 +491,99 @@ failure:
 	return this->skp_build.len && this->skp_verify.len;
 }
 
+/**
+ * Derives a key from the given key and a PRF that was initialized with a PPK
+ */
+static bool derive_ppk_key(prf_t *prf, char *name, chunk_t key,
+						   chunk_t *new_key)
+{
+	prf_plus_t *prf_plus;
+
+	prf_plus = prf_plus_create(prf, TRUE, key);
+	if (!prf_plus ||
+		!prf_plus->allocate_bytes(prf_plus, key.len, new_key))
+	{
+		DBG1(DBG_IKE, "unable to derive %s with PPK", name);
+		DESTROY_IF(prf_plus);
+		return FALSE;
+	}
+	prf_plus->destroy(prf_plus);
+	return TRUE;
+}
+
+/**
+ * Use the given PPK to derive a new SK_pi/r
+ */
+static bool derive_skp_ppk(private_keymat_v2_t *this, chunk_t ppk, chunk_t skp,
+						   chunk_t *new_skp)
+{
+	if (!this->prf->set_key(this->prf, ppk))
+	{
+		DBG1(DBG_IKE, "unable to set PPK in PRF");
+		return FALSE;
+	}
+	return derive_ppk_key(this->prf, "SK_p", skp, new_skp);
+}
+
+METHOD(keymat_v2_t, derive_ike_keys_ppk, bool,
+	private_keymat_v2_t *this, chunk_t ppk)
+{
+	chunk_t skd = chunk_empty, new_skpi = chunk_empty, new_skpr = chunk_empty;
+	chunk_t *skpi, *skpr;
+
+	if (!this->skd.ptr)
+	{
+		return FALSE;
+	}
+
+	if (this->initiator)
+	{
+		skpi = &this->skp_build;
+		skpr = &this->skp_verify;
+	}
+	else
+	{
+		skpi = &this->skp_verify;
+		skpr = &this->skp_build;
+	}
+
+	DBG4(DBG_IKE, "derive keys using PPK %B", &ppk);
+
+	if (!this->prf->set_key(this->prf, ppk))
+	{
+		DBG1(DBG_IKE, "unable to set PPK in PRF");
+		return FALSE;
+	}
+	if (!derive_ppk_key(this->prf, "Sk_d", this->skd, &skd) ||
+		!derive_ppk_key(this->prf, "Sk_pi", *skpi, &new_skpi) ||
+		!derive_ppk_key(this->prf, "Sk_pr", *skpr, &new_skpr))
+	{
+		chunk_clear(&skd);
+		chunk_clear(&new_skpi);
+		chunk_clear(&new_skpr);
+		return FALSE;
+	}
+
+	DBG4(DBG_IKE, "Sk_d secret %B", &skd);
+	chunk_clear(&this->skd);
+	this->skd = skd;
+
+	DBG4(DBG_IKE, "Sk_pi secret %B", &new_skpi);
+	chunk_clear(skpi);
+	*skpi = new_skpi;
+
+	DBG4(DBG_IKE, "Sk_pr secret %B", &new_skpr);
+	chunk_clear(skpr);
+	*skpr = new_skpr;
+	return TRUE;
+}
+
 METHOD(keymat_v2_t, derive_child_keys, bool,
 	private_keymat_v2_t *this, proposal_t *proposal, diffie_hellman_t *dh,
 	chunk_t nonce_i, chunk_t nonce_r, chunk_t *encr_i, chunk_t *integ_i,
 	chunk_t *encr_r, chunk_t *integ_r)
 {
-	u_int16_t enc_alg, int_alg, enc_size = 0, int_size = 0;
+	uint16_t enc_alg, int_alg, enc_size = 0, int_size = 0;
 	chunk_t seed, secret = chunk_empty;
 	prf_plus_t *prf_plus;
 
@@ -625,12 +719,23 @@ METHOD(keymat_t, get_aead, aead_t*,
 
 METHOD(keymat_v2_t, get_auth_octets, bool,
 	private_keymat_v2_t *this, bool verify, chunk_t ike_sa_init,
-	chunk_t nonce, identification_t *id, char reserved[3], chunk_t *octets)
+	chunk_t nonce, chunk_t ppk, identification_t *id, char reserved[3],
+	chunk_t *octets, array_t *schemes)
 {
 	chunk_t chunk, idx;
+	chunk_t skp_ppk = chunk_empty;
 	chunk_t skp;
 
 	skp = verify ? this->skp_verify : this->skp_build;
+	if (ppk.ptr)
+	{
+		DBG4(DBG_IKE, "PPK %B", &ppk);
+		if (!derive_skp_ppk(this, ppk, skp, &skp_ppk))
+		{
+			return FALSE;
+		}
+		skp = skp_ppk;
+	}
 
 	chunk = chunk_alloca(4);
 	chunk.ptr[0] = id->get_type(id);
@@ -642,8 +747,10 @@ METHOD(keymat_v2_t, get_auth_octets, bool,
 	if (!this->prf->set_key(this->prf, skp) ||
 		!this->prf->allocate_bytes(this->prf, idx, &chunk))
 	{
+		chunk_clear(&skp_ppk);
 		return FALSE;
 	}
+	chunk_clear(&skp_ppk);
 	*octets = chunk_cat("ccm", ike_sa_init, nonce, chunk);
 	DBG3(DBG_IKE, "octets = message + nonce + prf(Sk_px, IDx') %B", octets);
 	return TRUE;
@@ -657,40 +764,53 @@ METHOD(keymat_v2_t, get_auth_octets, bool,
 
 METHOD(keymat_v2_t, get_psk_sig, bool,
 	private_keymat_v2_t *this, bool verify, chunk_t ike_sa_init, chunk_t nonce,
-	chunk_t secret, identification_t *id, char reserved[3], chunk_t *sig)
+	chunk_t secret, chunk_t ppk, identification_t *id, char reserved[3],
+	chunk_t *sig)
 {
-	chunk_t key_pad, key, octets;
+	chunk_t skp_ppk = chunk_empty, key = chunk_empty, octets = chunk_empty;
+	chunk_t key_pad;
+	bool success = FALSE;
 
 	if (!secret.len)
 	{	/* EAP uses SK_p if no MSK has been established */
 		secret = verify ? this->skp_verify : this->skp_build;
+		if (ppk.ptr)
+		{
+			if (!derive_skp_ppk(this, ppk, secret, &skp_ppk))
+			{
+				return FALSE;
+			}
+			secret = skp_ppk;
+		}
 	}
-	if (!get_auth_octets(this, verify, ike_sa_init, nonce, id, reserved, &octets))
+	if (!get_auth_octets(this, verify, ike_sa_init, nonce, ppk, id, reserved,
+						 &octets, NULL))
 	{
-		return FALSE;
+		goto failure;
 	}
 	/* AUTH = prf(prf(Shared Secret,"Key Pad for IKEv2"), <msg octets>) */
 	key_pad = chunk_create(IKEV2_KEY_PAD, IKEV2_KEY_PAD_LENGTH);
 	if (!this->prf->set_key(this->prf, secret) ||
 		!this->prf->allocate_bytes(this->prf, key_pad, &key))
 	{
-		chunk_free(&octets);
-		return FALSE;
+		goto failure;
 	}
 	if (!this->prf->set_key(this->prf, key) ||
 		!this->prf->allocate_bytes(this->prf, octets, sig))
 	{
-		chunk_free(&key);
-		chunk_free(&octets);
-		return FALSE;
+		goto failure;
 	}
 	DBG4(DBG_IKE, "secret %B", &secret);
 	DBG4(DBG_IKE, "prf(secret, keypad) %B", &key);
 	DBG3(DBG_IKE, "AUTH = prf(prf(secret, keypad), octets) %B", sig);
+	success = TRUE;
+
+failure:
+	chunk_clear(&skp_ppk);
 	chunk_free(&octets);
 	chunk_free(&key);
+	return success;
 
-	return TRUE;
 }
 
 METHOD(keymat_v2_t, hash_algorithm_supported, bool,
@@ -743,6 +863,7 @@ keymat_v2_t *keymat_v2_create(bool initiator)
 				.destroy = _destroy,
 			},
 			.derive_ike_keys = _derive_ike_keys,
+			.derive_ike_keys_ppk = _derive_ike_keys_ppk,
 			.derive_child_keys = _derive_child_keys,
 			.get_skd = _get_skd,
 			.get_auth_octets = _get_auth_octets,

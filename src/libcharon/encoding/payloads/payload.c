@@ -2,7 +2,7 @@
  * Copyright (C) 2007 Tobias Brunner
  * Copyright (C) 2005-2006 Martin Willi
  * Copyright (C) 2005 Jan Hutter
- * Hochschule fuer Technik Rapperswil
+ * HSR Hochschule fuer Technik Rapperswil
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -268,7 +268,7 @@ payload_t *payload_create(payload_type_t type)
 /**
  * See header.
  */
-bool payload_is_known(payload_type_t type, u_int8_t maj_ver)
+bool payload_is_known(payload_type_t type, uint8_t maj_ver)
 {
 	if (type >= PL_HEADER)
 	{

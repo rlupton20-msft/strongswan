@@ -1,6 +1,6 @@
 /*
  * Copyright (C) 2008 Martin Willi
- * Hochschule fuer Technik Rapperswil
+ * HSR Hochschule fuer Technik Rapperswil
  *
  * Copyright (C) 2015 Andreas Steffen
  * HSR Hochschule fuer Technik Rapperswil
@@ -206,7 +206,7 @@ static void log_ike_sa(FILE *out, ike_sa_t *ike_sa, bool all)
 static void log_child_sa(FILE *out, child_sa_t *child_sa, bool all)
 {
 	time_t use_in, use_out, rekey, now;
-	u_int64_t bytes_in, bytes_out, packets_in, packets_out;
+	uint64_t bytes_in, bytes_out, packets_in, packets_out;
 	proposal_t *proposal;
 	linked_list_t *my_ts, *other_ts;
 	child_cfg_t *config;
@@ -218,7 +218,7 @@ static void log_child_sa(FILE *out, child_sa_t *child_sa, bool all)
 			child_sa->get_name(child_sa), child_sa->get_unique_id(child_sa),
 			child_sa_state_names, child_sa->get_state(child_sa),
 			ipsec_mode_names, child_sa->get_mode(child_sa),
-			config->use_proxy_mode(config) ? "_PROXY" : "",
+			config->has_option(config, OPT_PROXY_MODE) ? "_PROXY" : "",
 			child_sa->get_reqid(child_sa));
 
 	if (child_sa->get_state(child_sa) == CHILD_INSTALLED)
@@ -244,7 +244,7 @@ static void log_child_sa(FILE *out, child_sa_t *child_sa, bool all)
 			proposal = child_sa->get_proposal(child_sa);
 			if (proposal)
 			{
-				u_int16_t alg, ks;
+				uint16_t alg, ks;
 				bool first = TRUE;
 
 				if (proposal->get_algorithm(proposal, ENCRYPTION_ALGORITHM,
@@ -286,7 +286,7 @@ static void log_child_sa(FILE *out, child_sa_t *child_sa, bool all)
 			{
 				fprintf(out, " (%" PRIu64 " pkt%s, %" PRIu64 "s ago)",
 						packets_in, (packets_in == 1) ? "": "s",
-						(u_int64_t)(now - use_in));
+						(uint64_t)(now - use_in));
 			}
 
 			child_sa->get_usestats(child_sa, FALSE,
@@ -296,7 +296,7 @@ static void log_child_sa(FILE *out, child_sa_t *child_sa, bool all)
 			{
 				fprintf(out, " (%" PRIu64 " pkt%s, %" PRIu64 "s ago)",
 						packets_out, (packets_out == 1) ? "": "s",
-						(u_int64_t)(now - use_out));
+						(uint64_t)(now - use_out));
 			}
 			fprintf(out, ", rekeying ");
 
@@ -474,7 +474,7 @@ METHOD(stroke_list_t, status, void,
 		ike_version_t ike_version;
 		char *pool;
 		host_t *host;
-		u_int32_t dpd;
+		uint32_t dpd;
 		time_t since, now;
 		u_int size, online, offline, i;
 		struct utsname utsname;
@@ -580,8 +580,10 @@ METHOD(stroke_list_t, status, void,
 			children = peer_cfg->create_child_cfg_enumerator(peer_cfg);
 			while (children->enumerate(children, &child_cfg))
 			{
-				my_ts = child_cfg->get_traffic_selectors(child_cfg, TRUE, NULL, NULL);
-				other_ts = child_cfg->get_traffic_selectors(child_cfg, FALSE, NULL, NULL);
+				my_ts = child_cfg->get_traffic_selectors(child_cfg, TRUE,
+														 NULL, NULL, FALSE);
+				other_ts = child_cfg->get_traffic_selectors(child_cfg, FALSE,
+															NULL, NULL, FALSE);
 				fprintf(out, "%12s:   child:  %#R === %#R %N",
 						child_cfg->get_name(child_cfg),	my_ts, other_ts,
 						ipsec_mode_names, child_cfg->get_mode(child_cfg));
@@ -603,7 +605,7 @@ METHOD(stroke_list_t, status, void,
 	/* Enumerate shunt policies */
 	first = TRUE;
 	enumerator = charon->shunts->create_enumerator(charon->shunts);
-	while (enumerator->enumerate(enumerator, &child_cfg))
+	while (enumerator->enumerate(enumerator, NULL, &child_cfg))
 	{
 		if (name && !streq(name, child_cfg->get_name(child_cfg)))
 		{
@@ -614,8 +616,10 @@ METHOD(stroke_list_t, status, void,
 			fprintf(out, "Shunted Connections:\n");
 			first = FALSE;
 		}
-		my_ts = child_cfg->get_traffic_selectors(child_cfg, TRUE, NULL, NULL);
-		other_ts = child_cfg->get_traffic_selectors(child_cfg, FALSE, NULL, NULL);
+		my_ts = child_cfg->get_traffic_selectors(child_cfg, TRUE, NULL,
+												 NULL, FALSE);
+		other_ts = child_cfg->get_traffic_selectors(child_cfg, FALSE, NULL,
+													NULL, FALSE);
 		fprintf(out, "%12s:  %#R === %#R %N\n",
 				child_cfg->get_name(child_cfg),	my_ts, other_ts,
 				ipsec_mode_names, child_cfg->get_mode(child_cfg));
@@ -693,7 +697,7 @@ METHOD(stroke_list_t, status, void,
 
 /**
  * create a unique certificate list without duplicates
- * certicates having the same issuer are grouped together.
+ * certificates having the same issuer are grouped together.
  */
 static linked_list_t* create_unique_cert_list(certificate_type_t type)
 {
@@ -844,6 +848,8 @@ static void list_algs(FILE *out)
 	integrity_algorithm_t integrity;
 	hash_algorithm_t hash;
 	pseudo_random_function_t prf;
+	ext_out_function_t xof;
+	drbg_type_t drbg;
 	diffie_hellman_group_t group;
 	rng_quality_t quality;
 	const char *plugin_name;
@@ -889,6 +895,22 @@ static void list_algs(FILE *out)
 	while (enumerator->enumerate(enumerator, &prf, &plugin_name))
 	{
 		print_alg(out, &len, pseudo_random_function_names, prf, plugin_name);
+	}
+	enumerator->destroy(enumerator);
+	fprintf(out, "\n  xof:       ");
+	len = 13;
+	enumerator = lib->crypto->create_xof_enumerator(lib->crypto);
+	while (enumerator->enumerate(enumerator, &xof, &plugin_name))
+	{
+		print_alg(out, &len, ext_out_function_names, xof, plugin_name);
+	}
+	enumerator->destroy(enumerator);
+	fprintf(out, "\n  drbg:      ");
+	len = 13;
+	enumerator = lib->crypto->create_drbg_enumerator(lib->crypto);
+	while (enumerator->enumerate(enumerator, &drbg, &plugin_name))
+	{
+		print_alg(out, &len, drbg_type_names, drbg, plugin_name);
 	}
 	enumerator->destroy(enumerator);
 	fprintf(out, "\n  dh-group:  ");
@@ -949,8 +971,7 @@ static void list_plugins(FILE *out)
 				{
 					case FEATURE_PROVIDE:
 						fp = &features[i];
-						loaded = list->find_first(list, NULL,
-												  (void**)&fp) == SUCCESS;
+						loaded = list->find_first(list, NULL, (void**)&fp);
 						fprintf(out, "    %s%s\n",
 								str, loaded ? "" : " (not loaded)");
 						break;
@@ -1047,7 +1068,7 @@ static void pool_leases(private_stroke_list_t *this, FILE *out, char *pool,
 	fprintf(out, "Leases in pool '%s', usage: %u/%u, %u online\n",
 			pool, online + offline, size, online);
 	enumerator = this->attribute->create_lease_enumerator(this->attribute, pool);
-	while (enumerator && enumerator->enumerate(enumerator, &id, &lease, &on))
+	while (enumerator->enumerate(enumerator, &id, &lease, &on))
 	{
 		if (!address || address->ip_equals(address, lease))
 		{

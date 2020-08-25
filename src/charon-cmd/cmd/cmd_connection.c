@@ -1,6 +1,6 @@
 /*
  * Copyright (C) 2013 Tobias Brunner
- * Hochschule fuer Technik Rapperswil
+ * HSR Hochschule fuer Technik Rapperswil
  *
  * Copyright (C) 2013 Martin Willi
  * Copyright (C) 2013 revosec AG
@@ -142,10 +142,22 @@ static peer_cfg_t* create_peer_cfg(private_cmd_connection_t *this)
 {
 	ike_cfg_t *ike_cfg;
 	peer_cfg_t *peer_cfg;
-	u_int16_t local_port, remote_port = IKEV2_UDP_PORT;
-	ike_version_t version = IKE_ANY;
-	bool aggressive = FALSE;
 	proposal_t *proposal;
+	ike_cfg_create_t ike = {
+		.local = "0.0.0.0",
+		.remote = this->host,
+		.remote_port = IKEV2_UDP_PORT,
+		.fragmentation = FRAGMENTATION_YES,
+	};
+	peer_cfg_create_t peer = {
+		.cert_policy = CERT_SEND_IF_ASKED,
+		.unique = UNIQUE_REPLACE,
+		.keyingtries = 1,
+		.rekey_time = 36000, /* 10h */
+		.jitter_time = 600, /* 10min */
+		.over_time = 600, /* 10min */
+		.dpd = 30,
+	};
 
 	switch (this->profile)
 	{
@@ -153,29 +165,28 @@ static peer_cfg_t* create_peer_cfg(private_cmd_connection_t *this)
 		case PROF_V2_PUB:
 		case PROF_V2_EAP:
 		case PROF_V2_PUB_EAP:
-			version = IKEV2;
+			ike.version = IKEV2;
 			break;
 		case PROF_V1_PUB_AM:
 		case PROF_V1_XAUTH_AM:
 		case PROF_V1_XAUTH_PSK_AM:
 		case PROF_V1_HYBRID_AM:
-			aggressive = TRUE;
+			peer.aggressive = TRUE;
 			/* FALL */
 		case PROF_V1_PUB:
 		case PROF_V1_XAUTH:
 		case PROF_V1_XAUTH_PSK:
 		case PROF_V1_HYBRID:
-			version = IKEV1;
+			ike.version = IKEV1;
 			break;
 	}
 
-	local_port = charon->socket->get_port(charon->socket, FALSE);
-	if (local_port != IKEV2_UDP_PORT)
+	ike.local_port = charon->socket->get_port(charon->socket, FALSE);
+	if (ike.local_port != IKEV2_UDP_PORT)
 	{
-		remote_port = IKEV2_NATT_PORT;
+		ike.remote_port = IKEV2_NATT_PORT;
 	}
-	ike_cfg = ike_cfg_create(version, TRUE, FALSE, "0.0.0.0", local_port,
-					this->host, remote_port, FRAGMENTATION_NO, 0);
+	ike_cfg = ike_cfg_create(&ike);
 	if (this->ike_proposals->get_count(this->ike_proposals))
 	{
 		while (this->ike_proposals->remove_first(this->ike_proposals,
@@ -189,13 +200,7 @@ static peer_cfg_t* create_peer_cfg(private_cmd_connection_t *this)
 		ike_cfg->add_proposal(ike_cfg, proposal_create_default(PROTO_IKE));
 		ike_cfg->add_proposal(ike_cfg, proposal_create_default_aead(PROTO_IKE));
 	}
-	peer_cfg = peer_cfg_create("cmd", ike_cfg,
-					CERT_SEND_IF_ASKED, UNIQUE_REPLACE, 1, /* keyingtries */
-					36000, 0, /* rekey 10h, reauth none */
-					600, 600, /* jitter, over 10min */
-					TRUE, aggressive, TRUE, /* mobike, aggressive, pull */
-					30, 0, /* DPD delay, timeout */
-					FALSE, NULL, NULL); /* mediation */
+	peer_cfg = peer_cfg_create("cmd", ike_cfg, &peer);
 
 	return peer_cfg;
 }
@@ -335,18 +340,18 @@ static child_cfg_t* create_child_cfg(private_cmd_connection_t *this,
 	traffic_selector_t *ts;
 	proposal_t *proposal;
 	bool has_v4 = FALSE, has_v6 = FALSE;
-	lifetime_cfg_t lifetime = {
-		.time = {
-			.life = 10800 /* 3h */,
-			.rekey = 10200 /* 2h50min */,
-			.jitter = 300 /* 5min */
-		}
+	child_cfg_create_t child = {
+		.lifetime = {
+			.time = {
+				.life = 10800 /* 3h */,
+				.rekey = 10200 /* 2h50min */,
+				.jitter = 300 /* 5min */
+			}
+		},
+		.mode = MODE_TUNNEL,
 	};
 
-	child_cfg = child_cfg_create("cmd", &lifetime,
-								 NULL, FALSE, MODE_TUNNEL, /* updown, hostaccess */
-								 ACTION_NONE, ACTION_NONE, ACTION_NONE, FALSE,
-								 0, 0, NULL, NULL, 0);
+	child_cfg = child_cfg_create("cmd", &child);
 	if (this->child_proposals->get_count(this->child_proposals))
 	{
 		while (this->child_proposals->remove_first(this->child_proposals,

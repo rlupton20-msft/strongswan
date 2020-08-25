@@ -1,6 +1,6 @@
 /*
  * Copyright (C) 2007 Tobias Brunner
- * Hochschule fuer Technik Rapperswil
+ * HSR Hochschule fuer Technik Rapperswil
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -82,14 +82,14 @@ struct endpoint_notify_t {
 	 *
 	 * @return			priority
 	 */
-	u_int32_t (*get_priority) (endpoint_notify_t *this);
+	uint32_t (*get_priority) (endpoint_notify_t *this);
 
 	/**
 	 * Sets the priority of this endpoint.
 	 *
 	 * @param priority	priority
 	 */
-	void (*set_priority) (endpoint_notify_t *this, u_int32_t priority);
+	void (*set_priority) (endpoint_notify_t *this, uint32_t priority);
 
 	/**
 	 * Returns the endpoint type of this endpoint.

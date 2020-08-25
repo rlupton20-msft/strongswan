@@ -1,7 +1,7 @@
 /*
- * Copyright (C) 2012 Tobias Brunner
+ * Copyright (C) 2012-2018 Tobias Brunner
  * Copyright (C) 2006-2009 Martin Willi
- * Hochschule fuer Technik Rapperswil
+ * HSR Hochschule fuer Technik Rapperswil
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -65,6 +65,16 @@ struct private_eap_authenticator_t {
 	char reserved[3];
 
 	/**
+	 * PPK to use
+	 */
+	chunk_t ppk;
+
+	/**
+	 * Add a NO_PPK_AUTH notify
+	 */
+	bool no_ppk_auth;
+
+	/**
 	 * Current EAP method processing
 	 */
 	eap_method_t *method;
@@ -104,7 +114,7 @@ struct private_eap_authenticator_t {
  * load an EAP method
  */
 static eap_method_t *load_method(private_eap_authenticator_t *this,
-							eap_type_t type, u_int32_t vendor, eap_role_t role)
+							eap_type_t type, uint32_t vendor, eap_role_t role)
 {
 	identification_t *server, *peer, *aaa;
 	auth_cfg_t *auth;
@@ -143,7 +153,7 @@ static eap_payload_t* server_initiate_eap(private_eap_authenticator_t *this,
 	auth_cfg_t *auth;
 	eap_type_t type;
 	identification_t *id;
-	u_int32_t vendor;
+	uint32_t vendor;
 	eap_payload_t *out;
 	char *action;
 
@@ -237,7 +247,7 @@ static eap_payload_t* server_process_eap(private_eap_authenticator_t *this,
 										 eap_payload_t *in)
 {
 	eap_type_t type, received_type, conf_type;
-	u_int32_t vendor, received_vendor, conf_vendor;
+	uint32_t vendor, received_vendor, conf_vendor;
 	eap_payload_t *out;
 	auth_cfg_t *auth;
 
@@ -341,7 +351,7 @@ static eap_payload_t* client_process_eap(private_eap_authenticator_t *this,
 										 eap_payload_t *in)
 {
 	eap_type_t type, conf_type;
-	u_int32_t vendor, conf_vendor;
+	uint32_t vendor, conf_vendor;
 	auth_cfg_t *auth;
 	eap_payload_t *out;
 	identification_t *id;
@@ -444,12 +454,13 @@ static bool verify_auth(private_eap_authenticator_t *this, message_t *message,
 						chunk_t nonce, chunk_t init)
 {
 	auth_payload_t *auth_payload;
+	notify_payload_t *notify;
 	chunk_t auth_data, recv_auth_data;
 	identification_t *other_id;
 	auth_cfg_t *auth;
 	keymat_v2_t *keymat;
 	eap_type_t type;
-	u_int32_t vendor;
+	uint32_t vendor;
 
 	auth_payload = (auth_payload_t*)message->get_payload(message,
 														 PLV2_AUTH);
@@ -458,14 +469,26 @@ static bool verify_auth(private_eap_authenticator_t *this, message_t *message,
 		DBG1(DBG_IKE, "AUTH payload missing");
 		return FALSE;
 	}
+	recv_auth_data = auth_payload->get_data(auth_payload);
+
+	if (this->ike_sa->supports_extension(this->ike_sa, EXT_PPK) &&
+		!this->ppk.ptr)
+	{	/* look for a NO_PPK_AUTH notify if we have no PPK */
+		notify = message->get_notify(message, NO_PPK_AUTH);
+		if (notify)
+		{
+			DBG1(DBG_IKE, "no PPK available, using NO_PPK_AUTH notify");
+			recv_auth_data = notify->get_notification_data(notify);
+		}
+	}
+
 	other_id = this->ike_sa->get_other_id(this->ike_sa);
 	keymat = (keymat_v2_t*)this->ike_sa->get_keymat(this->ike_sa);
-	if (!keymat->get_psk_sig(keymat, TRUE, init, nonce,
-							 this->msk, other_id, this->reserved, &auth_data))
+	if (!keymat->get_psk_sig(keymat, TRUE, init, nonce, this->msk, this->ppk,
+							 other_id, this->reserved, &auth_data))
 	{
 		return FALSE;
 	}
-	recv_auth_data = auth_payload->get_data(auth_payload);
 	if (!auth_data.len || !chunk_equals_const(auth_data, recv_auth_data))
 	{
 		DBG1(DBG_IKE, "verification of AUTH payload with%s EAP MSK failed",
@@ -507,8 +530,8 @@ static bool build_auth(private_eap_authenticator_t *this, message_t *message,
 	DBG1(DBG_IKE, "authentication of '%Y' (myself) with %N",
 		 my_id, auth_class_names, AUTH_CLASS_EAP);
 
-	if (!keymat->get_psk_sig(keymat, FALSE, init, nonce,
-							this->msk, my_id, this->reserved, &auth_data))
+	if (!keymat->get_psk_sig(keymat, FALSE, init, nonce, this->msk, this->ppk,
+							 my_id, this->reserved, &auth_data))
 	{
 		return FALSE;
 	}
@@ -517,6 +540,18 @@ static bool build_auth(private_eap_authenticator_t *this, message_t *message,
 	auth_payload->set_data(auth_payload, auth_data);
 	message->add_payload(message, (payload_t*)auth_payload);
 	chunk_free(&auth_data);
+
+	if (this->no_ppk_auth)
+	{
+		if (!keymat->get_psk_sig(keymat, FALSE, init, nonce, this->msk,
+							chunk_empty, my_id, this->reserved, &auth_data))
+		{
+			DBG1(DBG_IKE, "failed adding NO_PPK_AUTH notify");
+			return FALSE;
+		}
+		message->add_notify(message, FALSE, NO_PPK_AUTH, auth_data);
+		chunk_free(&auth_data);
+	}
 	return TRUE;
 }
 
@@ -595,7 +630,7 @@ METHOD(authenticator_t, process_client, status_t,
 		}
 		if (this->require_mutual && !this->method->is_mutual(this->method))
 		{	/* we require mutual authentication due to EAP-only */
-			u_int32_t vendor;
+			uint32_t vendor;
 
 			DBG1(DBG_IKE, "EAP-only authentication requires a mutual and "
 				 "MSK deriving EAP method, but %N is not",
@@ -623,7 +658,7 @@ METHOD(authenticator_t, process_client, status_t,
 			case EAP_SUCCESS:
 			{
 				eap_type_t type;
-				u_int32_t vendor;
+				uint32_t vendor;
 				auth_cfg_t *cfg;
 
 				if (this->method->get_msk(this->method, &this->msk) == SUCCESS)
@@ -685,7 +720,7 @@ METHOD(authenticator_t, is_mutual, bool,
 {
 	if (this->method)
 	{
-		u_int32_t vendor;
+		uint32_t vendor;
 
 		if (this->method->get_type(this->method, &vendor) != EAP_IDENTITY ||
 			vendor != 0)
@@ -696,6 +731,13 @@ METHOD(authenticator_t, is_mutual, bool,
 	/* we don't know yet, but insist on it after EAP is complete */
 	this->require_mutual = TRUE;
 	return TRUE;
+}
+
+METHOD(authenticator_t, use_ppk, void,
+	private_eap_authenticator_t *this, chunk_t ppk, bool no_ppk_auth)
+{
+	this->ppk = ppk;
+	this->no_ppk_auth = no_ppk_auth;
 }
 
 METHOD(authenticator_t, destroy, void,
@@ -723,6 +765,7 @@ eap_authenticator_t *eap_authenticator_create_builder(ike_sa_t *ike_sa,
 			.authenticator = {
 				.build = _build_client,
 				.process = _process_client,
+				.use_ppk = _use_ppk,
 				.is_mutual = _is_mutual,
 				.destroy = _destroy,
 			},
@@ -753,6 +796,7 @@ eap_authenticator_t *eap_authenticator_create_verifier(ike_sa_t *ike_sa,
 			.authenticator = {
 				.build = _build_server,
 				.process = _process_server,
+				.use_ppk = _use_ppk,
 				.is_mutual = _is_mutual,
 				.destroy = _destroy,
 			},

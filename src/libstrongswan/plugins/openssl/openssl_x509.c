@@ -1,6 +1,6 @@
 /*
- * Copyright (C) 2011 Tobias Brunner
- * Hochschule fuer Technik Rapperswil
+ * Copyright (C) 2011-2017 Tobias Brunner
+ * HSR Hochschule fuer Technik Rapperswil
  *
  * Copyright (C) 2010 Martin Willi
  * Copyright (C) 2010 revosec AG
@@ -58,6 +58,27 @@
 /* IP Addr block extension support was introduced with 0.9.8e */
 #if OPENSSL_VERSION_NUMBER < 0x0090805fL
 #define OPENSSL_NO_RFC3779
+#endif
+
+/* added with 1.0.2 */
+#if OPENSSL_VERSION_NUMBER < 0x10002000L
+static inline void X509_get0_signature(ASN1_BIT_STRING **psig, X509_ALGOR **palg, const X509 *x) {
+	if (psig) { *psig = x->signature; }
+	if (palg) { *palg = x->sig_alg; }
+}
+#endif
+
+/* added with 1.1.0 when X509 etc. was made opaque */
+#if OPENSSL_VERSION_NUMBER < 0x10100000L
+#define X509_get0_extensions(x509) ({ (x509)->cert_info->extensions; })
+#define X509_get0_tbs_sigalg(x509) ({ (x509)->cert_info->signature; })
+#define X509_ALGOR_get0(oid, ppt, ppv, alg) ({ *(oid) = (alg)->algorithm; })
+#define X509_PUBKEY_get0_param(oid, pk, len, pa, pub) X509_ALGOR_get0(oid, NULL, NULL, (pub)->algor)
+#define X509v3_addr_get_afi v3_addr_get_afi
+#define X509v3_addr_get_range v3_addr_get_range
+#define X509v3_addr_is_canonical v3_addr_is_canonical
+#define X509_get0_notBefore X509_get_notBefore
+#define X509_get0_notAfter X509_get_notAfter
 #endif
 
 typedef struct private_openssl_x509_t private_openssl_x509_t;
@@ -135,7 +156,7 @@ struct private_openssl_x509_t {
 	/**
 	 * Signature scheme of the certificate
 	 */
-	signature_scheme_t scheme;
+	signature_params_t *scheme;
 
 	/**
 	 * subjectAltNames
@@ -168,16 +189,6 @@ struct private_openssl_x509_t {
 	 */
 	refcount_t ref;
 };
-
-/**
- * Destroy a CRL URI struct
- */
-static void crl_uri_destroy(x509_cdp_t *this)
-{
-	free(this->uri);
-	DESTROY_IF(this->issuer);
-	free(this);
-}
 
 /**
  * Convert a GeneralName to an identification_t.
@@ -375,18 +386,24 @@ METHOD(certificate_t, has_issuer, id_match_t,
 
 METHOD(certificate_t, issued_by, bool,
 	private_openssl_x509_t *this, certificate_t *issuer,
-	signature_scheme_t *scheme)
+	signature_params_t **scheme)
 {
 	public_key_t *key;
 	bool valid;
 	x509_t *x509 = (x509_t*)issuer;
+#if OPENSSL_VERSION_NUMBER >= 0x10100000L
+	const ASN1_BIT_STRING *sig;
+#else
+	ASN1_BIT_STRING *sig;
+#endif
 	chunk_t tbs;
 
 	if (&this->public.x509.interface == issuer)
 	{
 		if (this->flags & X509_SELF_SIGNED)
 		{
-			return TRUE;
+			valid = TRUE;
+			goto out;
 		}
 	}
 	else
@@ -404,23 +421,27 @@ METHOD(certificate_t, issued_by, bool,
 			return FALSE;
 		}
 	}
-	if (this->scheme == SIGN_UNKNOWN)
-	{
-		return FALSE;
-	}
 	key = issuer->get_public_key(issuer);
 	if (!key)
 	{
 		return FALSE;
 	}
+	/* i2d_re_X509_tbs() was added with 1.1.0 when X509 was made opaque */
+#if OPENSSL_VERSION_NUMBER >= 0x10100000L
+	tbs = openssl_i2chunk(re_X509_tbs, this->x509);
+#else
 	tbs = openssl_i2chunk(X509_CINF, this->x509->cert_info);
-	valid = key->verify(key, this->scheme, tbs,
-						openssl_asn1_str2chunk(this->x509->signature));
+#endif
+	X509_get0_signature(&sig, NULL, this->x509);
+	valid = key->verify(key, this->scheme->scheme, this->scheme->params, tbs,
+						openssl_asn1_str2chunk(sig));
 	free(tbs.ptr);
 	key->destroy(key);
+
+out:
 	if (valid && scheme)
 	{
-		*scheme = this->scheme;
+		*scheme = signature_params_clone(this->scheme);
 	}
 	return valid;
 }
@@ -513,6 +534,7 @@ METHOD(certificate_t, destroy, void,
 		{
 			X509_free(this->x509);
 		}
+		signature_params_destroy(this->scheme);
 		DESTROY_IF(this->subject);
 		DESTROY_IF(this->issuer);
 		DESTROY_IF(this->pubkey);
@@ -524,7 +546,8 @@ METHOD(certificate_t, destroy, void,
 										offsetof(identification_t, destroy));
 		this->issuerAltNames->destroy_offset(this->issuerAltNames,
 										offsetof(identification_t, destroy));
-		this->crl_uris->destroy_function(this->crl_uris, (void*)crl_uri_destroy);
+		this->crl_uris->destroy_function(this->crl_uris,
+										 (void*)x509_cdp_destroy);
 		this->ocsp_uris->destroy_function(this->ocsp_uris, free);
 		this->ipAddrBlocks->destroy_offset(this->ipAddrBlocks,
 										offsetof(traffic_selector_t, destroy));
@@ -651,6 +674,9 @@ static bool parse_keyUsage_ext(private_openssl_x509_t *this,
 {
 	ASN1_BIT_STRING *usage;
 
+	/* to be compliant with RFC 4945 specific KUs have to be included */
+	this->flags &= ~X509_IKE_COMPLIANT;
+
 	usage = X509V3_EXT_d2i(ext);
 	if (usage)
 	{
@@ -661,15 +687,18 @@ static bool parse_keyUsage_ext(private_openssl_x509_t *this,
 			{
 				flags |= usage->data[1] << 8;
 			}
-			switch (flags)
+			if (flags & X509v3_KU_CRL_SIGN)
 			{
-				case X509v3_KU_CRL_SIGN:
-					this->flags |= X509_CRL_SIGN;
-					break;
-				case X509v3_KU_KEY_CERT_SIGN:
-					/* we use the caBasicContraint, MUST be set */
-				default:
-					break;
+				this->flags |= X509_CRL_SIGN;
+			}
+			if (flags & X509v3_KU_DIGITAL_SIGNATURE ||
+				flags & X509v3_KU_NON_REPUDIATION)
+			{
+				this->flags |= X509_IKE_COMPLIANT;
+			}
+			if (flags & X509v3_KU_KEY_CERT_SIGN)
+			{
+				/* we use the caBasicContraint, MUST be set */
 			}
 		}
 		ASN1_BIT_STRING_free(usage);
@@ -716,15 +745,15 @@ static bool parse_extKeyUsage_ext(private_openssl_x509_t *this,
 /**
  * Parse CRL distribution points
  */
-static bool parse_crlDistributionPoints_ext(private_openssl_x509_t *this,
-											X509_EXTENSION *ext)
+bool openssl_parse_crlDistributionPoints(X509_EXTENSION *ext,
+										 linked_list_t *list)
 {
 	CRL_DIST_POINTS *cdps;
 	DIST_POINT *cdp;
 	identification_t *id, *issuer;
 	x509_cdp_t *entry;
 	char *uri;
-	int i, j, k, point_num, name_num, issuer_num;
+	int i, j, k, point_num, name_num, issuer_num, len;
 
 	cdps = X509V3_EXT_d2i(ext);
 	if (!cdps)
@@ -747,7 +776,12 @@ static bool parse_crlDistributionPoints_ext(private_openssl_x509_t *this,
 											cdp->distpoint->name.fullname, j));
 					if (id)
 					{
-						if (asprintf(&uri, "%Y", id) > 0)
+						len = asprintf(&uri, "%Y", id);
+						if (!len)
+						{
+							free(uri);
+						}
+						else if (len > 0)
 						{
 							if (cdp->CRLissuer)
 							{
@@ -762,8 +796,7 @@ static bool parse_crlDistributionPoints_ext(private_openssl_x509_t *this,
 											.uri = strdup(uri),
 											.issuer = issuer,
 										);
-										this->crl_uris->insert_last(
-														this->crl_uris, entry);
+										list->insert_last(list, entry);
 									}
 								}
 								free(uri);
@@ -773,7 +806,7 @@ static bool parse_crlDistributionPoints_ext(private_openssl_x509_t *this,
 								INIT(entry,
 									.uri = uri,
 								);
-								this->crl_uris->insert_last(this->crl_uris, entry);
+								list->insert_last(list, entry);
 							}
 						}
 						id->destroy(id);
@@ -797,7 +830,7 @@ static bool parse_authorityInfoAccess_ext(private_openssl_x509_t *this,
 	AUTHORITY_INFO_ACCESS *infos;
 	ACCESS_DESCRIPTION *desc;
 	identification_t *id;
-	int i, num;
+	int i, num, len;
 	char *uri;
 
 	infos = X509V3_EXT_d2i(ext);
@@ -816,7 +849,12 @@ static bool parse_authorityInfoAccess_ext(private_openssl_x509_t *this,
 				id = general_name2id(desc->location);
 				if (id)
 				{
-					if (asprintf(&uri, "%Y", id) > 0)
+					len = asprintf(&uri, "%Y", id);
+					if (!len)
+					{
+						free(uri);
+					}
+					else if (len > 0)
 					{
 						this->ocsp_uris->insert_last(this->ocsp_uris, uri);
 					}
@@ -850,7 +888,7 @@ static void parse_ipAddrBlock_ext_fam(private_openssl_x509_t *this,
 		return;
 	}
 
-	afi = v3_addr_get_afi(fam);
+	afi = X509v3_addr_get_afi(fam);
 	switch (afi)
 	{
 		case IANA_AFI_IPV4:
@@ -871,7 +909,7 @@ static void parse_ipAddrBlock_ext_fam(private_openssl_x509_t *this,
 	for (i = 0; i < sk_IPAddressOrRange_num(list); i++)
 	{
 		aor = sk_IPAddressOrRange_value(list, i);
-		if (v3_addr_get_range(aor, afi, from.ptr, to.ptr, from.len) > 0)
+		if (X509v3_addr_get_range(aor, afi, from.ptr, to.ptr, from.len) > 0)
 		{
 			ts = traffic_selector_create_from_bytes(0, type, from, 0, to, 65535);
 			if (ts)
@@ -897,7 +935,7 @@ static bool parse_ipAddrBlock_ext(private_openssl_x509_t *this,
 		return FALSE;
 	}
 
-	if (!v3_addr_is_canonical(blocks))
+	if (!X509v3_addr_is_canonical(blocks))
 	{
 		sk_IPAddressFamily_free(blocks);
 		return FALSE;
@@ -961,10 +999,13 @@ static bool parse_subjectKeyIdentifier_ext(private_openssl_x509_t *this,
  */
 static bool parse_extensions(private_openssl_x509_t *this)
 {
-	STACK_OF(X509_EXTENSION) *extensions;
+	const STACK_OF(X509_EXTENSION) *extensions;
 	int i, num;
 
-	extensions = this->x509->cert_info->extensions;
+	/* unless we see a keyUsage extension we are compliant with RFC 4945 */
+	this->flags |= X509_IKE_COMPLIANT;
+
+	extensions = X509_get0_extensions(this->x509);
 	if (extensions)
 	{
 		num = sk_X509_EXTENSION_num(extensions);
@@ -1002,7 +1043,7 @@ static bool parse_extensions(private_openssl_x509_t *this)
 					ok = parse_extKeyUsage_ext(this, ext);
 					break;
 				case NID_crl_distribution_points:
-					ok = parse_crlDistributionPoints_ext(this, ext);
+					ok = openssl_parse_crlDistributionPoints(ext, this->crl_uris);
 					break;
 #ifndef OPENSSL_NO_RFC3779
 				case NID_sbgp_ipAddrBlock:
@@ -1040,7 +1081,13 @@ static bool parse_certificate(private_openssl_x509_t *this)
 {
 	const unsigned char *ptr = this->encoding.ptr;
 	hasher_t *hasher;
-	chunk_t chunk;
+	chunk_t chunk, sig_scheme, sig_scheme_tbs;
+	ASN1_OBJECT *oid;
+#if OPENSSL_VERSION_NUMBER >= 0x10100000L
+	const X509_ALGOR *alg;
+#else
+	X509_ALGOR *alg;
+#endif
 
 	this->x509 = d2i_X509(NULL, &ptr, this->encoding.len);
 	if (!this->x509)
@@ -1057,8 +1104,17 @@ static bool parse_certificate(private_openssl_x509_t *this)
 	this->subject = openssl_x509_name2id(X509_get_subject_name(this->x509));
 	this->issuer = openssl_x509_name2id(X509_get_issuer_name(this->x509));
 
-	switch (openssl_asn1_known_oid(this->x509->cert_info->key->algor->algorithm))
+	if (!X509_PUBKEY_get0_param(&oid, NULL, NULL, NULL,
+							    X509_get_X509_PUBKEY(this->x509)))
 	{
+		return FALSE;
+	}
+	switch (openssl_asn1_known_oid(oid))
+	{
+		case OID_RSASSA_PSS:
+			/* TODO: we should treat such keys special and use the params as
+			 * restrictions regarding the use of this key (or rather the
+			 * associated private key) */
 		case OID_RSA_ENCRYPTION:
 			this->pubkey = lib->creds->create(lib->creds,
 					CRED_PUBLIC_KEY, KEY_RSA, BUILD_BLOB_ASN1_DER,
@@ -1083,17 +1139,31 @@ static bool parse_certificate(private_openssl_x509_t *this)
 		return FALSE;
 	}
 
-	this->notBefore = openssl_asn1_to_time(X509_get_notBefore(this->x509));
-	this->notAfter = openssl_asn1_to_time(X509_get_notAfter(this->x509));
+	this->notBefore = openssl_asn1_to_time(X509_get0_notBefore(this->x509));
+	this->notAfter = openssl_asn1_to_time(X509_get0_notAfter(this->x509));
 
-	if (!chunk_equals(
-			openssl_asn1_obj2chunk(this->x509->cert_info->signature->algorithm),
-			openssl_asn1_obj2chunk(this->x509->sig_alg->algorithm)))
+	/* while X509_ALGOR_cmp() is declared in the headers of older OpenSSL
+	 * versions, at least on Ubuntu 14.04 it is not actually defined */
+	X509_get0_signature(NULL, &alg, this->x509);
+	sig_scheme = openssl_i2chunk(X509_ALGOR, (X509_ALGOR*)alg);
+	alg = X509_get0_tbs_sigalg(this->x509);
+	sig_scheme_tbs = openssl_i2chunk(X509_ALGOR, (X509_ALGOR*)alg);
+	if (!chunk_equals(sig_scheme, sig_scheme_tbs))
 	{
+		free(sig_scheme_tbs.ptr);
+		free(sig_scheme.ptr);
 		return FALSE;
 	}
-	this->scheme = signature_scheme_from_oid(openssl_asn1_known_oid(
-												this->x509->sig_alg->algorithm));
+	free(sig_scheme_tbs.ptr);
+
+	INIT(this->scheme);
+	if (!signature_params_parse(sig_scheme, 0, this->scheme))
+	{
+		DBG1(DBG_ASN, "unable to parse signature algorithm");
+		free(sig_scheme.ptr);
+		return FALSE;
+	}
+	free(sig_scheme.ptr);
 
 	if (!parse_extensions(this))
 	{

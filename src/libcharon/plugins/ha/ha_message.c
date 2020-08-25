@@ -1,6 +1,6 @@
 /*
  * Copyright (C) 2008 Martin Willi
- * Hochschule fuer Technik Rapperswil
+ * HSR Hochschule fuer Technik Rapperswil
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -67,10 +67,10 @@ typedef struct ike_sa_id_encoding_t ike_sa_id_encoding_t;
  * Encoding if an ike_sa_id_t
  */
 struct ike_sa_id_encoding_t {
-	u_int8_t ike_version;
-	u_int64_t initiator_spi;
-	u_int64_t responder_spi;
-	u_int8_t initiator;
+	uint8_t ike_version;
+	uint64_t initiator_spi;
+	uint64_t responder_spi;
+	uint8_t initiator;
 } __attribute__((packed));
 
 typedef struct identification_encoding_t identification_encoding_t;
@@ -79,8 +79,8 @@ typedef struct identification_encoding_t identification_encoding_t;
  * Encoding of a identification_t
  */
 struct identification_encoding_t {
-	u_int8_t type;
-	u_int8_t len;
+	uint8_t type;
+	uint8_t len;
 	char encoding[];
 } __attribute__((packed));
 
@@ -90,8 +90,8 @@ typedef struct host_encoding_t host_encoding_t;
  * encoding of a host_t
  */
 struct host_encoding_t {
-	u_int16_t port;
-	u_int8_t family;
+	uint16_t port;
+	uint8_t family;
 	char encoding[];
 } __attribute__((packed));
 
@@ -101,11 +101,11 @@ typedef struct ts_encoding_t ts_encoding_t;
  * encoding of a traffic_selector_t
  */
 struct ts_encoding_t {
-	u_int8_t type;
-	u_int8_t protocol;
-	u_int16_t from_port;
-	u_int16_t to_port;
-	u_int8_t dynamic;
+	uint8_t type;
+	uint8_t protocol;
+	uint16_t from_port;
+	uint16_t to_port;
+	uint8_t dynamic;
 	char encoding[];
 } __attribute__((packed));
 
@@ -139,9 +139,9 @@ METHOD(ha_message_t, add_attribute, void,
 	size_t len;
 	va_list args;
 
-	check_buf(this, sizeof(u_int8_t));
+	check_buf(this, sizeof(uint8_t));
 	this->buf.ptr[this->buf.len] = attribute;
-	this->buf.len += sizeof(u_int8_t);
+	this->buf.len += sizeof(uint8_t);
 
 	va_start(args, attribute);
 	switch (attribute)
@@ -215,13 +215,13 @@ METHOD(ha_message_t, add_attribute, void,
 			this->buf.len += len;
 			break;
 		}
-		/* u_int8_t */
+		/* uint8_t */
 		case HA_IKE_VERSION:
 		case HA_INITIATOR:
 		case HA_IPSEC_MODE:
 		case HA_IPCOMP:
 		{
-			u_int8_t val;
+			uint8_t val;
 
 			val = va_arg(args, u_int);
 			check_buf(this, sizeof(val));
@@ -229,7 +229,7 @@ METHOD(ha_message_t, add_attribute, void,
 			this->buf.len += sizeof(val);
 			break;
 		}
-		/* u_int16_t */
+		/* uint16_t */
 		case HA_ALG_DH:
 		case HA_ALG_PRF:
 		case HA_ALG_OLD_PRF:
@@ -240,27 +240,28 @@ METHOD(ha_message_t, add_attribute, void,
 		case HA_OUTBOUND_CPI:
 		case HA_SEGMENT:
 		case HA_ESN:
+		case HA_AUTH_METHOD:
 		{
-			u_int16_t val;
+			uint16_t val;
 
 			val = va_arg(args, u_int);
 			check_buf(this, sizeof(val));
-			*(u_int16_t*)(this->buf.ptr + this->buf.len) = htons(val);
+			*(uint16_t*)(this->buf.ptr + this->buf.len) = htons(val);
 			this->buf.len += sizeof(val);
 			break;
 		}
-		/** u_int32_t */
+		/** uint32_t */
 		case HA_CONDITIONS:
 		case HA_EXTENSIONS:
 		case HA_INBOUND_SPI:
 		case HA_OUTBOUND_SPI:
 		case HA_MID:
 		{
-			u_int32_t val;
+			uint32_t val;
 
 			val = va_arg(args, u_int);
 			check_buf(this, sizeof(val));
-			*(u_int32_t*)(this->buf.ptr + this->buf.len) = htonl(val);
+			*(uint32_t*)(this->buf.ptr + this->buf.len) = htonl(val);
 			this->buf.len += sizeof(val);
 			break;
 		}
@@ -277,11 +278,11 @@ METHOD(ha_message_t, add_attribute, void,
 			chunk_t chunk;
 
 			chunk = va_arg(args, chunk_t);
-			check_buf(this, chunk.len + sizeof(u_int16_t));
-			*(u_int16_t*)(this->buf.ptr + this->buf.len) = htons(chunk.len);
-			memcpy(this->buf.ptr + this->buf.len + sizeof(u_int16_t),
+			check_buf(this, chunk.len + sizeof(uint16_t));
+			*(uint16_t*)(this->buf.ptr + this->buf.len) = htons(chunk.len);
+			memcpy(this->buf.ptr + this->buf.len + sizeof(uint16_t),
 				   chunk.ptr, chunk.len);
-			this->buf.len += chunk.len + sizeof(u_int16_t);;
+			this->buf.len += chunk.len + sizeof(uint16_t);;
 			break;
 		}
 		/** traffic_selector_t */
@@ -309,7 +310,7 @@ METHOD(ha_message_t, add_attribute, void,
 		default:
 		{
 			DBG1(DBG_CFG, "unable to encode, attribute %d unknown", attribute);
-			this->buf.len -= sizeof(u_int8_t);
+			this->buf.len -= sizeof(uint8_t);
 			break;
 		}
 	}
@@ -320,7 +321,7 @@ METHOD(ha_message_t, add_attribute, void,
  * Attribute enumerator implementation
  */
 typedef struct {
-	/** implementes enumerator_t */
+	/** implements enumerator_t */
 	enumerator_t public;
 	/** position in message */
 	chunk_t buf;
@@ -331,10 +332,12 @@ typedef struct {
 } attribute_enumerator_t;
 
 METHOD(enumerator_t, attribute_enumerate, bool,
-	attribute_enumerator_t *this, ha_message_attribute_t *attr_out,
-	ha_message_value_t *value)
+	attribute_enumerator_t *this, va_list args)
 {
-	ha_message_attribute_t attr;
+	ha_message_attribute_t attr, *attr_out;
+	ha_message_value_t *value;
+
+	VA_ARGS_VGET(args, attr_out, value);
 
 	if (this->cleanup)
 	{
@@ -435,22 +438,22 @@ METHOD(enumerator_t, attribute_enumerate, bool,
 			this->buf = chunk_skip(this->buf, len + 1);
 			return TRUE;
 		}
-		/* u_int8_t */
+		/* uint8_t */
 		case HA_IKE_VERSION:
 		case HA_INITIATOR:
 		case HA_IPSEC_MODE:
 		case HA_IPCOMP:
 		{
-			if (this->buf.len < sizeof(u_int8_t))
+			if (this->buf.len < sizeof(uint8_t))
 			{
 				return FALSE;
 			}
-			value->u8 = *(u_int8_t*)this->buf.ptr;
+			value->u8 = *(uint8_t*)this->buf.ptr;
 			*attr_out = attr;
-			this->buf = chunk_skip(this->buf, sizeof(u_int8_t));
+			this->buf = chunk_skip(this->buf, sizeof(uint8_t));
 			return TRUE;
 		}
-		/** u_int16_t */
+		/** uint16_t */
 		case HA_ALG_DH:
 		case HA_ALG_PRF:
 		case HA_ALG_OLD_PRF:
@@ -461,30 +464,31 @@ METHOD(enumerator_t, attribute_enumerate, bool,
 		case HA_OUTBOUND_CPI:
 		case HA_SEGMENT:
 		case HA_ESN:
+		case HA_AUTH_METHOD:
 		{
-			if (this->buf.len < sizeof(u_int16_t))
+			if (this->buf.len < sizeof(uint16_t))
 			{
 				return FALSE;
 			}
-			value->u16 = ntohs(*(u_int16_t*)this->buf.ptr);
+			value->u16 = ntohs(*(uint16_t*)this->buf.ptr);
 			*attr_out = attr;
-			this->buf = chunk_skip(this->buf, sizeof(u_int16_t));
+			this->buf = chunk_skip(this->buf, sizeof(uint16_t));
 			return TRUE;
 		}
-		/** u_int32_t */
+		/** uint32_t */
 		case HA_CONDITIONS:
 		case HA_EXTENSIONS:
 		case HA_INBOUND_SPI:
 		case HA_OUTBOUND_SPI:
 		case HA_MID:
 		{
-			if (this->buf.len < sizeof(u_int32_t))
+			if (this->buf.len < sizeof(uint32_t))
 			{
 				return FALSE;
 			}
-			value->u32 = ntohl(*(u_int32_t*)this->buf.ptr);
+			value->u32 = ntohl(*(uint32_t*)this->buf.ptr);
 			*attr_out = attr;
-			this->buf = chunk_skip(this->buf, sizeof(u_int32_t));
+			this->buf = chunk_skip(this->buf, sizeof(uint32_t));
 			return TRUE;
 		}
 		/** chunk_t */
@@ -499,12 +503,12 @@ METHOD(enumerator_t, attribute_enumerate, bool,
 		{
 			size_t len;
 
-			if (this->buf.len < sizeof(u_int16_t))
+			if (this->buf.len < sizeof(uint16_t))
 			{
 				return FALSE;
 			}
-			len = ntohs(*(u_int16_t*)this->buf.ptr);
-			this->buf = chunk_skip(this->buf, sizeof(u_int16_t));
+			len = ntohs(*(uint16_t*)this->buf.ptr);
+			this->buf = chunk_skip(this->buf, sizeof(uint16_t));
 			if (this->buf.len < len)
 			{
 				return FALSE;
@@ -602,7 +606,8 @@ METHOD(ha_message_t, create_attribute_enumerator, enumerator_t*,
 
 	INIT(e,
 		.public = {
-			.enumerate = (void*)_attribute_enumerate,
+			.enumerate = enumerator_enumerate_default,
+			.venumerate = _attribute_enumerate,
 			.destroy = _enum_destroy,
 		},
 		.buf = chunk_skip(this->buf, 2),

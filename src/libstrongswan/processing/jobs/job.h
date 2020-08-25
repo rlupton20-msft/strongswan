@@ -2,7 +2,7 @@
  * Copyright (C) 2012 Tobias Brunner
  * Copyright (C) 2005-2006 Martin Willi
  * Copyright (C) 2005 Jan Hutter
- * Hochschule fuer Technik Rapperswil
+ * HSR Hochschule fuer Technik Rapperswil
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -96,7 +96,7 @@ struct job_requeue_t {
 	} schedule;
 	/** Time to reschedule the job */
 	union {
-		u_int32_t rel;
+		uint32_t rel;
 		timeval_t abs;
 	} time;
 };

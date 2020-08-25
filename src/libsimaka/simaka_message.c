@@ -1,6 +1,6 @@
 /*
  * Copyright (C) 2009 Martin Willi
- * Hochschule fuer Technik Rapperswil
+ * HSR Hochschule fuer Technik Rapperswil
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -30,17 +30,17 @@ typedef struct attr_t attr_t;
  */
 struct hdr_t {
 	/** EAP code (REQUEST/RESPONSE) */
-	u_int8_t code;
+	uint8_t code;
 	/** unique message identifier */
-	u_int8_t identifier;
+	uint8_t identifier;
 	/** length of whole message */
-	u_int16_t length;
+	uint16_t length;
 	/** EAP type => EAP_SIM/EAP_AKA */
-	u_int8_t type;
+	uint8_t type;
 	/** SIM subtype */
-	u_int8_t subtype;
+	uint8_t subtype;
 	/** reserved bytes */
-	u_int16_t reserved;
+	uint16_t reserved;
 } __attribute__((__packed__));
 
 /**
@@ -48,9 +48,9 @@ struct hdr_t {
  */
 struct attr_hdr_t {
 	/** attribute type */
-	u_int8_t type;
-	/** attibute length */
-	u_int8_t length;
+	uint8_t type;
+	/** attribute length */
+	uint8_t length;
 } __attribute__((__packed__));
 
 /**
@@ -204,7 +204,7 @@ METHOD(simaka_message_t, is_request, bool,
 	return this->hdr->code == EAP_REQUEST;
 }
 
-METHOD(simaka_message_t, get_identifier, u_int8_t,
+METHOD(simaka_message_t, get_identifier, uint8_t,
 	private_simaka_message_t *this)
 {
 	return this->hdr->identifier;
@@ -222,17 +222,22 @@ METHOD(simaka_message_t, get_type, eap_type_t,
 	return this->hdr->type;
 }
 
-/**
- * convert attr_t to type and data enumeration
- */
-static bool attr_enum_filter(void *null, attr_t **in, simaka_attribute_t *type,
-							 void *dummy, chunk_t *data)
+CALLBACK(attr_enum_filter, bool,
+	void *null, enumerator_t *orig, va_list args)
 {
-	attr_t *attr = *in;
+	attr_t *attr;
+	simaka_attribute_t *type;
+	chunk_t *data;
 
-	*type = attr->type;
-	*data = chunk_create(attr->data, attr->len);
-	return TRUE;
+	VA_ARGS_VGET(args, type, data);
+
+	if (orig->enumerate(orig, &attr))
+	{
+		*type = attr->type;
+		*data = chunk_create(attr->data, attr->len);
+		return TRUE;
+	}
+	return FALSE;
 }
 
 METHOD(simaka_message_t, create_attribute_enumerator, enumerator_t*,
@@ -240,7 +245,7 @@ METHOD(simaka_message_t, create_attribute_enumerator, enumerator_t*,
 {
 	return enumerator_create_filter(
 						this->attributes->create_enumerator(this->attributes),
-						(void*)attr_enum_filter, NULL, NULL);
+						attr_enum_filter, NULL, NULL);
 }
 
 METHOD(simaka_message_t, add_attribute, void,
@@ -366,7 +371,7 @@ static bool parse_attributes(private_simaka_message_t *this, chunk_t in)
 			case AT_IDENTITY:
 			case AT_VERSION_LIST:
 			{
-				u_int16_t len;
+				uint16_t len;
 
 				if (hdr->length < 1 || in.len < 4)
 				{
@@ -610,7 +615,7 @@ METHOD(simaka_message_t, generate, bool,
 	chunk_t out, encr, data, *target, mac = chunk_empty;
 	simaka_attribute_t type;
 	attr_hdr_t *hdr;
-	u_int16_t len;
+	uint16_t len;
 	signer_t *signer;
 
 	call_hook(this, FALSE, TRUE);
@@ -684,7 +689,7 @@ METHOD(simaka_message_t, generate, bool,
 			case AT_VERSION_LIST:
 			case AT_RES:
 			{
-				u_int16_t len, padding;
+				uint16_t len, padding;
 
 				len = htons(data.len);
 				if (type == AT_RES)
@@ -912,7 +917,7 @@ simaka_message_t *simaka_message_create_from_payload(chunk_t data,
 /**
  * See header.
  */
-simaka_message_t *simaka_message_create(bool request, u_int8_t identifier,
+simaka_message_t *simaka_message_create(bool request, uint8_t identifier,
 									eap_type_t type, simaka_subtype_t subtype,
 									simaka_crypto_t *crypto)
 {
