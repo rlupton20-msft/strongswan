@@ -486,6 +486,8 @@ A comma\-separated list of network interfaces for which connected subnets should
 be considered. All other interfaces are ignored.
 
 .TP
+.BR charon.plugins.bypass-lan.load " [no]"
+.TP
 .BR charon.plugins.certexpire.csv.cron " []"
 Cron style string specifying CSV export times.
 

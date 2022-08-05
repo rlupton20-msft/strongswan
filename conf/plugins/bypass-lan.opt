@@ -6,3 +6,5 @@ charon.plugins.bypass-lan.interfaces_ignore
 charon.plugins.bypass-lan.interfaces_use
 	A comma-separated list of network interfaces for which connected subnets
 	should be considered. All other interfaces are ignored.
+
+charon.plugins.bypass-lan.load := no
